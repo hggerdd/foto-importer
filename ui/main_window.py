@@ -7,7 +7,7 @@ from pathlib import Path
 
 from config.settings import Settings
 from core.file_manager import FileManager
-from core.copy_worker import CopyWorker
+from core.copy_worker import CopyWorker, JobState
 from ui.folder_selector import FolderSelector
 from ui.date_list_widget import DateListWidget
 from ui.preview_widget import PreviewWidget
@@ -274,6 +274,9 @@ class MainWindow:
             on_error=lambda name, err: self.root.after(0, self._on_copy_error, name, err),
             on_progress=lambda current, total: self.root.after(
                 0, self._on_copy_progress, custom_name, current, total
+            ),
+            on_status_change=lambda name, state: self.root.after(
+                0, self._on_copy_status_change, name, state
             )
         )
 
@@ -295,6 +298,16 @@ class MainWindow:
         self.status_label.config(text=f"Copy failed: {error_msg}")
         messagebox.showerror("Error", f"Copy failed for {job_name}:\n{error_msg}")
         self._update_execute_button_state()
+
+    def _on_copy_status_change(self, job_name: str, state: JobState) -> None:
+        """Handle lifecycle updates for copy jobs."""
+        if state is JobState.QUEUED:
+            self.status_label.config(text=f"Queued copy job: {job_name}")
+        elif state is JobState.RUNNING:
+            self.status_label.config(text=f"Copy in progress: {job_name}")
+        elif state is JobState.CANCELLED:
+            self.progress_manager.remove_progress_bar(job_name)
+            self.status_label.config(text=f"Copy cancelled: {job_name}")
 
     def _on_closing(self) -> None:
         """Handle window closing event."""

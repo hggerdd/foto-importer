@@ -179,6 +179,44 @@ class Settings:
 
 ---
 
+## Technical Debt Review (Current)
+
+- **UI re-entrancy:** `ui/main_window.py:117` relies on `self.root.update()` during long scans. Replace with background scanning (thread or async task) and marshal results via `after()` so the event loop stays responsive without risking nested main-loop calls.
+- **Preview resource management:** `ui/preview_widget.py:64` opens images without a context manager, which can leak file handles on large batches. Load thumbnails via `Image.open(path).close()` or `with Image.open(path) as img:` before creating `PhotoImage`.
+- **Mousewheel bindings:** `ui/preview_widget.py:43` uses `bind_all("<MouseWheel>")`, capturing events for the entire app and missing Linux bindings. Scope bindings to the canvas and register platform-specific events to avoid scroll conflicts.
+- **Settings I/O pressure:** `config/settings.py:68` flushes to disk on every tweak. Buffer changes in memory and commit on shutdown or via debounce to reduce filesystem writes and partial-state risk.
+
+---
+
+## Refactor Roadmap (Priority)
+
+1. **P1 – Non-blocking source scans (`ui/main_window.py`, `core/file_manager.py`)**
+   - Move `FileManager.set_source_folder` calls into a worker thread or executor.
+   - Provide progress callbacks for large folders; update UI via `root.after`.
+   - Validate responsiveness by profiling scans on 10k-file directories.
+
+2. **P1 – Preview resource hygiene (`ui/preview_widget.py`)**
+   - Load thumbnails via context managers and centralize cache of `PhotoImage` instances.
+   - Add graceful fallback for unreadable images and log aggregated errors.
+
+3. **P2 – Scroll event normalization (`ui/preview_widget.py`)**
+   - Scope mouse-wheel bindings to the preview canvas and register platform-specific events (`<MouseWheel>`, `<Button-4>`, `<Button-5>`).
+   - Introduce enable/disable helpers so widgets can opt-in without global grabs.
+
+4. **P2 – Settings persistence debounce (`config/settings.py`)**
+   - Queue writes and flush on shutdown or after a short inactivity window.
+   - Add integrity checks (atomic write via temp file) to avoid partial JSON states.
+
+---
+
+## Refactor Progress (October 2025)
+
+- Implemented a job registry and lifecycle enum in `core/copy_worker.py`, ensuring completed threads are pruned, cancellation requests are respected, and status events are emitted for queued/running/completed/failed/cancelled states.
+- Updated `ui/main_window.py` to react to the new status feed so the status bar reflects job transitions and cancelled jobs clean up their progress bars automatically.
+- `CopyWorker` now exposes `cancel_job`, job introspection helpers, and returns the job handle for further orchestration.
+
+---
+
 ## Code Patterns & Best Practices
 
 ### Type Hints
@@ -270,8 +308,6 @@ uv sync          # Install dependencies
 
 ### Execution
 ```bash
-python main.py
-# or
 uv run python main.py
 ```
 
@@ -293,19 +329,18 @@ uv lock           # Update lockfile
 - Filters by supported extensions
 - Provides file counts and preview lists
 
-**copy_worker.py** (131 lines)
-- Manages background copy jobs
-- Creates organized folder structure
-- Handles duplicate filenames
-- Thread-based concurrent operations
-- Progress callbacks for UI updates
+**copy_worker.py** (227 lines)
+- Manages background copy jobs with lifecycle tracking
+- Creates organized folder structure and resolves duplicates
+- Exposes cancellation hooks and status events
+- Maintains thread-safe job registry for active work
 
 ### UI Package
 
-**main_window.py** (303 lines)
+**main_window.py** (316 lines)
 - Coordinates all UI components
 - Manages application state
-- Handles user interactions
+- Handles user interactions and job lifecycle updates
 - Connects UI to business logic
 
 **folder_selector.py** (107 lines)
@@ -464,14 +499,14 @@ def last_source_folder(self, value: str) -> None:
 | Component | Files | Total Lines |
 |-----------|-------|-------------|
 | Entry Point | 1 | 17 |
-| UI Package | 5 | 719 |
-| Core Package | 2 | 223 |
+| UI Package | 5 | 732 |
+| Core Package | 2 | 319 |
 | Config Package | 1 | 108 |
-| **Total** | **9** | **1,067** |
+| **Total** | **9** | **1,176** |
 
-**Largest file:** main_window.py (303 lines)
+**Largest file:** ui/main_window.py (316 lines)
 **Smallest file:** main.py (17 lines)
-**Average:** ~119 lines per file
+**Average:** ~131 lines per file
 
 ---
 
