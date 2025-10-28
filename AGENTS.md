@@ -26,3 +26,5 @@
 - Write commits in the imperative mood with ~50-character summaries (e.g., `Add preview widget for RAW files`) and include focused diffs.
 - Squash experimental commits before pushing; each PR should describe the motivation, key changes, and manual test steps.
 - Link issues when available, attach screenshots or screen recordings for UI changes, and restate any configuration updates touching `config/settings.py`.
+- create a new branch before changing any code for a new feature
+- commit and push steps with possible breaks for good way backs
