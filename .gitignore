@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+*.log
+
+# Virtual environments
+.venv
+
+# Tooling metadata
+.python-version
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# OS-specific cruft
+.DS_Store
+Thumbs.db
