@@ -43,6 +43,7 @@ A GUI tool for photographers to organize camera files from memory cards into a s
 - **Date list**: Multi-select listbox showing date groups with file counts
 - **Image previews**: Configurable thumbnail grid (default 10 images)
 - **Progress tracking**: Individual progress bars for each copy job
+- **Job cancellation**: Cancel buttons on active copy jobs with status feedback
 - **Real-time updates**: Progress bars update as files copy
 - **Smart confirmations**: Only asks confirmation if target folder already exists
 
@@ -53,6 +54,7 @@ A GUI tool for photographers to organize camera files from memory cards into a s
 - **Immediate feedback**: Date groups removed from list as soon as copy starts
 - **Enter key support**: Press Enter in custom name field to execute copy
 - **Modern Python 3.13**: Full type hints, `from __future__ import annotations`
+- **Asynchronous scanning**: Source folder scans run on worker threads with main-thread marshalling
 
 ---
 
@@ -68,15 +70,15 @@ camera-organizer/
 │   └── settings.py              # Persistent settings (108 lines)
 ├── core/
 │   ├── __init__.py
-│   ├── file_manager.py          # File scanning & grouping (92 lines)
-│   └── copy_worker.py           # Background copy operations (131 lines)
+│   ├── file_manager.py          # File scanning & grouping (107 lines)
+│   └── copy_worker.py           # Background copy operations (231 lines)
 └── ui/
     ├── __init__.py
-    ├── main_window.py           # Main application window (303 lines)
+    ├── main_window.py           # Main application window (383 lines)
     ├── folder_selector.py       # Folder selection widget (107 lines)
     ├── date_list_widget.py      # Date groups list (106 lines)
     ├── preview_widget.py        # Image preview grid (123 lines)
-    └── progress_manager.py      # Progress bar management (80 lines)
+    └── progress_manager.py      # Progress bar management (126 lines)
 ```
 
 ### Design Principles
@@ -87,8 +89,7 @@ camera-organizer/
 - **Config Package**: Settings persistence and management
 
 **Clean Code:**
-- No file exceeds 303 lines
-- Most files under 150 lines
+- Target files under ~300 lines (current outlier: `ui/main_window.py`, slated for decomposition)
 - Single responsibility per module
 - Full type hints throughout
 - Modern Python 3.13 syntax
@@ -181,7 +182,7 @@ class Settings:
 
 ## Technical Debt Review (Current)
 
-- **UI re-entrancy:** `ui/main_window.py:117` relies on `self.root.update()` during long scans. Replace with background scanning (thread or async task) and marshal results via `after()` so the event loop stays responsive without risking nested main-loop calls.
+- **Main window bloat:** `ui/main_window.py:1` ballooned to 380+ lines after wiring async scans/cancellation. Factor scanning and job-controls into helper controllers to keep the entry window lean.
 - **Preview resource management:** `ui/preview_widget.py:64` opens images without a context manager, which can leak file handles on large batches. Load thumbnails via `Image.open(path).close()` or `with Image.open(path) as img:` before creating `PhotoImage`.
 - **Mousewheel bindings:** `ui/preview_widget.py:43` uses `bind_all("<MouseWheel>")`, capturing events for the entire app and missing Linux bindings. Scope bindings to the canvas and register platform-specific events to avoid scroll conflicts.
 - **Settings I/O pressure:** `config/settings.py:68` flushes to disk on every tweak. Buffer changes in memory and commit on shutdown or via debounce to reduce filesystem writes and partial-state risk.
@@ -190,10 +191,9 @@ class Settings:
 
 ## Refactor Roadmap (Priority)
 
-1. **P1 – Non-blocking source scans (`ui/main_window.py`, `core/file_manager.py`)**
-   - Move `FileManager.set_source_folder` calls into a worker thread or executor.
-   - Provide progress callbacks for large folders; update UI via `root.after`.
-   - Validate responsiveness by profiling scans on 10k-file directories.
+1. **P1 – Main window decomposition (`ui/main_window.py`)**
+   - Extract async scanning and job-control logic into dedicated controllers.
+   - Reintroduce a presenter-style API so the Tk window stays <300 lines.
 
 2. **P1 – Preview resource hygiene (`ui/preview_widget.py`)**
    - Load thumbnails via context managers and centralize cache of `PhotoImage` instances.
@@ -214,6 +214,8 @@ class Settings:
 - Implemented a job registry and lifecycle enum in `core/copy_worker.py`, ensuring completed threads are pruned, cancellation requests are respected, and status events are emitted for queued/running/completed/failed/cancelled states.
 - Updated `ui/main_window.py` to react to the new status feed so the status bar reflects job transitions and cancelled jobs clean up their progress bars automatically.
 - `CopyWorker` now exposes `cancel_job`, job introspection helpers, and returns the job handle for further orchestration.
+- Added per-job cancel controls in `ui/progress_manager.py` that call `CopyWorker.cancel_job`, provide immediate visual feedback, and guard against double cancellation attempts.
+- Moved source-folder scanning off the UI thread; `MainWindow` now gathers file metadata asynchronously and applies results via `root.after` without `root.update()` calls.
 
 ---
 
@@ -323,13 +325,13 @@ uv lock           # Update lockfile
 
 ### Core Package
 
-**file_manager.py** (92 lines)
-- Scans source folder recursively
-- Groups files by creation date
+**file_manager.py** (107 lines)
+- Scans source folder recursively and groups by creation date
 - Filters by supported extensions
-- Provides file counts and preview lists
+- Provides preview/file counts
+- Exposes async-friendly helpers to gather and apply scan results
 
-**copy_worker.py** (227 lines)
+**copy_worker.py** (231 lines)
 - Manages background copy jobs with lifecycle tracking
 - Creates organized folder structure and resolves duplicates
 - Exposes cancellation hooks and status events
@@ -337,10 +339,10 @@ uv lock           # Update lockfile
 
 ### UI Package
 
-**main_window.py** (316 lines)
+**main_window.py** (383 lines)
 - Coordinates all UI components
 - Manages application state
-- Handles user interactions and job lifecycle updates
+- Handles user interactions, job lifecycle updates, and async scans
 - Connects UI to business logic
 
 **folder_selector.py** (107 lines)
@@ -359,10 +361,10 @@ uv lock           # Update lockfile
 - Handles image loading errors
 - Mouse wheel scrolling
 
-**progress_manager.py** (80 lines)
-- Creates progress bars for copy jobs
+**progress_manager.py** (126 lines)
+- Creates progress bars for copy jobs with per-job cancel controls
 - Updates progress in real-time
-- Removes completed jobs
+- Removes completed or cancelled jobs
 - Manages multiple concurrent jobs
 
 ### Config Package
@@ -426,9 +428,11 @@ def last_source_folder(self, value: str) -> None:
 - [x] Confirm if folder exists
 - [x] Show progress bars during copy
 - [x] Update progress in real-time
+- [x] Scan runs without freezing UI
 - [x] Remove date groups from list immediately
 - [x] Complete copy in background
 - [x] Remove progress bar on completion
+- [x] Cancel active copy job (progress bar removed)
 - [x] Continue working during copy
 - [x] Window size persists across sessions
 - [x] All settings persist across sessions
@@ -499,14 +503,14 @@ def last_source_folder(self, value: str) -> None:
 | Component | Files | Total Lines |
 |-----------|-------|-------------|
 | Entry Point | 1 | 17 |
-| UI Package | 5 | 732 |
-| Core Package | 2 | 319 |
+| UI Package | 5 | 846 |
+| Core Package | 2 | 338 |
 | Config Package | 1 | 108 |
-| **Total** | **9** | **1,176** |
+| **Total** | **9** | **1,309** |
 
-**Largest file:** ui/main_window.py (316 lines)
+**Largest file:** ui/main_window.py (383 lines)
 **Smallest file:** main.py (17 lines)
-**Average:** ~131 lines per file
+**Average:** ~145 lines per file
 
 ---
 

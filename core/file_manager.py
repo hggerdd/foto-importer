@@ -23,19 +23,34 @@ class FileManager:
 
     def set_source_folder(self, folder_path: str) -> dict[str, list[Path]]:
         """Set the source folder and scan for files."""
-        self.source_folder = Path(folder_path)
-        self.files_by_date = self._scan_files()
+        source_folder = Path(folder_path)
+        files_by_date = self._scan_files(source_folder)
+        self.source_folder = source_folder
+        self.files_by_date = files_by_date
         return self.files_by_date
 
-    def _scan_files(self) -> dict[str, list[Path]]:
-        """Scan source folder and group files by creation date."""
-        if not self.source_folder or not self.source_folder.exists():
+    def gather_files_by_date(self, folder_path: Path) -> dict[str, list[Path]]:
+        """Collect files by date without mutating manager state."""
+        return self._scan_files(folder_path)
+
+    def apply_scan_results(
+        self,
+        source_folder: Path,
+        files_by_date: dict[str, list[Path]]
+    ) -> None:
+        """Apply externally gathered scan results to the manager state."""
+        self.source_folder = source_folder
+        self.files_by_date = files_by_date
+
+    def _scan_files(self, source_folder: Path | None) -> dict[str, list[Path]]:
+        """Scan a folder and group files by creation date."""
+        if not source_folder or not source_folder.exists():
             return {}
 
         files_by_date: defaultdict[str, list[Path]] = defaultdict(list)
 
         # Recursively find all supported files
-        for file_path in self.source_folder.rglob('*'):
+        for file_path in source_folder.rglob('*'):
             if not file_path.is_file():
                 continue
 
