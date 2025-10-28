@@ -55,6 +55,7 @@ A GUI tool for photographers to organize camera files from memory cards into a s
 - **Enter key support**: Press Enter in custom name field to execute copy
 - **Modern Python 3.13**: Full type hints, `from __future__ import annotations`
 - **Asynchronous scanning**: Source folder scans run on worker threads with main-thread marshalling
+- **Controller layer**: Dedicated controllers manage scans and copy jobs, keeping the window logic lean
 
 ---
 
@@ -74,10 +75,12 @@ camera-organizer/
 │   └── copy_worker.py           # Background copy operations (231 lines)
 └── ui/
     ├── __init__.py
-    ├── main_window.py           # Main application window (383 lines)
+    ├── main_window.py           # Main window coordinator (270 lines)
+    ├── controllers.py           # Async scan & copy orchestration (200 lines)
+    ├── layout.py                # Tk layout builder (129 lines)
     ├── folder_selector.py       # Folder selection widget (107 lines)
     ├── date_list_widget.py      # Date groups list (106 lines)
-    ├── preview_widget.py        # Image preview grid (123 lines)
+    ├── preview_widget.py        # Image preview grid (124 lines)
     └── progress_manager.py      # Progress bar management (126 lines)
 ```
 
@@ -89,7 +92,7 @@ camera-organizer/
 - **Config Package**: Settings persistence and management
 
 **Clean Code:**
-- Target files under ~300 lines (current outlier: `ui/main_window.py`, slated for decomposition)
+- All primary modules remain under 300 lines after extracting layout/controllers
 - Single responsibility per module
 - Full type hints throughout
 - Modern Python 3.13 syntax
@@ -182,28 +185,24 @@ class Settings:
 
 ## Technical Debt Review (Current)
 
-- **Main window bloat:** `ui/main_window.py:1` ballooned to 380+ lines after wiring async scans/cancellation. Factor scanning and job-controls into helper controllers to keep the entry window lean.
-- **Preview resource management:** `ui/preview_widget.py:64` opens images without a context manager, which can leak file handles on large batches. Load thumbnails via `Image.open(path).close()` or `with Image.open(path) as img:` before creating `PhotoImage`.
+- **Scan feedback:** `ui/controllers.py:20` provides async scans without progress indication or cancellation hooks; add progress callbacks and UI affordances for long-running scans.
 - **Mousewheel bindings:** `ui/preview_widget.py:43` uses `bind_all("<MouseWheel>")`, capturing events for the entire app and missing Linux bindings. Scope bindings to the canvas and register platform-specific events to avoid scroll conflicts.
 - **Settings I/O pressure:** `config/settings.py:68` flushes to disk on every tweak. Buffer changes in memory and commit on shutdown or via debounce to reduce filesystem writes and partial-state risk.
+- **Scan cancellation UX:** Cancelling a copy job replays cached date groups via `_restore_pending_groups`; consider a shared data store to avoid re-sorting dictionaries on every cancellation.
 
 ---
 
 ## Refactor Roadmap (Priority)
 
-1. **P1 – Main window decomposition (`ui/main_window.py`)**
-   - Extract async scanning and job-control logic into dedicated controllers.
-   - Reintroduce a presenter-style API so the Tk window stays <300 lines.
+1. **P1 – Scan progress indication (`ui/controllers.py`, `ui/layout.py`)**
+   - Surface scan progress/counts in the UI while worker threads run.
+   - Expose cancellation or debouncing to skip redundant rescans.
 
-2. **P1 – Preview resource hygiene (`ui/preview_widget.py`)**
-   - Load thumbnails via context managers and centralize cache of `PhotoImage` instances.
-   - Add graceful fallback for unreadable images and log aggregated errors.
-
-3. **P2 – Scroll event normalization (`ui/preview_widget.py`)**
+2. **P2 – Scroll event normalization (`ui/preview_widget.py`)**
    - Scope mouse-wheel bindings to the preview canvas and register platform-specific events (`<MouseWheel>`, `<Button-4>`, `<Button-5>`).
    - Introduce enable/disable helpers so widgets can opt-in without global grabs.
 
-4. **P2 – Settings persistence debounce (`config/settings.py`)**
+3. **P2 – Settings persistence debounce (`config/settings.py`)**
    - Queue writes and flush on shutdown or after a short inactivity window.
    - Add integrity checks (atomic write via temp file) to avoid partial JSON states.
 
@@ -216,6 +215,8 @@ class Settings:
 - `CopyWorker` now exposes `cancel_job`, job introspection helpers, and returns the job handle for further orchestration.
 - Added per-job cancel controls in `ui/progress_manager.py` that call `CopyWorker.cancel_job`, provide immediate visual feedback, and guard against double cancellation attempts.
 - Moved source-folder scanning off the UI thread; `MainWindow` now gathers file metadata asynchronously and applies results via `root.after` without `root.update()` calls.
+- Extracted UI orchestration into `ui/controllers.py` and `ui/layout.py`, keeping `ui/main_window.py` at 270 lines while centralising widget construction.
+- Wrapped preview thumbnail loading in context managers so `PreviewWidget.load_previews` no longer leaks file handles.
 
 ---
 
@@ -339,11 +340,9 @@ uv lock           # Update lockfile
 
 ### UI Package
 
-**main_window.py** (383 lines)
-- Coordinates all UI components
-- Manages application state
-- Handles user interactions, job lifecycle updates, and async scans
-- Connects UI to business logic
+**main_window.py** (270 lines)
+- Coordinates high-level UI events and delegates to controllers/layout
+- Manages application state and restores pending groups on cancellation
 
 **folder_selector.py** (107 lines)
 - Source/target folder selection
@@ -355,8 +354,8 @@ uv lock           # Update lockfile
 - Multi-selection support
 - Selection change callbacks
 
-**preview_widget.py** (123 lines)
-- Scrollable thumbnail grid
+**preview_widget.py** (124 lines)
+- Scrollable thumbnail grid with context-managed image loading
 - Configurable thumbnail size
 - Handles image loading errors
 - Mouse wheel scrolling
@@ -366,6 +365,15 @@ uv lock           # Update lockfile
 - Updates progress in real-time
 - Removes completed or cancelled jobs
 - Manages multiple concurrent jobs
+
+**controllers.py** (200 lines)
+- Runs source scans on worker threads and applies results safely
+- Coordinates copy jobs, progress updates, and cancellation semantics
+- Provides status messaging hooks back to the main window
+
+**layout.py** (129 lines)
+- Builds the Tk layout and exposes widget references
+- Wires callbacks for custom name changes and execute actions
 
 ### Config Package
 
@@ -433,6 +441,7 @@ def last_source_folder(self, value: str) -> None:
 - [x] Complete copy in background
 - [x] Remove progress bar on completion
 - [x] Cancel active copy job (progress bar removed)
+- [x] Cancelled job restores date groups for reuse
 - [x] Continue working during copy
 - [x] Window size persists across sessions
 - [x] All settings persist across sessions
@@ -503,14 +512,14 @@ def last_source_folder(self, value: str) -> None:
 | Component | Files | Total Lines |
 |-----------|-------|-------------|
 | Entry Point | 1 | 17 |
-| UI Package | 5 | 846 |
+| UI Package | 7 | 1,062 |
 | Core Package | 2 | 338 |
 | Config Package | 1 | 108 |
-| **Total** | **9** | **1,309** |
+| **Total** | **11** | **1,525** |
 
-**Largest file:** ui/main_window.py (383 lines)
+**Largest file:** ui/main_window.py (270 lines)
 **Smallest file:** main.py (17 lines)
-**Average:** ~145 lines per file
+**Average:** ~139 lines per file
 
 ---
 

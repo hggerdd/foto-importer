@@ -1,18 +1,15 @@
 """Main application window for camera organizer."""
 from __future__ import annotations
 
-import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 
 from config.settings import Settings
-from core.copy_worker import CopyWorker, JobState
+from core.copy_worker import CopyWorker
 from core.file_manager import FileManager
-from ui.date_list_widget import DateListWidget
-from ui.folder_selector import FolderSelector
-from ui.preview_widget import PreviewWidget
-from ui.progress_manager import ProgressManager
+from ui.controllers import CopyJobController, SourceScanController
+from ui.layout import MainLayout
 
 
 class MainWindow:
@@ -38,112 +35,40 @@ class MainWindow:
         # State
         self.source_folder: Path | None = None
         self.target_folder: Path | None = None
-        self.active_jobs: set[str] = set()
-        self._scan_thread: threading.Thread | None = None
-        self._scan_request_id: int = 0
+        self._pending_groups: dict[str, dict[str, list[Path]]] = {}
 
-        # Setup UI
-        self._setup_ui()
+        # Setup UI layout and widgets
+        self.layout = MainLayout(
+            root=self.root,
+            settings=self.settings,
+            on_source_selected=self._on_source_selected,
+            on_target_selected=self._on_target_selected,
+            on_preview_count_changed=self._on_preview_count_changed,
+            on_date_selection_changed=self._on_date_selection_changed,
+            on_custom_name_changed=self._update_execute_button_state,
+            on_execute_copy=self._execute_copy,
+        )
+
+        self.folder_selector = self.layout.folder_selector
+        self.date_list = self.layout.date_list
+        self.preview_widget = self.layout.preview_widget
+        self.preview_count_var = self.layout.preview_count_var
+        self.custom_name_var = self.layout.custom_name_var
+        self.custom_name_entry = self.layout.custom_name_entry
+        self.execute_button = self.layout.execute_button
+        self.status_label = self.layout.status_label
+        self.progress_manager = self.layout.progress_manager
+
+        # Controllers for background tasks
+        self.scan_controller = SourceScanController(self.root, self.file_manager)
+        self.job_controller = CopyJobController(
+            self.root,
+            self.copy_worker,
+            self.progress_manager,
+        )
 
         # Bind window close event to save settings
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-
-    def _setup_ui(self) -> None:
-        """Setup the main UI."""
-        # Main container
-        main_container = ttk.Frame(self.root, padding="10")
-        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-
-        # Folder selection
-        self.folder_selector = FolderSelector(
-            main_container,
-            on_source_selected=self._on_source_selected,
-            on_target_selected=self._on_target_selected,
-            initial_source=self.settings.last_source_folder,
-            initial_target=self.settings.last_target_folder
-        )
-        self.folder_selector.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        # Settings section
-        self._setup_settings(main_container)
-
-        # Date list
-        self.date_list = DateListWidget(
-            main_container,
-            on_selection_changed=self._on_date_selection_changed
-        )
-        self.date_list.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        # Preview section
-        preview_frame = ttk.LabelFrame(main_container, text="Image Preview", padding="10")
-        preview_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        self.preview_widget = PreviewWidget(preview_frame)
-        self.preview_widget.pack(fill='both', expand=True)
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(0, weight=1)
-
-        # Action section
-        self._setup_action_section(main_container)
-
-        # Status bar
-        self._setup_status_bar(main_container)
-
-        # Progress bars
-        progress_container = ttk.LabelFrame(main_container, text="Active Copy Jobs", padding="10")
-        progress_container.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        self.progress_manager = ProgressManager(progress_container)
-
-        # Configure grid weights
-        main_container.columnconfigure(0, weight=1)
-        main_container.rowconfigure(3, weight=1)
-
-    def _setup_settings(self, parent: ttk.Frame) -> None:
-        """Setup settings section."""
-        settings_frame = ttk.LabelFrame(parent, text="Settings", padding="10")
-        settings_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        ttk.Label(settings_frame, text="Preview Count:").grid(row=0, column=0, sticky=tk.W)
-        self.preview_count_var = tk.IntVar(value=self.settings.preview_count)
-        preview_spinbox = ttk.Spinbox(
-            settings_frame,
-            from_=1,
-            to=50,
-            textvariable=self.preview_count_var,
-            width=10,
-            command=self._on_preview_count_changed
-        )
-        preview_spinbox.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
-
-    def _setup_action_section(self, parent: ttk.Frame) -> None:
-        """Setup action buttons section."""
-        action_frame = ttk.Frame(parent, padding="10")
-        action_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        ttk.Label(action_frame, text="Custom Name:").grid(row=0, column=0, sticky=tk.W)
-        self.custom_name_var = tk.StringVar()
-        self.custom_name_var.trace_add('write', lambda *args: self._update_execute_button_state())
-        self.custom_name_entry = ttk.Entry(action_frame, textvariable=self.custom_name_var, width=40)
-        self.custom_name_entry.grid(row=0, column=1, sticky=tk.W, padx=(10, 20))
-        self.custom_name_entry.bind('<Return>', lambda e: self._execute_copy())
-
-        self.execute_button = ttk.Button(
-            action_frame,
-            text="Execute Copy",
-            command=self._execute_copy,
-            state='disabled'
-        )
-        self.execute_button.grid(row=0, column=2)
-
-    def _setup_status_bar(self, parent: ttk.Frame) -> None:
-        """Setup status bar."""
-        status_frame = ttk.Frame(parent)
-        status_frame.grid(row=5, column=0, sticky=(tk.W, tk.E))
-
-        self.status_label = ttk.Label(status_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
-        self.status_label.pack(fill=tk.X)
 
     def _on_source_selected(self, folder_path: Path) -> None:
         """Handle source folder selection."""
@@ -162,66 +87,38 @@ class MainWindow:
         self.settings.preview_count = self.preview_count_var.get()
 
     def _scan_source_folder(self) -> None:
-        """Scan source folder for files on a background thread."""
+        """Kick off an asynchronous scan for the selected source folder."""
         if not self.source_folder:
             return
 
-        self._scan_request_id += 1
-        request_id = self._scan_request_id
-        folder_path = self.source_folder
+        self.scan_controller.scan(
+            self.source_folder,
+            on_started=self._on_scan_started,
+            on_success=self._on_scan_success,
+            on_error=self._on_scan_error,
+        )
 
-        self.status_label.config(text="Scanning files...")
+    def _on_scan_started(self) -> None:
+        """Prepare UI for a background scan."""
+        self._set_status("Scanning files...")
         self.date_list.populate({})
         self.preview_widget.clear_previews()
         self._update_execute_button_state()
 
-        self._start_scan_thread(folder_path, request_id)
-
-    def _start_scan_thread(self, folder_path: Path, request_id: int) -> None:
-        """Start a thread to scan the selected source folder."""
-
-        def worker() -> None:
-            try:
-                files_by_date = self.file_manager.gather_files_by_date(folder_path)
-            except Exception as exc:
-                self.root.after(0, self._on_scan_failed, request_id, str(exc))
-                return
-
-            self.root.after(
-                0,
-                self._on_scan_finished,
-                request_id,
-                folder_path,
-                files_by_date,
-            )
-
-        self._scan_thread = threading.Thread(target=worker, daemon=True)
-        self._scan_thread.start()
-
-    def _on_scan_finished(
+    def _on_scan_success(
         self,
-        request_id: int,
         folder_path: Path,
-        files_by_date: dict[str, list[Path]]
+        files_by_date: dict[str, list[Path]],
     ) -> None:
-        """Apply scan results to the UI."""
-        if request_id != self._scan_request_id:
-            return
-
-        self.file_manager.apply_scan_results(folder_path, files_by_date)
+        """Handle successful scan results."""
         self._populate_date_list()
-        self.status_label.config(
-            text=f"Found {len(files_by_date)} date groups with files"
-        )
+        self._set_status(f"Found {len(files_by_date)} date groups with files")
         self._update_execute_button_state()
 
-    def _on_scan_failed(self, request_id: int, error_msg: str) -> None:
+    def _on_scan_error(self, error_msg: str) -> None:
         """Handle scan failure."""
-        if request_id != self._scan_request_id:
-            return
-
         messagebox.showerror("Error", f"Error scanning folder: {error_msg}")
-        self.status_label.config(text="Error scanning folder")
+        self._set_status("Error scanning folder")
         self._update_execute_button_state()
 
     def _populate_date_list(self) -> None:
@@ -304,16 +201,13 @@ class MainWindow:
                 return
 
         # Start copy operation
-        self.status_label.config(text=f"Copying {len(all_files)} files...")
         self.execute_button.config(state='disabled')
 
-        # Add progress bar for this job
-        self.progress_manager.add_progress_bar(
-            custom_name,
-            len(all_files),
-            on_cancel=lambda job_name=custom_name: self._cancel_job(job_name)
-        )
-        self.active_jobs.add(custom_name)
+        # Capture groups for potential restoration on cancellation/error
+        pending_groups = {
+            date_str: list(self.file_manager.get_files_for_date(date_str))
+            for date_str in selected_dates
+        }
 
         # Remove date groups from list IMMEDIATELY (before copy starts)
         for date_str in selected_dates:
@@ -322,59 +216,52 @@ class MainWindow:
         self._populate_date_list()
         self.preview_widget.clear_previews()
 
-        self.copy_worker.copy_files(
+        self._pending_groups[custom_name] = pending_groups
+
+        self.job_controller.start_job(
+            job_name=custom_name,
             files=all_files,
             target_folder=self.target_folder,
-            custom_name=custom_name,
-            on_complete=lambda name: self.root.after(0, self._on_copy_complete, name),
-            on_error=lambda name, err: self.root.after(0, self._on_copy_error, name, err),
-            on_progress=lambda current, total: self.root.after(
-                0, self._on_copy_progress, custom_name, current, total
-            ),
-            on_status_change=lambda name, state: self.root.after(
-                0, self._on_copy_status_change, name, state
-            )
+            on_status=self._set_status,
+            on_completed=self._on_job_completed,
+            on_failed=self._on_job_failed,
+            on_cancelled=self._on_job_cancelled,
         )
 
         # Clear selection for next operation
         self.custom_name_var.set("")
 
-    def _on_copy_progress(self, job_name: str, current: int, total: int) -> None:
-        """Handle copy progress update."""
-        self.progress_manager.update_progress(job_name, current, total)
+    def _on_job_completed(self, job_name: str) -> None:
+        """Handle successful completion callbacks."""
+        self._pending_groups.pop(job_name, None)
+        self._update_execute_button_state()
 
-    def _on_copy_complete(self, job_name: str) -> None:
-        """Handle copy completion."""
-        self.progress_manager.remove_progress_bar(job_name)
-        self.status_label.config(text=f"Copy completed: {job_name}")
-        self.active_jobs.discard(job_name)
-
-    def _on_copy_error(self, job_name: str, error_msg: str) -> None:
-        """Handle copy error."""
-        self.progress_manager.remove_progress_bar(job_name)
-        self.status_label.config(text=f"Copy failed: {error_msg}")
+    def _on_job_failed(self, job_name: str, error_msg: str) -> None:
+        """Handle job failure callbacks."""
+        self._restore_pending_groups(job_name)
         messagebox.showerror("Error", f"Copy failed for {job_name}:\n{error_msg}")
         self._update_execute_button_state()
-        self.active_jobs.discard(job_name)
 
-    def _on_copy_status_change(self, job_name: str, state: JobState) -> None:
-        """Handle lifecycle updates for copy jobs."""
-        if state is JobState.RUNNING:
-            self.status_label.config(text=f"Copy in progress: {job_name}")
-        elif state is JobState.CANCELLED:
-            self.progress_manager.remove_progress_bar(job_name)
-            self.status_label.config(text=f"Copy cancelled: {job_name}")
-            self.active_jobs.discard(job_name)
-            self._update_execute_button_state()
+    def _on_job_cancelled(self, job_name: str) -> None:
+        """Handle job cancellation callbacks."""
+        self._restore_pending_groups(job_name)
+        self._update_execute_button_state()
 
-    def _cancel_job(self, job_name: str) -> bool:
-        """Request cancellation of a running copy job."""
-        success = self.copy_worker.cancel_job(job_name)
-        if success:
-            self.status_label.config(text=f"Cancelling job: {job_name}")
-        else:
-            self.status_label.config(text=f"Unable to cancel job: {job_name}")
-        return success
+    def _restore_pending_groups(self, job_name: str) -> None:
+        """Reapply removed date groups when a job is cancelled or fails."""
+        pending = self._pending_groups.pop(job_name, None)
+        if not pending:
+            return
+
+        for date_str, paths in pending.items():
+            self.file_manager.files_by_date[date_str] = paths
+
+        self.file_manager.files_by_date = dict(sorted(self.file_manager.files_by_date.items()))
+        self._populate_date_list()
+
+    def _set_status(self, message: str) -> None:
+        """Update the status bar text."""
+        self.status_label.config(text=message)
 
     def _on_closing(self) -> None:
         """Handle window closing event."""

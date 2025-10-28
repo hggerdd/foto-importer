@@ -78,12 +78,13 @@ class PreviewWidget(ttk.Frame):
                 frame = ttk.Frame(self.scrollable_frame, relief='solid', borderwidth=1)
                 frame.grid(row=row, column=col, padx=5, pady=5)
 
-                # Load and resize image
-                img = Image.open(img_path)
-                img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                # Load and resize image using context manager to release file handles
+                with Image.open(img_path) as img:
+                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                    tk_ready_image = img.copy()
 
                 # Convert to PhotoImage
-                photo = ImageTk.PhotoImage(img)
+                photo = ImageTk.PhotoImage(tk_ready_image)
                 self.image_references.append(photo)  # Keep reference
 
                 # Create label with image
@@ -99,7 +100,7 @@ class PreviewWidget(ttk.Frame):
                 )
                 name_label.pack()
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - display error to user
                 # If image can't be loaded, show error
                 error_frame = ttk.Frame(self.scrollable_frame, relief='solid', borderwidth=1)
                 error_frame.grid(row=row, column=col, padx=5, pady=5)
