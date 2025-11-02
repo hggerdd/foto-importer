@@ -57,6 +57,7 @@ class MainWindow:
         self.custom_name_entry = self.layout.custom_name_entry
         self.execute_button = self.layout.execute_button
         self.status_label = self.layout.status_label
+        self.scan_progress = self.layout.scan_progress
         self.progress_manager = self.layout.progress_manager
 
         # Controllers for background tasks
@@ -66,6 +67,7 @@ class MainWindow:
             self.copy_worker,
             self.progress_manager,
         )
+        self.scan_progress.bind_on_cancel(self._cancel_active_scan)
 
         # Bind window close event to save settings
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -96,11 +98,14 @@ class MainWindow:
             on_started=self._on_scan_started,
             on_success=self._on_scan_success,
             on_error=self._on_scan_error,
+            on_progress=self._on_scan_progress,
+            on_cancelled=self._on_scan_cancelled,
         )
 
     def _on_scan_started(self) -> None:
         """Prepare UI for a background scan."""
         self._set_status("Scanning files...")
+        self.scan_progress.start()
         self.date_list.populate({})
         self.preview_widget.clear_previews()
         self._update_execute_button_state()
@@ -113,12 +118,16 @@ class MainWindow:
         """Handle successful scan results."""
         self._populate_date_list()
         self._set_status(f"Found {len(files_by_date)} date groups with files")
+        self.scan_progress.mark_finished(
+            f"Scan complete ({len(files_by_date)} groups)"
+        )
         self._update_execute_button_state()
 
     def _on_scan_error(self, error_msg: str) -> None:
         """Handle scan failure."""
         messagebox.showerror("Error", f"Error scanning folder: {error_msg}")
         self._set_status("Error scanning folder")
+        self.scan_progress.show_error("Scan failed")
         self._update_execute_button_state()
 
     def _populate_date_list(self) -> None:
@@ -126,6 +135,28 @@ class MainWindow:
         date_groups = self.file_manager.get_date_groups()
         date_counts = {date: self.file_manager.get_file_count(date) for date in date_groups}
         self.date_list.populate(date_counts)
+
+    def _on_scan_progress(self, current: int, total: int) -> None:
+        """Handle progress updates from the scan controller."""
+        self.scan_progress.update_progress(current, total)
+        if total:
+            self._set_status(f"Scanning files... {current} / {total}")
+        else:
+            self._set_status("Scanning files...")
+
+    def _on_scan_cancelled(self) -> None:
+        """Handle scan cancellation callback."""
+        self.scan_progress.mark_cancelled()
+        self._set_status("Scan cancelled")
+        self._populate_date_list()
+        self._update_execute_button_state()
+
+    def _cancel_active_scan(self) -> bool:
+        """Request cancellation of the active scan."""
+        cancelled = self.scan_controller.cancel_current_scan()
+        if cancelled:
+            self._set_status("Cancelling scan...")
+        return cancelled
 
     def _on_date_selection_changed(self, selected_dates: set[str]) -> None:
         """Handle date selection change."""

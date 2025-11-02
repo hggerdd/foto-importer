@@ -5,6 +5,12 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 import os
+from collections.abc import Callable
+from threading import Event
+
+
+class ScanCancelledError(RuntimeError):
+    """Raised when a running scan is cancelled."""
 
 
 class FileManager:
@@ -29,9 +35,19 @@ class FileManager:
         self.files_by_date = files_by_date
         return self.files_by_date
 
-    def gather_files_by_date(self, folder_path: Path) -> dict[str, list[Path]]:
+    def gather_files_by_date(
+        self,
+        folder_path: Path,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+        cancel_event: Event | None = None,
+    ) -> dict[str, list[Path]]:
         """Collect files by date without mutating manager state."""
-        return self._scan_files(folder_path)
+        return self._scan_files(
+            folder_path,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
 
     def apply_scan_results(
         self,
@@ -42,14 +58,24 @@ class FileManager:
         self.source_folder = source_folder
         self.files_by_date = files_by_date
 
-    def _scan_files(self, source_folder: Path | None) -> dict[str, list[Path]]:
+    def _scan_files(
+        self,
+        source_folder: Path | None,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+        cancel_event: Event | None = None,
+    ) -> dict[str, list[Path]]:
         """Scan a folder and group files by creation date."""
         if not source_folder or not source_folder.exists():
             return {}
 
         files_by_date: defaultdict[str, list[Path]] = defaultdict(list)
 
+        if cancel_event and cancel_event.is_set():
+            raise ScanCancelledError()
+
         # Recursively find all supported files
+        candidates: list[Path] = []
         for file_path in source_folder.rglob('*'):
             if not file_path.is_file():
                 continue
@@ -57,6 +83,19 @@ class FileManager:
             # Check if file extension is supported
             if file_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                 continue
+
+            candidates.append(file_path)
+
+        total_files = len(candidates)
+        if on_progress:
+            on_progress(0, total_files)
+
+        processed = 0
+
+        # Process collected files while checking for cancellation
+        for file_path in candidates:
+            if cancel_event and cancel_event.is_set():
+                raise ScanCancelledError()
 
             # Get creation date
             try:
@@ -72,6 +111,10 @@ class FileManager:
             except Exception as e:
                 print(f"Error reading file {file_path}: {e}")
                 continue
+
+            processed += 1
+            if on_progress:
+                on_progress(processed, total_files)
 
         # Sort files within each date
         for date_str in files_by_date:

@@ -11,6 +11,7 @@ from ui.date_list_widget import DateListWidget
 from ui.folder_selector import FolderSelector
 from ui.preview_widget import PreviewWidget
 from ui.progress_manager import ProgressManager
+from ui.scan_progress import ScanProgressWidget
 
 
 class MainLayout(ttk.Frame):
@@ -43,6 +44,7 @@ class MainLayout(ttk.Frame):
         )
         self.folder_selector.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
+        self._build_scan_progress()
         self._build_settings_section(settings, on_preview_count_changed)
         self._build_date_list(on_date_selection_changed)
         self._build_preview_section()
@@ -51,7 +53,11 @@ class MainLayout(ttk.Frame):
         self._build_progress_section()
 
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
+
+    def _build_scan_progress(self) -> None:
+        self.scan_progress = ScanProgressWidget(self)
+        self.scan_progress.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
     def _build_settings_section(
         self,
@@ -59,7 +65,7 @@ class MainLayout(ttk.Frame):
         on_preview_count_changed: Callable[[], None],
     ) -> None:
         settings_frame = ttk.LabelFrame(self, text="Settings", padding="10")
-        settings_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        settings_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
         ttk.Label(settings_frame, text="Preview Count:").grid(row=0, column=0, sticky=tk.W)
         self.preview_count_var = tk.IntVar(value=settings.preview_count)
@@ -78,11 +84,11 @@ class MainLayout(ttk.Frame):
             self,
             on_selection_changed=on_selection_changed,
         )
-        self.date_list.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.date_list.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
     def _build_preview_section(self) -> None:
         preview_frame = ttk.LabelFrame(self, text="Image Preview", padding="10")
-        preview_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        preview_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         self.preview_widget = PreviewWidget(preview_frame)
         self.preview_widget.pack(fill='both', expand=True)
         preview_frame.columnconfigure(0, weight=1)
@@ -94,7 +100,7 @@ class MainLayout(ttk.Frame):
         on_execute_copy: Callable[[], None],
     ) -> None:
         action_frame = ttk.Frame(self, padding="10")
-        action_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        action_frame.grid(row=5, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
         ttk.Label(action_frame, text="Custom Name:").grid(row=0, column=0, sticky=tk.W)
         self.custom_name_var = tk.StringVar()
@@ -118,12 +124,12 @@ class MainLayout(ttk.Frame):
 
     def _build_status_bar(self) -> None:
         status_frame = ttk.Frame(self)
-        status_frame.grid(row=5, column=0, sticky=(tk.W, tk.E))
+        status_frame.grid(row=6, column=0, sticky=(tk.W, tk.E))
 
         self.status_label = ttk.Label(status_frame, text="Ready", relief=tk.SUNKEN, anchor=tk.W)
         self.status_label.pack(fill=tk.X)
 
     def _build_progress_section(self) -> None:
         progress_container = ttk.LabelFrame(self, text="Active Copy Jobs", padding="10")
-        progress_container.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        progress_container.grid(row=7, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
         self.progress_manager = ProgressManager(progress_container)

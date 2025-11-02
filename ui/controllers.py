@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.copy_worker import CopyWorker, JobState
-from core.file_manager import FileManager
+from core.file_manager import FileManager, ScanCancelledError
 from ui.progress_manager import ProgressManager
 
 
@@ -19,6 +19,8 @@ class SourceScanController:
         self._file_manager = file_manager
         self._request_lock = threading.Lock()
         self._request_id = 0
+        self._cancel_event: threading.Event | None = None
+        self._active_thread: threading.Thread | None = None
 
     def scan(
         self,
@@ -26,18 +28,44 @@ class SourceScanController:
         on_started: Callable[[], None],
         on_success: Callable[[Path, dict[str, list[Path]]], None],
         on_error: Callable[[str], None],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+        on_cancelled: Callable[[], None] | None = None,
     ) -> None:
         """Kick off an asynchronous scan for the provided folder."""
         with self._request_lock:
             self._request_id += 1
             request_id = self._request_id
+            if self._cancel_event:
+                self._cancel_event.set()
+            self._cancel_event = threading.Event()
+            cancel_event = self._cancel_event
 
         if on_started:
             on_started()
 
         def worker() -> None:
             try:
-                files_by_date = self._file_manager.gather_files_by_date(folder_path)
+                files_by_date = self._file_manager.gather_files_by_date(
+                    folder_path,
+                    on_progress=lambda current, total: self._root.after(
+                        0,
+                        self._handle_progress,
+                        request_id,
+                        current,
+                        total,
+                        on_progress,
+                    ),
+                    cancel_event=cancel_event,
+                )
+            except ScanCancelledError:
+                self._root.after(
+                    0,
+                    self._handle_cancelled,
+                    request_id,
+                    on_cancelled,
+                )
+                return
             except Exception as exc:  # noqa: BLE001 - surface to UI
                 self._root.after(
                     0, self._handle_error, request_id, str(exc), on_error
@@ -53,7 +81,9 @@ class SourceScanController:
                 on_success,
             )
 
-        threading.Thread(target=worker, daemon=True).start()
+        thread = threading.Thread(target=worker, daemon=True)
+        self._active_thread = thread
+        thread.start()
 
     def _handle_success(
         self,
@@ -66,6 +96,7 @@ class SourceScanController:
             return
 
         self._file_manager.apply_scan_results(folder_path, files_by_date)
+        self._finalize_request()
         if callback:
             callback(folder_path, files_by_date)
 
@@ -78,8 +109,54 @@ class SourceScanController:
         if request_id != self._request_id:
             return
 
+        self._finalize_request()
         if callback:
             callback(error_msg)
+
+    def _handle_progress(
+        self,
+        request_id: int,
+        current: int,
+        total: int,
+        callback: Callable[[int, int], None] | None,
+    ) -> None:
+        if request_id != self._request_id:
+            return
+
+        if callback:
+            callback(current, total)
+
+    def _handle_cancelled(
+        self,
+        request_id: int,
+        callback: Callable[[], None] | None,
+    ) -> None:
+        if request_id != self._request_id:
+            return
+
+        self._finalize_request()
+        if callback:
+            callback()
+
+    def cancel_current_scan(self) -> bool:
+        """Request cancellation of the active scan, if any."""
+        with self._request_lock:
+            active_thread = self._active_thread
+            cancel_event = self._cancel_event
+
+        if not active_thread or not active_thread.is_alive() or not cancel_event:
+            return False
+
+        if cancel_event.is_set():
+            return False
+
+        cancel_event.set()
+        return True
+
+    def _finalize_request(self) -> None:
+        with self._request_lock:
+            self._cancel_event = None
+            self._active_thread = None
 
 
 class CopyJobController:
