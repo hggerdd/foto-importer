@@ -7,7 +7,7 @@ from tkinter import messagebox
 
 from config.settings import Settings
 from core.copy_worker import CopyWorker
-from core.file_manager import FileManager
+from core.file_manager import FileManager, DateSource
 from ui.controllers import CopyJobController, SourceScanController
 from ui.layout import MainLayout
 
@@ -30,6 +30,7 @@ class MainWindow:
 
         # Initialize managers
         self.file_manager: FileManager = FileManager()
+        self.file_manager.set_date_source(DateSource.from_value(self.settings.date_source))
         self.copy_worker: CopyWorker = CopyWorker()
 
         # State
@@ -44,6 +45,7 @@ class MainWindow:
             on_source_selected=self._on_source_selected,
             on_target_selected=self._on_target_selected,
             on_preview_count_changed=self._on_preview_count_changed,
+            on_date_source_changed=self._on_date_source_changed,
             on_date_selection_changed=self._on_date_selection_changed,
             on_custom_name_changed=self._update_execute_button_state,
             on_execute_copy=self._execute_copy,
@@ -53,6 +55,7 @@ class MainWindow:
         self.date_list = self.layout.date_list
         self.preview_widget = self.layout.preview_widget
         self.preview_count_var = self.layout.preview_count_var
+        self.date_source_var = self.layout.date_source_var
         self.custom_name_var = self.layout.custom_name_var
         self.custom_name_entry = self.layout.custom_name_entry
         self.execute_button = self.layout.execute_button
@@ -87,6 +90,20 @@ class MainWindow:
     def _on_preview_count_changed(self) -> None:
         """Handle preview count change."""
         self.settings.preview_count = self.preview_count_var.get()
+
+    def _on_date_source_changed(self) -> None:
+        """Handle preferred date source changes."""
+        selected_value = self.date_source_var.get()
+        date_source = DateSource.from_value(selected_value)
+        if self.settings.date_source != date_source.value:
+            self.settings.date_source = date_source.value
+        self.file_manager.set_date_source(date_source)
+
+        if self.source_folder:
+            self._scan_source_folder()
+        else:
+            self.scan_progress.reset()
+            self._set_status("Ready")
 
     def _scan_source_folder(self) -> None:
         """Kick off an asynchronous scan for the selected source folder."""

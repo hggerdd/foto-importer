@@ -33,13 +33,14 @@ A GUI tool for photographers to organize camera files from memory cards into a s
 - **Supported formats**: JPG, PNG, TIFF, RAW (NEF, CR2, CR3, ARW, DNG, ORF), videos (MP4, MOV, AVI, MKV)
 - **Recursive scanning**: Finds files in all subdirectories
 - **Date grouping**: Groups by file creation date (YYYY-MM-DD)
+- **Metadata grouping option**: Optional setting prefers EXIF/IPTC capture dates over filesystem timestamps
 - **Non-destructive**: Files are copied, never moved or deleted
 - **Organized output**: Creates subfolders by file extension
 - **Duplicate handling**: Automatic filename conflict resolution with `_1`, `_2`, etc.
 
 ### User Interface
 - **Folder selection**: Browse buttons for source and target folders
-- **Persistent settings**: Remembers last used folders, window size, preferences
+- **Persistent settings**: Remembers last used folders, window size, preview counts, and preferred date source
 - **Date list**: Multi-select listbox showing date groups with file counts
 - **Image previews**: Configurable thumbnail grid (default 10 images)
 - **Progress tracking**: Individual progress bars for each copy job

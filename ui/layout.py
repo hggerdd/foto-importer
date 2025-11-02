@@ -25,6 +25,7 @@ class MainLayout(ttk.Frame):
         on_source_selected: Callable[[Path], None],
         on_target_selected: Callable[[Path], None],
         on_preview_count_changed: Callable[[], None],
+        on_date_source_changed: Callable[[], None],
         on_date_selection_changed: Callable[[set[str]], None],
         on_custom_name_changed: Callable[[], None],
         on_execute_copy: Callable[[], None],
@@ -45,7 +46,11 @@ class MainLayout(ttk.Frame):
         self.folder_selector.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
         self._build_scan_progress()
-        self._build_settings_section(settings, on_preview_count_changed)
+        self._build_settings_section(
+            settings,
+            on_preview_count_changed,
+            on_date_source_changed,
+        )
         self._build_date_list(on_date_selection_changed)
         self._build_preview_section()
         self._build_action_section(on_custom_name_changed, on_execute_copy)
@@ -63,9 +68,11 @@ class MainLayout(ttk.Frame):
         self,
         settings: Settings,
         on_preview_count_changed: Callable[[], None],
+        on_date_source_changed: Callable[[], None],
     ) -> None:
         settings_frame = ttk.LabelFrame(self, text="Settings", padding="10")
         settings_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        settings_frame.columnconfigure(1, weight=1)
 
         ttk.Label(settings_frame, text="Preview Count:").grid(row=0, column=0, sticky=tk.W)
         self.preview_count_var = tk.IntVar(value=settings.preview_count)
@@ -78,6 +85,26 @@ class MainLayout(ttk.Frame):
             command=on_preview_count_changed,
         )
         preview_spinbox.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(settings_frame, text="Date Source:").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+        self.date_source_var = tk.StringVar(value=settings.date_source)
+        filesystem_radio = ttk.Radiobutton(
+            settings_frame,
+            text="Filesystem timestamps",
+            value='filesystem',
+            variable=self.date_source_var,
+            command=on_date_source_changed,
+        )
+        filesystem_radio.grid(row=1, column=1, sticky=tk.W, pady=(10, 0))
+
+        metadata_radio = ttk.Radiobutton(
+            settings_frame,
+            text="Photo metadata",
+            value='metadata',
+            variable=self.date_source_var,
+            command=on_date_source_changed,
+        )
+        metadata_radio.grid(row=2, column=1, sticky=tk.W)
 
     def _build_date_list(self, on_selection_changed: Callable[[set[str]], None]) -> None:
         self.date_list = DateListWidget(
