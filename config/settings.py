@@ -35,6 +35,7 @@ class Settings:
             'last_target_folder': '',
             'preview_count': 10,
             'window_geometry': '1200x800',
+            'date_source': 'filesystem',
         }
 
     def save(self) -> None:
@@ -106,3 +107,13 @@ class Settings:
     def window_geometry(self, value: str) -> None:
         """Set window geometry."""
         self.set('window_geometry', value)
+
+    @property
+    def date_source(self) -> str:
+        """Get preferred date source."""
+        return self.get('date_source', 'filesystem')
+
+    @date_source.setter
+    def date_source(self, value: str) -> None:
+        """Set preferred date source."""
+        self.set('date_source', value)
