@@ -1,7 +1,7 @@
 """Folder selection widget."""
+
 from __future__ import annotations
 
-import tkinter as tk
 from tkinter import ttk, filedialog
 from pathlib import Path
 from collections.abc import Callable
@@ -15,8 +15,8 @@ class FolderSelector(ttk.Frame):
         parent: ttk.Frame,
         on_source_selected: Callable[[Path], None] | None = None,
         on_target_selected: Callable[[Path], None] | None = None,
-        initial_source: str = '',
-        initial_target: str = '',
+        initial_source: str = "",
+        initial_target: str = "",
         target_parent: ttk.Frame | None = None,
     ) -> None:
         """Initialize folder selector.
@@ -40,23 +40,34 @@ class FolderSelector(ttk.Frame):
 
     def _setup_ui(self) -> None:
         """Setup the UI components."""
-        ttk.Label(self, text="QUELLE", style='Small.TLabel').grid(row=0, column=0, padx=(0, 12))
-        self.source_label = ttk.Label(self, text=self.last_source or "Nicht ausgewählt", width=28)
-        self.source_label.grid(row=0, column=1, sticky='ew', padx=(0, 12))
-        ttk.Button(self, text="Ändern", command=self._select_source_folder).grid(row=0, column=2)
+        ttk.Label(self, text="QUELLE", style="Small.TLabel").grid(
+            row=0, column=0, padx=(0, 12)
+        )
+        self.source_label = ttk.Label(
+            self, text=self.last_source or "Nicht ausgewählt", width=28
+        )
+        self.source_label.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        ttk.Button(self, text="Ändern", command=self._select_source_folder).grid(
+            row=0, column=2
+        )
         target = self.target_parent
-        ttk.Label(target, text="ZIELORDNER", style='Small.TLabel').grid(row=1, column=0, columnspan=2, sticky='w')
-        self.target_label = ttk.Label(target, text=self.last_target or "Nicht ausgewählt", wraplength=210)
-        self.target_label.grid(row=2, column=0, sticky='w', pady=(8, 0), padx=(0, 8))
-        ttk.Button(target, text="Ändern", command=self._select_target_folder).grid(row=2, column=1, sticky='e', pady=(8, 0))
+        ttk.Label(target, text="ZIELORDNER", style="Small.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w"
+        )
+        self.target_label = ttk.Label(
+            target, text=self.last_target or "Nicht ausgewählt", wraplength=210
+        )
+        self.target_label.grid(row=2, column=0, sticky="w", pady=(8, 0), padx=(0, 8))
+        ttk.Button(target, text="Ändern", command=self._select_target_folder).grid(
+            row=2, column=1, sticky="e", pady=(8, 0)
+        )
         self.columnconfigure(1, weight=1)
 
     def _select_source_folder(self) -> None:
         """Handle source folder selection."""
         initial_dir = self.last_source if self.last_source else None
         folder = filedialog.askdirectory(
-            title="Quellordner auswählen",
-            initialdir=initial_dir
+            title="Quellordner auswählen", initialdir=initial_dir
         )
         if folder:
             self.last_source = folder
@@ -69,8 +80,7 @@ class FolderSelector(ttk.Frame):
         """Handle target folder selection."""
         initial_dir = self.last_target if self.last_target else None
         folder = filedialog.askdirectory(
-            title="Zielordner auswählen",
-            initialdir=initial_dir
+            title="Zielordner auswählen", initialdir=initial_dir
         )
         if folder:
             self.last_target = folder

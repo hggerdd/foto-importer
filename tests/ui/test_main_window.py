@@ -20,7 +20,9 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
     root.withdraw()
     app = MainWindow(root)
     errors = []
-    monkeypatch.setattr("ui.main_window.messagebox.showerror", lambda *args: errors.append(args))
+    monkeypatch.setattr(
+        "ui.main_window.messagebox.showerror", lambda *args: errors.append(args)
+    )
 
     def wait_for(condition):
         deadline = time.monotonic() + 5
@@ -32,12 +34,14 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
     try:
         app._on_source_selected(source)
         wait_for(lambda: len(app.file_manager.files_by_date) == 1)
-        wait_for(lambda: 'Update verfügbar' in app.layout.dng_version_label.cget('text'))
-        assert str(app.layout.dng_download_button.cget('state')) == 'normal'
+        wait_for(
+            lambda: "Update verfügbar" in app.layout.dng_version_label.cget("text")
+        )
+        assert str(app.layout.dng_download_button.cget("state")) == "normal"
         opened = []
-        monkeypatch.setattr('ui.layout.webbrowser.open', lambda url: opened.append(url))
+        monkeypatch.setattr("ui.layout.webbrowser.open", lambda url: opened.append(url))
         app.layout.dng_download_button.invoke()
-        assert opened == ['https://adobe.com/go/dng_converter_win/']
+        assert opened == ["https://adobe.com/go/dng_converter_win/"]
         app.date_list.set_selected_dates(set(app.file_manager.get_date_groups()))
         app._on_date_selection_changed(app.date_list.get_selected_dates())
         wait_for(lambda: len(app.preview_widget.image_references) == 1)
@@ -45,8 +49,15 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
         app.custom_name_var.set("album")
         assert str(app.execute_button.cget("state")) == "normal"
         app._execute_copy()
-        wait_for(lambda: (target / "album" / "jpg" / photo.name).exists() and not app._pending_groups)
-        assert (target / "album" / "jpg" / photo.name).read_bytes() == photo.read_bytes()
+        wait_for(
+            lambda: (
+                (target / "album" / "jpg" / photo.name).exists()
+                and not app._pending_groups
+            )
+        )
+        assert (
+            target / "album" / "jpg" / photo.name
+        ).read_bytes() == photo.read_bytes()
         assert app.date_list.is_empty()
         assert not errors
     finally:
@@ -56,12 +67,16 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
 
 @pytest.mark.parametrize("mode", ["ok", "fail"])
 def test_copy_then_dng_preserves_successful_copy(
-    tmp_path, monkeypatch, tk_root, fake_converter, mode,
+    tmp_path,
+    monkeypatch,
+    tk_root,
+    fake_converter,
+    mode,
 ):
     executable, _, _ = fake_converter
     settings = Settings(str(tmp_path / "settings.json"))
-    settings.set('convert_to_dng', True)
-    settings.set('dng_converter_path', str(executable))
+    settings.set("convert_to_dng", True)
+    settings.set("dng_converter_path", str(executable))
     monkeypatch.setattr("ui.main_window.Settings", lambda: settings)
     source, target = tmp_path / "photo.NEF", tmp_path / "target"
     source.write_text(mode)
@@ -69,7 +84,9 @@ def test_copy_then_dng_preserves_successful_copy(
     root.withdraw()
     app = MainWindow(root)
     errors = []
-    monkeypatch.setattr("ui.main_window.messagebox.showerror", lambda *args: errors.append(args))
+    monkeypatch.setattr(
+        "ui.main_window.messagebox.showerror", lambda *args: errors.append(args)
+    )
     try:
         app.file_manager.files_by_date = {"2026-10-21": [source]}
         app._populate_date_list()

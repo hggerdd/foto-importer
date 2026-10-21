@@ -1,4 +1,5 @@
 """Deliver worker results without calling Tk from background threads."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -47,7 +48,9 @@ class UiDispatcher:
                     break
         finally:
             if not self._closed:
-                self._after_id = self._root.after(1 if self._ready else UI_POLL_INTERVAL_MS, self._drain)
+                self._after_id = self._root.after(
+                    1 if self._ready else UI_POLL_INTERVAL_MS, self._drain
+                )
 
     def close(self) -> None:
         """Stop polling and discard callbacks when the UI closes."""

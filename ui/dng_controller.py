@@ -1,4 +1,5 @@
 """Coordinate folder conversion jobs without calling Tk from workers."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -24,7 +25,10 @@ class DngController:
         return name in self._jobs
 
     def start_job(
-        self, name: str, folder: Path, converter: Path,
+        self,
+        name: str,
+        folder: Path,
+        converter: Path,
         on_status: Callable[[str], None],
     ) -> None:
         """Start converting a copied folder and queue all UI updates."""
@@ -32,15 +36,26 @@ class DngController:
             raise ValueError(f"DNG conversion already running: {name}")
         row = f"DNG: {name}"
         self._progress.remove_progress_bar(row)
-        self._progress.add_progress_bar(row, 0, on_cancel=lambda: self._jobs[name].cancel())
+        self._progress.add_progress_bar(
+            row, 0, on_cancel=lambda: self._jobs[name].cancel()
+        )
         job = DngJob(
-            folder, converter,
+            folder,
+            converter,
             on_progress=lambda current, total: self._dispatcher.post(
-                self._progress.update_progress, row, current, total,
+                self._progress.update_progress,
+                row,
+                current,
+                total,
                 key=("dng", name),
             ),
             on_finished=lambda state, message: self._dispatcher.post(
-                self._finished, name, row, state, message, on_status,
+                self._finished,
+                name,
+                row,
+                state,
+                message,
+                on_status,
             ),
         )
         self._jobs[name] = job
@@ -48,7 +63,11 @@ class DngController:
         job.start()
 
     def _finished(
-        self, name: str, row: str, state: JobState, message: str,
+        self,
+        name: str,
+        row: str,
+        state: JobState,
+        message: str,
         on_status: Callable[[str], None],
     ) -> None:
         self._jobs.pop(name, None)

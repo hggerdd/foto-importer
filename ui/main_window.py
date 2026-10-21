@@ -1,4 +1,5 @@
 """Main application window for camera organizer."""
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -36,13 +37,18 @@ class MainWindow:
 
         # Initialize managers
         self.file_manager: FileManager = FileManager()
-        self.file_manager.set_date_source(DateSource.from_value(self.settings.date_source))
+        self.file_manager.set_date_source(
+            DateSource.from_value(self.settings.date_source)
+        )
         self.copy_worker: CopyWorker = CopyWorker()
 
         # State
         self.source_folder: Path | None = None
-        self.target_folder: Path | None = (Path(self.settings.last_target_folder)
-                                         if self.settings.last_target_folder else None)
+        self.target_folder: Path | None = (
+            Path(self.settings.last_target_folder)
+            if self.settings.last_target_folder
+            else None
+        )
         self._selection_counts: dict[str, int] = {}
         self._preflight_pending = False
         self._source_revision = 0
@@ -88,14 +94,16 @@ class MainWindow:
         )
         self.dng_controller = DngController(self.root, self.progress_manager)
         self.dng_update_controller = DngUpdateController(
-            self.root, self.settings, self._on_dng_version_checked,
+            self.root,
+            self.settings,
+            self._on_dng_version_checked,
         )
         self.dng_update_controller.start(Path(self.layout.dng_converter_var.get()))
         self.scan_progress.bind_on_cancel(self._cancel_active_scan)
 
         # Bind window close event to save settings
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-        self.layout.dng_converter_var.trace_add('write', self._converter_changed)
+        self.layout.dng_converter_var.trace_add("write", self._converter_changed)
         if self.settings.last_source_folder:
             self._startup_after = self.root.after(0, self._restore_source)
 
@@ -105,16 +113,22 @@ class MainWindow:
 
     def _on_dng_version_checked(self, text: str, update_available: bool) -> None:
         """Show converter status independently of import progress."""
-        text = (text.replace('not found / version unavailable', 'nicht gefunden / Version unbekannt')
-                .replace('Update available', 'Update verfügbar')
-                .replace('Up to date', 'Aktuell')
-                .replace('Update check unavailable; next attempt tomorrow',
-                         'Updateprüfung nicht verfügbar; nächster Versuch morgen'))
+        text = (
+            text.replace(
+                "not found / version unavailable", "nicht gefunden / Version unbekannt"
+            )
+            .replace("Update available", "Update verfügbar")
+            .replace("Up to date", "Aktuell")
+            .replace(
+                "Update check unavailable; next attempt tomorrow",
+                "Updateprüfung nicht verfügbar; nächster Versuch morgen",
+            )
+        )
         self.layout.dng_version_label.config(text=text)
-        version = text.split(' — ')[0].removeprefix('DNG Converter: ')
+        version = text.split(" — ")[0].removeprefix("DNG Converter: ")
         self.layout.converter_status.config(text=version)
         self.layout.dng_download_button.config(
-            state='normal' if update_available else 'disabled',
+            state="normal" if update_available else "disabled",
         )
 
     def _converter_changed(self, *args) -> None:
@@ -182,9 +196,9 @@ class MainWindow:
         self.selection_controller.cancel()
         self._selection_counts = {}
         self._preview_day = None
-        self.layout.preview_title.config(text='Deine Aufnahmen')
-        self.layout.preview_details.config(text='Quelle wird gelesen …')
-        self.layout.preview_caption.config(text='Bildvorschau')
+        self.layout.preview_title.config(text="Deine Aufnahmen")
+        self.layout.preview_details.config(text="Quelle wird gelesen …")
+        self.layout.preview_caption.config(text="Bildvorschau")
         self._set_status("Dateien werden gelesen …")
         self.scan_progress.start()
         self.date_list.populate({})
@@ -207,7 +221,9 @@ class MainWindow:
 
     def _on_scan_error(self, error_msg: str) -> None:
         """Handle scan failure."""
-        messagebox.showerror("Fehler", f"Quelle konnte nicht gelesen werden: {error_msg}")
+        messagebox.showerror(
+            "Fehler", f"Quelle konnte nicht gelesen werden: {error_msg}"
+        )
         self._set_status("Fehler beim Lesen der Quelle")
         self.scan_progress.show_error("Scan fehlgeschlagen")
         self._update_execute_button_state()
@@ -215,7 +231,9 @@ class MainWindow:
     def _populate_date_list(self) -> None:
         """Populate the date listbox."""
         date_groups = self.file_manager.get_date_groups()
-        date_counts = {date: self.file_manager.get_file_count(date) for date in date_groups}
+        date_counts = {
+            date: self.file_manager.get_file_count(date) for date in date_groups
+        }
         self.date_list.populate(date_counts)
 
     def _on_scan_progress(self, current: int, total: int) -> None:
@@ -251,22 +269,43 @@ class MainWindow:
         if focused != self._preview_day:
             self.preview_widget.clear_previews()
             self._preview_day = focused
-        self.layout.preview_title.config(text=date_label(focused) if focused else 'Deine Aufnahmen')
-        self.layout.preview_details.config(text='Dateien werden gezählt …' if focused else 'Links einen Aufnahmetag auswählen')
+        self.layout.preview_title.config(
+            text=date_label(focused) if focused else "Deine Aufnahmen"
+        )
+        self.layout.preview_details.config(
+            text="Dateien werden gezählt …"
+            if focused
+            else "Links einen Aufnahmetag auswählen"
+        )
         self.selection_controller.request(
-            self.file_manager.files_by_date, selected_dates, focused,
+            self.file_manager.files_by_date,
+            selected_dates,
+            focused,
             self.preview_count_var.get(),
             lambda result: self._selection_ready(focused, result),
         )
 
     def _selection_ready(self, focused: str | None, result: SelectionSummary) -> None:
         self._selection_counts = result.counts
-        details = ' · '.join(f'{count} {ext.upper()}' for ext, count in sorted(result.focused_counts.items()))
-        self.layout.preview_details.config(text=details or 'Keine Dateien ausgewählt')
-        self.layout.preview_caption.config(text=f'Bildvorschau · {len(result.previews)} von {result.preview_total} Bildern')
-        self.preview_widget.load_previews(result.previews)
+        details = " · ".join(
+            f"{count} {ext.upper()}"
+            for ext, count in sorted(result.focused_counts.items())
+        )
+        self.layout.preview_details.config(text=details or "Keine Dateien ausgewählt")
+        self.layout.preview_caption.config(
+            text=f"Bildvorschau · {len(result.previews)} von {result.preview_total} Bildern"
+        )
+        self.preview_widget.load_previews(
+            result.previews,
+            empty_message=(
+                "Für diese Dateien ist keine Bildvorschau verfügbar.\n"
+                "RAW-Dateien und Videos werden trotzdem importiert."
+                if result.focused_counts
+                else "Aufnahmetag auswählen\nDie Bildvorschau erscheint hier."
+            ),
+        )
         if focused and not self.custom_name_var.get():
-            self.custom_name_var.set(f'{focused}_')
+            self.custom_name_var.set(f"{focused}_")
         self._update_execute_button_state()
 
     def _show_preview(self, date_str: str) -> None:
@@ -280,19 +319,39 @@ class MainWindow:
         name = self.custom_name_var.get().strip()
         error = folder_name_error(name)
         active = name in self._pending_groups or (
-            hasattr(self, 'dng_controller') and self.dng_controller.is_active(name))
-        ready = bool(count and self.target_folder and not error and not active
-                     and not self._preflight_pending)
-        self.execute_button.config(
-            state='normal' if ready else 'disabled',
-            text='Ziel wird geprüft …' if self._preflight_pending else
-                 f'{count} {"Datei" if count == 1 else "Dateien"} importieren →' if count else 'Dateien importieren →',
+            hasattr(self, "dng_controller") and self.dng_controller.is_active(name)
         )
-        self.layout.selection_summary.config(text=f'{len(selected)} Tag{"e" if len(selected) != 1 else ""} ausgewählt · {count} Dateien' if selected else 'Kein Tag ausgewählt')
-        self.layout.import_hint.config(text=(error if name and error else
-                                            'Für diesen Ordner läuft bereits ein Auftrag.' if active else
-                                            'Bitte einen Zielordner auswählen.' if not self.target_folder else
-                                            'Dateien werden kopiert.'))
+        ready = bool(
+            count
+            and self.target_folder
+            and not error
+            and not active
+            and not self._preflight_pending
+        )
+        self.execute_button.config(
+            state="normal" if ready else "disabled",
+            text="Ziel wird geprüft …"
+            if self._preflight_pending
+            else f"{count} {'Datei' if count == 1 else 'Dateien'} importieren →"
+            if count
+            else "Dateien importieren →",
+        )
+        self.layout.selection_summary.config(
+            text=f"{len(selected)} Tag{'e' if len(selected) != 1 else ''} ausgewählt · {count} Dateien"
+            if selected
+            else "Kein Tag ausgewählt"
+        )
+        self.layout.import_hint.config(
+            text=(
+                error
+                if name and error
+                else "Für diesen Ordner läuft bereits ein Auftrag."
+                if active
+                else "Bitte einen Zielordner auswählen."
+                if not self.target_folder
+                else "Dateien werden kopiert."
+            )
+        )
         self.layout.update_destination(self._selection_counts)
 
     def _execute_copy(self) -> None:
@@ -300,7 +359,9 @@ class MainWindow:
         selected_dates = self.date_list.get_selected_dates()
 
         if not selected_dates:
-            messagebox.showwarning("Auswahl fehlt", "Bitte mindestens einen Aufnahmetag auswählen.")
+            messagebox.showwarning(
+                "Auswahl fehlt", "Bitte mindestens einen Aufnahmetag auswählen."
+            )
             return
 
         if not self.target_folder:
@@ -309,25 +370,35 @@ class MainWindow:
 
         custom_name = self.custom_name_var.get().strip()
         if not custom_name:
-            messagebox.showwarning("Ordnername fehlt", "Bitte einen Ordnernamen eingeben.")
+            messagebox.showwarning(
+                "Ordnername fehlt", "Bitte einen Ordnernamen eingeben."
+            )
             return
 
-        if custom_name in self._pending_groups or self.dng_controller.is_active(custom_name):
-            messagebox.showwarning("Auftrag läuft", f"Für '{custom_name}' läuft bereits ein Auftrag.")
+        if custom_name in self._pending_groups or self.dng_controller.is_active(
+            custom_name
+        ):
+            messagebox.showwarning(
+                "Auftrag läuft", f"Für '{custom_name}' läuft bereits ein Auftrag."
+            )
             return
 
         name_error = folder_name_error(custom_name)
         if name_error:
-            messagebox.showwarning('Ordnername', name_error)
+            messagebox.showwarning("Ordnername", name_error)
             return
         if self._preflight_pending:
             return
-        converter = (Path(self.layout.dng_converter_var.get().strip())
-                     if self.layout.convert_to_dng_var.get() else None)
+        converter = (
+            Path(self.layout.dng_converter_var.get().strip())
+            if self.layout.convert_to_dng_var.get()
+            else None
+        )
         target_folder = self.target_folder
         target_path = target_folder / custom_name
-        pending_groups = {day: self.file_manager.get_files_for_date(day)
-                          for day in selected_dates}
+        pending_groups = {
+            day: self.file_manager.get_files_for_date(day) for day in selected_dates
+        }
         revision = self._source_revision
         self._preflight_pending = True
         self._update_execute_button_state()
@@ -336,31 +407,38 @@ class MainWindow:
             self._preflight_pending = False
             self._update_execute_button_state()
             if revision != self._source_revision:
-                self._set_status('Quelle geändert. Bitte den Import erneut starten.')
+                self._set_status("Quelle geändert. Bitte den Import erneut starten.")
                 return
             if error:
-                messagebox.showerror('Import nicht möglich', error)
+                messagebox.showerror("Import nicht möglich", error)
                 return
             if exists and not messagebox.askyesno(
-                'Ordner vorhanden',
+                "Ordner vorhanden",
                 f"Der Ordner '{custom_name}' existiert bereits.\n\n"
-                'Dateien werden ergänzt; vorhandene Dateien bleiben erhalten.\nFortfahren?',
+                "Dateien werden ergänzt; vorhandene Dateien bleiben erhalten.\nFortfahren?",
             ):
                 return
-            self._start_copy(custom_name, pending_groups, target_folder, converter, files)
+            self._start_copy(
+                custom_name, pending_groups, target_folder, converter, files
+            )
 
         self.import_preflight.check(target_path, converter, pending_groups, checked)
 
-    def _start_copy(self, custom_name: str, pending_groups: dict[str, list[Path]],
-                    target_folder: Path, converter: Path | None,
-                    all_files: list[Path]) -> None:
+    def _start_copy(
+        self,
+        custom_name: str,
+        pending_groups: dict[str, list[Path]],
+        target_folder: Path,
+        converter: Path | None,
+        all_files: list[Path],
+    ) -> None:
         """Start the captured import after background validation."""
         if not all_files:
             return
         target_path = target_folder / custom_name
         selected_dates = set(pending_groups)
         # Start copy operation
-        self.execute_button.config(state='disabled')
+        self.execute_button.config(state="disabled")
 
         # Remove date groups from list IMMEDIATELY (before copy starts)
         for date_str in selected_dates:
@@ -384,7 +462,9 @@ class MainWindow:
             target_folder=target_folder,
             on_status=self._set_status,
             on_completed=lambda name: self._on_copy_completed(
-                name, target_path, converter,
+                name,
+                target_path,
+                converter,
             ),
             on_failed=self._on_job_failed,
             on_cancelled=self._on_job_cancelled,
@@ -398,14 +478,24 @@ class MainWindow:
         self._on_date_selection_changed(self.date_list.get_selected_dates())
 
     def _on_copy_completed(
-        self, job_name: str, folder: Path, converter: Path | None,
+        self,
+        job_name: str,
+        folder: Path,
+        converter: Path | None,
     ) -> None:
         """Commit copy success before starting the optional conversion phase."""
         self._on_job_completed(job_name)
         if converter is not None:
             self.progress_manager.remove_progress_bar(job_name)
-            self.dng_controller.start_job(job_name, folder, converter, self._set_status)
+            self.dng_controller.start_job(
+                job_name, folder, converter, self._on_dng_status
+            )
             self.progress_manager.set_target(f"DNG: {job_name}", folder)
+
+    def _on_dng_status(self, message: str) -> None:
+        """Reflect phase transitions in the import action's availability."""
+        self._set_status(message)
+        self._update_execute_button_state()
 
     def _on_job_completed(self, job_name: str) -> None:
         """Handle successful completion callbacks."""
@@ -416,7 +506,9 @@ class MainWindow:
     def _on_job_failed(self, job_name: str, error_msg: str) -> None:
         """Handle job failure callbacks."""
         self._restore_pending_groups(job_name)
-        messagebox.showerror("Fehler", f"Kopieren fehlgeschlagen für {job_name}:\n{error_msg}")
+        messagebox.showerror(
+            "Fehler", f"Kopieren fehlgeschlagen für {job_name}:\n{error_msg}"
+        )
         self._update_execute_button_state()
 
     def _on_job_cancelled(self, job_name: str) -> None:
@@ -434,7 +526,9 @@ class MainWindow:
         for date_str, paths in pending.items():
             self.file_manager.files_by_date[date_str] = paths
 
-        self.file_manager.files_by_date = dict(sorted(self.file_manager.files_by_date.items()))
+        self.file_manager.files_by_date = dict(
+            sorted(self.file_manager.files_by_date.items())
+        )
         self._populate_date_list()
 
     def _set_status(self, message: str) -> None:

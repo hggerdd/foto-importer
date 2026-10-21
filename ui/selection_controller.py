@@ -1,4 +1,5 @@
 """Cancellable summary computation, independent of the Tk event loop."""
+
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from collections.abc import Callable
@@ -14,7 +15,9 @@ class SelectionController:
 
     def __init__(self, root: tk.Misc) -> None:
         self._dispatcher = UiDispatcher(root)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='Selection')
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="Selection"
+        )
         self._cancel = Event()
         self._future = None
         self._generation = 0
@@ -25,20 +28,28 @@ class SelectionController:
         if self._future:
             self._future.cancel()
 
-    def request(self, groups: dict[str, list[Path]], selected: set[str],
-                focused: str | None, limit: int,
-                callback: Callable[[SelectionSummary], None]) -> None:
+    def request(
+        self,
+        groups: dict[str, list[Path]],
+        selected: set[str],
+        focused: str | None,
+        limit: int,
+        callback: Callable[[SelectionSummary], None],
+    ) -> None:
         """Capture list references; the importer never mutates their contents."""
         self.cancel()
         generation = self._generation
         cancel = self._cancel = Event()
-        snapshot = {day: groups[day] for day in selected | ({focused} if focused else set())
-                    if day in groups}
+        snapshot = {
+            day: groups[day]
+            for day in selected | ({focused} if focused else set())
+            if day in groups
+        }
 
         def work():
             result = summarize_selection(snapshot, selected, focused, limit, cancel)
             if result is not None:
-                self._dispatcher.post(deliver, result, key='summary')
+                self._dispatcher.post(deliver, result, key="summary")
 
         def deliver(result):
             if generation == self._generation:

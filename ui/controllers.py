@@ -1,4 +1,5 @@
 """Helper controllers for coordinating UI background tasks."""
+
 from __future__ import annotations
 
 import threading
@@ -214,7 +215,10 @@ class CopyJobController:
                 self._handle_error, name, err, on_status, on_failed
             ),
             on_progress=lambda current, total: self._dispatcher.post(
-                self._handle_progress, job_name, current, total,
+                self._handle_progress,
+                job_name,
+                current,
+                total,
                 key=("copy", job_name),
             ),
             on_status_change=lambda name, state: self._dispatcher.post(
@@ -248,7 +252,9 @@ class CopyJobController:
         on_status: Callable[[str], None],
         on_completed: Callable[[str], None],
     ) -> None:
-        self._progress_manager.finish_progress(job_name, "completed: Import abgeschlossen")
+        self._progress_manager.finish_progress(
+            job_name, "completed: Import abgeschlossen"
+        )
         self._active_jobs.discard(job_name)
         on_status(f"Import abgeschlossen: {job_name}")
         on_completed(job_name)
@@ -277,7 +283,9 @@ class CopyJobController:
             return
 
         if state is JobState.CANCELLED:
-            self._progress_manager.finish_progress(job_name, "cancelled: Import abgebrochen")
+            self._progress_manager.finish_progress(
+                job_name, "cancelled: Import abgebrochen"
+            )
             self._active_jobs.discard(job_name)
             on_status(f"Kopieren abgebrochen: {job_name}")
             on_cancelled(job_name)

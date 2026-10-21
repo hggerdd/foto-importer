@@ -57,6 +57,27 @@ def test_progress_is_coalesced_and_completion_order_preserved():
     assert not root.pending
 
 
+def test_dispatcher_yields_between_expensive_ui_callbacks(monkeypatch):
+    root = FakeRoot()
+    ticks = [0.0]
+    monkeypatch.setattr("ui.dispatcher.monotonic", lambda: ticks[0])
+    dispatcher = UiDispatcher(root)
+    received = []
+
+    def display(value):
+        received.append(value)
+        ticks[0] += 0.010
+
+    dispatcher.post(display, "thumbnail")
+    dispatcher.post(display, "complete")
+    root.poll()
+    assert received == ["thumbnail"]
+    assert root.pending  # The next UI turn can process input before continuing.
+    root.poll()
+    assert received == ["thumbnail", "complete"]
+    dispatcher.close()
+
+
 def test_scan_callbacks_run_on_ui_thread_and_ignore_obsolete_results(tmp_path):
     (tmp_path / "photo.jpg").touch()
     root, manager = FakeRoot(), FileManager()
@@ -64,8 +85,11 @@ def test_scan_callbacks_run_on_ui_thread_and_ignore_obsolete_results(tmp_path):
     success, errors, progress = [], [], []
     for _ in range(2):
         controller.scan(
-            tmp_path, lambda: None, lambda *args: success.append(args),
-            errors.append, on_progress=lambda *args: progress.append(args),
+            tmp_path,
+            lambda: None,
+            lambda *args: success.append(args),
+            errors.append,
+            on_progress=lambda *args: progress.append(args),
         )
         controller._active_thread.join(timeout=5)
         assert not controller._active_thread.is_alive()
@@ -101,8 +125,11 @@ def test_copy_callbacks_run_on_ui_thread(tmp_path):
     controller = CopyJobController(root, worker, progress)
     completed, errors = [], []
     controller.start_job(
-        "album", [source] * 5, tmp_path / "target",
-        on_status=lambda _: None, on_completed=completed.append,
+        "album",
+        [source] * 5,
+        tmp_path / "target",
+        on_status=lambda _: None,
+        on_completed=completed.append,
         on_failed=lambda *args: errors.append(args),
         on_cancelled=lambda _: None,
     )
@@ -155,7 +182,9 @@ def test_dng_callbacks_run_on_ui_thread_and_keep_result(tmp_path, fake_converter
     controller.close()
 
 
-def test_closing_dng_controller_reaps_child_without_ui_callbacks(tmp_path, fake_converter):
+def test_closing_dng_controller_reaps_child_without_ui_callbacks(
+    tmp_path, fake_converter
+):
     class Progress:
         def add_progress_bar(self, *args, **kwargs):
             pass

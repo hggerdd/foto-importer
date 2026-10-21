@@ -4,6 +4,54 @@ Tkinter-Anwendung zum Gruppieren von Kamera-Dateien nach Datum, mit
 Bildvorschau und Kopieren in Unterordner je Dateiendung. Als Datumsquelle
 stehen Dateisystem-Zeitstempel und Foto-Metadaten zur Verfügung.
 
+![Import-Arbeitsfläche mit Galerie und Zielvorschau](docs/screenshots/import-workspace.png)
+
+## Import-Arbeitsfläche
+
+Oben die Quelle auswählen. Links lassen sich einzelne Aufnahmetage ohne
+Strg-Taste ankreuzen oder gemeinsam auswählen. Die Mitte zeigt eine begrenzte
+Bildvorschau des zuletzt fokussierten Tages; die angekreuzten Tage bestimmen,
+welche Dateien importiert werden. Die Vorschaugröße ist über den Schieberegler
+änderbar. Die Anzahl der Vorschaubilder steht unter **Einstellungen**.
+
+Rechts Zielordner und Ordnername festlegen. Die Ablagevorschau zeigt die
+Unterordner je Dateityp und gegebenenfalls die DNGs direkt im Importordner.
+**Dateien importieren** kopiert alle Dateien der angekreuzten Tage in diesen
+gemeinsamen Ordner. Namen mit Pfadbestandteilen oder unter Windows reservierten
+Zeichen werden abgewiesen. Quelle und Ziel der letzten Sitzung werden beim
+Start wiederhergestellt; der Quellscan startet im Hintergrund.
+
+Die drei Spalten sind über ihre Trennlinien verstellbar. Die Galerie passt ihre
+Spaltenzahl an den verfügbaren Platz an. Auf kleineren Fenstern scrollen die
+Importoptionen, während die Importaktion sichtbar bleibt. Einstellungen und
+Auftragsverlauf öffnen eigene Fenster ohne die Hauptoberfläche zu sperren.
+
+Die Auftragsleiste unten zeigt aktive Vorgänge und die letzten zwei Ergebnisse.
+Weitere Aufträge sind scrollbar; **Verlauf** enthält die letzten 100 Ergebnisse
+der laufenden Sitzung. Abgeschlossene Imports können über **Ordner öffnen**
+im Explorer angezeigt werden.
+
+Scan, Dateizählung, Vorschaudekodierung, Ziel-/Converter-Prüfung, Kopieren und
+DNG-Konvertierung laufen in Hintergrundthreads; Adobe läuft in eigenen
+Prozessen. Veraltete Vorschau- und Auswahlergebnisse werden verworfen. Tk-Widgets
+werden ausschließlich im UI-Thread aktualisiert. Die Zustellung von Ergebnissen
+gibt nach rund 8 ms an die Ereignisschleife zurück; lange Datumslisten werden
+in Portionen von 100 Zeilen aufgebaut.
+
+Die bisherigen Benutzereinstellungen bleiben gültig. Neue Installationen
+starten mit 12 Vorschaubildern und einer Fenstergröße von 1500 × 980 Pixeln.
+Die Konstanten für Worker-Abfragen und Cachegrößen bleiben unverändert.
+
+Eine Vorschau mit isolierten Einstellungen und ohne Kopieren oder Konvertieren:
+
+```powershell
+uv run python scripts/preview_workspace.py --source D:/DCIM/103NZ6_2
+```
+
+Mit `--output docs/screenshots/import-workspace.png` wird unter Windows ein
+Screenshot dieses Fensters erstellt und die Vorschau geschlossen. Die
+Auftragszeilen und Versionsangaben in dieser Vorschau sind Beispieldaten.
+
 ```powershell
 uv sync
 uv run python main.py
@@ -11,14 +59,12 @@ uv run python main.py
 
 ## NEF nach DNG konvertieren
 
-Unter **Settings** die Option **Convert NEF to DNG after copying** aktivieren.
+Rechts unter **Konvertierung** die Option **NEF zusätzlich als DNG** aktivieren.
 Der Standardpfad ist
 `C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe`;
-über **Browse...** lässt sich eine andere Installation auswählen. Die Option
+über **Einstellungen** lässt sich eine andere Installation auswählen. Die Option
 ist zunächst deaktiviert. Option und Programmpfad werden gespeichert
 (`convert_to_dng`, `dng_converter_path` in den Benutzereinstellungen).
-
-![DNG-Einstellungen in der Anwendung](docs/screenshots/dng-settings.png)
 
 Nach erfolgreichem Kopieren verarbeitet die Anwendung alle `.nef`-Dateien
 aus `<Zielordner>/<Name>/nef` und legt die DNGs direkt in
@@ -34,10 +80,10 @@ Kopieraufträge bleiben bedienbar; CPU und Laufwerk werden weiterhin geteilt.
 Das Programm startet Adobe ohne Shell mit getrennten Pfadargumenten, sodass
 Leerzeichen und Sonderzeichen in Ordnernamen unterstützt werden.
 
-**Copy and DNG Jobs** zeigt pro Ordner die abgearbeiteten Dateien einschließlich
+**Aufträge** zeigt pro Ordner die abgearbeiteten Dateien einschließlich
 übersprungener DNGs. Der Fortschritt steigt nach jeder fertigen Datei;
 innerhalb einer einzelnen Datei gibt es keine Prozentanzeige. Abschluss,
-Fehler oder Abbruch bleiben bis **Dismiss** sichtbar. **Cancel** beendet nur
+Fehler oder Abbruch bleiben als Ergebnis im Verlauf. **Abbrechen** beendet nur
 die Konvertierung dieses Ordners. Beim Schließen werden aktive
 Konvertierungen ebenfalls abgebrochen. Fertige DNGs und kopierte Dateien
 bleiben erhalten. Ein Konvertierungsfehler stellt die bereits erfolgreich

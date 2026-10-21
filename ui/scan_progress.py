@@ -1,4 +1,5 @@
 """Widget for showing source scan progress."""
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -25,10 +26,12 @@ class ScanProgressWidget(ttk.Frame):
         status_label = ttk.Label(self, textvariable=self.status_var)
         status_label.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-        self.progress_bar = ttk.Progressbar(self, mode='determinate', maximum=1)
-        self.progress_bar.grid(row=1, column=0, sticky='ew', pady=(4, 0))
+        self.progress_bar = ttk.Progressbar(self, mode="determinate", maximum=1)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
-        self.cancel_button = ttk.Button(self, text="Abbrechen", command=self._handle_cancel)
+        self.cancel_button = ttk.Button(
+            self, text="Abbrechen", command=self._handle_cancel
+        )
         self.cancel_button.grid(row=0, column=1, rowspan=2, padx=(10, 0))
 
     def bind_on_cancel(self, callback: Callable[[], bool]) -> None:
@@ -40,9 +43,9 @@ class ScanProgressWidget(ttk.Frame):
         self.progress_bar.grid()
         self.cancel_button.grid()
         self._switch_mode(total)
-        self.progress_bar['value'] = 0
+        self.progress_bar["value"] = 0
         self.status_var.set("Dateien werden gelesen …")
-        self.cancel_button.config(state='normal', text="Abbrechen")
+        self.cancel_button.config(state="normal", text="Abbrechen")
 
     def update_progress(self, current: int, total: int) -> None:
         """Update progress bar based on scan updates."""
@@ -51,24 +54,24 @@ class ScanProgressWidget(ttk.Frame):
 
         maximum = max(total, 1)
         self.progress_bar.config(maximum=maximum)
-        self.progress_bar['value'] = min(current, maximum)
+        self.progress_bar["value"] = min(current, maximum)
         self.status_var.set(f"Dateien werden gelesen … {current} / {total}")
 
     def mark_cancelling(self) -> None:
         """Set UI state to reflect an in-flight cancellation."""
-        self.cancel_button.config(state='disabled', text="Wird abgebrochen …")
+        self.cancel_button.config(state="disabled", text="Wird abgebrochen …")
         self.status_var.set("Scan wird abgebrochen …")
 
     def mark_cancel_failed(self) -> None:
         """Restore cancel button if cancellation was rejected."""
-        self.cancel_button.config(state='normal', text="Abbrechen")
+        self.cancel_button.config(state="normal", text="Abbrechen")
         self.status_var.set("Scan konnte nicht abgebrochen werden")
 
     def mark_cancelled(self) -> None:
         """Reflect a cancelled scan."""
         self.progress_bar.stop()
         self.status_var.set("Scan abgebrochen")
-        self.cancel_button.config(state='disabled', text="Abbrechen")
+        self.cancel_button.config(state="disabled", text="Abbrechen")
         self._indeterminate = False
 
     def mark_finished(self, message: str = "Scan abgeschlossen") -> None:
@@ -76,7 +79,7 @@ class ScanProgressWidget(ttk.Frame):
         if self._indeterminate:
             self.progress_bar.stop()
         self.status_var.set(message)
-        self.cancel_button.config(state='disabled', text="Abbrechen")
+        self.cancel_button.config(state="disabled", text="Abbrechen")
         self._indeterminate = False
         self.progress_bar.grid_remove()
         self.cancel_button.grid_remove()
@@ -86,24 +89,24 @@ class ScanProgressWidget(ttk.Frame):
         if self._indeterminate:
             self.progress_bar.stop()
         self.status_var.set(message)
-        self.cancel_button.config(state='disabled', text="Abbrechen")
+        self.cancel_button.config(state="disabled", text="Abbrechen")
         self._indeterminate = False
 
     def reset(self) -> None:
         """Reset to idle state."""
         self.progress_bar.stop()
-        self.progress_bar.config(mode='determinate', maximum=1)
-        self.progress_bar['value'] = 0
+        self.progress_bar.config(mode="determinate", maximum=1)
+        self.progress_bar["value"] = 0
         self._indeterminate = False
         self.status_var.set("Quelle auswählen")
         self.progress_bar.grid_remove()
         self.cancel_button.grid_remove()
-        self.cancel_button.config(state='disabled', text="Abbrechen")
+        self.cancel_button.config(state="disabled", text="Abbrechen")
 
     def _handle_cancel(self) -> None:
         """Invoke the bound cancellation callback."""
         if not self._cancel_callback:
-            self.cancel_button.config(state='disabled')
+            self.cancel_button.config(state="disabled")
             return
 
         self.mark_cancelling()
@@ -119,10 +122,10 @@ class ScanProgressWidget(ttk.Frame):
         if total and total > 0:
             if self._indeterminate:
                 self.progress_bar.stop()
-            self.progress_bar.config(mode='determinate', maximum=total)
+            self.progress_bar.config(mode="determinate", maximum=total)
             self._indeterminate = False
         else:
             if not self._indeterminate:
-                self.progress_bar.config(mode='indeterminate')
+                self.progress_bar.config(mode="indeterminate")
                 self.progress_bar.start(10)
                 self._indeterminate = True
