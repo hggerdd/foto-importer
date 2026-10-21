@@ -7,7 +7,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 
-class FolderSelector(ttk.LabelFrame):
+class FolderSelector(ttk.Frame):
     """Widget for selecting source and target folders."""
 
     def __init__(
@@ -16,7 +16,8 @@ class FolderSelector(ttk.LabelFrame):
         on_source_selected: Callable[[Path], None] | None = None,
         on_target_selected: Callable[[Path], None] | None = None,
         initial_source: str = '',
-        initial_target: str = ''
+        initial_target: str = '',
+        target_parent: ttk.Frame | None = None,
     ) -> None:
         """Initialize folder selector.
 
@@ -27,7 +28,8 @@ class FolderSelector(ttk.LabelFrame):
             initial_source: Initial source folder path
             initial_target: Initial target folder path
         """
-        super().__init__(parent, text="Folder Selection", padding="10")
+        super().__init__(parent)
+        self.target_parent = target_parent or self
 
         self.on_source_selected: Callable[[Path], None] | None = on_source_selected
         self.on_target_selected: Callable[[Path], None] | None = on_target_selected
@@ -38,33 +40,22 @@ class FolderSelector(ttk.LabelFrame):
 
     def _setup_ui(self) -> None:
         """Setup the UI components."""
-        # Source folder
-        ttk.Label(self, text="Source Folder:").grid(row=0, column=0, sticky=tk.W)
-        self.source_label = ttk.Label(self, text="Not selected", foreground="gray")
-        self.source_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 10))
-        ttk.Button(
-            self,
-            text="Browse...",
-            command=self._select_source_folder
-        ).grid(row=0, column=2, padx=(0, 20))
-
-        # Target folder
-        ttk.Label(self, text="Target Folder:").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
-        self.target_label = ttk.Label(self, text="Not selected", foreground="gray")
-        self.target_label.grid(row=1, column=1, sticky=tk.W, padx=(10, 10), pady=(10, 0))
-        ttk.Button(
-            self,
-            text="Browse...",
-            command=self._select_target_folder
-        ).grid(row=1, column=2, pady=(10, 0))
-
+        ttk.Label(self, text="QUELLE", style='Small.TLabel').grid(row=0, column=0, padx=(0, 12))
+        self.source_label = ttk.Label(self, text=self.last_source or "Nicht ausgewählt", width=28)
+        self.source_label.grid(row=0, column=1, sticky='ew', padx=(0, 12))
+        ttk.Button(self, text="Ändern", command=self._select_source_folder).grid(row=0, column=2)
+        target = self.target_parent
+        ttk.Label(target, text="ZIELORDNER", style='Small.TLabel').grid(row=1, column=0, columnspan=2, sticky='w')
+        self.target_label = ttk.Label(target, text=self.last_target or "Nicht ausgewählt", wraplength=210)
+        self.target_label.grid(row=2, column=0, sticky='w', pady=(8, 0), padx=(0, 8))
+        ttk.Button(target, text="Ändern", command=self._select_target_folder).grid(row=2, column=1, sticky='e', pady=(8, 0))
         self.columnconfigure(1, weight=1)
 
     def _select_source_folder(self) -> None:
         """Handle source folder selection."""
         initial_dir = self.last_source if self.last_source else None
         folder = filedialog.askdirectory(
-            title="Select Source Folder",
+            title="Quellordner auswählen",
             initialdir=initial_dir
         )
         if folder:
@@ -78,7 +69,7 @@ class FolderSelector(ttk.LabelFrame):
         """Handle target folder selection."""
         initial_dir = self.last_target if self.last_target else None
         folder = filedialog.askdirectory(
-            title="Select Target Folder",
+            title="Zielordner auswählen",
             initialdir=initial_dir
         )
         if folder:
@@ -95,7 +86,7 @@ class FolderSelector(ttk.LabelFrame):
             Source folder path or None
         """
         text = self.source_label.cget("text")
-        return Path(text) if text != "Not selected" else None
+        return Path(text) if text != "Nicht ausgewählt" else None
 
     def get_target_folder(self) -> Path | None:
         """Get the selected target folder.
@@ -104,4 +95,4 @@ class FolderSelector(ttk.LabelFrame):
             Target folder path or None
         """
         text = self.target_label.cget("text")
-        return Path(text) if text != "Not selected" else None
+        return Path(text) if text != "Nicht ausgewählt" else None

@@ -31,21 +31,21 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
 
     try:
         app._on_source_selected(source)
-        wait_for(lambda: app.date_list.listbox.size() == 1)
-        wait_for(lambda: 'Update available' in app.layout.dng_version_label.cget('text'))
+        wait_for(lambda: len(app.file_manager.files_by_date) == 1)
+        wait_for(lambda: 'Update verfügbar' in app.layout.dng_version_label.cget('text'))
         assert str(app.layout.dng_download_button.cget('state')) == 'normal'
         opened = []
         monkeypatch.setattr('ui.layout.webbrowser.open', lambda url: opened.append(url))
         app.layout.dng_download_button.invoke()
-        assert opened == ['https://www.adobe.com/go/dng_converter_win/']
-        app.date_list.listbox.selection_set(0)
+        assert opened == ['https://adobe.com/go/dng_converter_win/']
+        app.date_list.set_selected_dates(set(app.file_manager.get_date_groups()))
         app._on_date_selection_changed(app.date_list.get_selected_dates())
         wait_for(lambda: len(app.preview_widget.image_references) == 1)
         app._on_target_selected(target)
         app.custom_name_var.set("album")
         assert str(app.execute_button.cget("state")) == "normal"
         app._execute_copy()
-        wait_for(lambda: not app._pending_groups)
+        wait_for(lambda: (target / "album" / "jpg" / photo.name).exists() and not app._pending_groups)
         assert (target / "album" / "jpg" / photo.name).read_bytes() == photo.read_bytes()
         assert app.date_list.is_empty()
         assert not errors
@@ -73,7 +73,7 @@ def test_copy_then_dng_preserves_successful_copy(
     try:
         app.file_manager.files_by_date = {"2026-10-21": [source]}
         app._populate_date_list()
-        app.date_list.listbox.selection_set(0)
+        app.date_list.set_selected_dates(set(app.file_manager.get_date_groups()))
         app.target_folder = target
         app.custom_name_var.set("album")
         app._execute_copy()
@@ -83,14 +83,14 @@ def test_copy_then_dng_preserves_successful_copy(
         while time.monotonic() < deadline:
             root.update()
             entry = app.progress_manager.progress_bars.get("DNG: album")
-            if entry and str(entry.cancel_button.cget("text")) == "Dismiss":
+            if entry and str(entry.cancel_button.cget("text")) == "Ausblenden":
                 break
             time.sleep(0.005)
         else:
             pytest.fail("Conversion result did not reach the UI")
         assert (target / "album" / "nef" / "photo.NEF").read_text() == mode
         assert (target / "album" / "photo.dng").exists() == (mode == "ok")
-        assert ("completed" if mode == "ok" else "failed") in entry.label.cget("text")
+        assert ("completed" if mode == "ok" else "failed") in entry.message
         assert not app._pending_groups
         assert app.date_list.is_empty()
         assert not errors

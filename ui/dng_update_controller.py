@@ -20,10 +20,12 @@ class DngUpdateController:
         self._dispatcher = UiDispatcher(root)
         self._settings = settings
         self._on_result = on_result
+        self._request_id = 0
 
     def start(self, converter: Path) -> None:
         """Reserve today's attempt before doing background I/O."""
         today = date.today().isoformat()
+        self._request_id += 1
         cached = self._settings.get('dng_update_check', {})
         if not isinstance(cached, dict):
             cached = {}
@@ -32,11 +34,11 @@ class DngUpdateController:
             cached = {'date': today, 'latest': None}
             self._settings.set('dng_update_check', cached)
         threading.Thread(
-            target=self._check, args=(converter, cached.copy(), check_online),
+            target=self._check, args=(converter, cached.copy(), check_online, self._request_id),
             daemon=True, name='DngUpdateCheck',
         ).start()
 
-    def _check(self, converter: Path, cached: dict, check_online: bool) -> None:
+    def _check(self, converter: Path, cached: dict, check_online: bool, request_id: int) -> None:
         try:
             installed = installed_version(converter)
         except (OSError, ValueError):
@@ -46,11 +48,15 @@ class DngUpdateController:
                 cached['latest'] = latest_version()
             except (OSError, ValueError):
                 cached['latest'] = None
-        self._dispatcher.post(self._finished, installed, cached, check_online)
+        self._dispatcher.post(self._finished, installed, cached, check_online, request_id)
 
-    def _finished(self, installed: str | None, cached: dict, save: bool) -> None:
+    def _finished(self, installed: str | None, cached: dict, save: bool, request_id: int) -> None:
         if save:
             self._settings.set('dng_update_check', cached)
+        if request_id != self._request_id:
+            return
+        if not save:
+            cached = self._settings.get('dng_update_check', cached)
         latest = cached.get('latest')
         try:
             newer = bool(installed and latest and

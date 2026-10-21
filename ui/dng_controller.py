@@ -44,7 +44,7 @@ class DngController:
             ),
         )
         self._jobs[name] = job
-        on_status(f"Converting NEF to DNG: {name}")
+        on_status(f"NEF werden in DNG konvertiert: {name}")
         job.start()
 
     def _finished(

@@ -92,6 +92,9 @@ def test_copy_callbacks_run_on_ui_thread(tmp_path):
         def remove_progress_bar(self, *args):
             pass
 
+        def finish_progress(self, *args):
+            assert get_ident() == root.owner
+
     source = tmp_path / "photo.jpg"
     source.write_bytes(b"data")
     root, worker, progress = FakeRoot(), CopyWorker(), Progress()

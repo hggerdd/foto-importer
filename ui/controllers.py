@@ -201,7 +201,7 @@ class CopyJobController:
             total_files,
             on_cancel=lambda: self.cancel_job(job_name, on_status),
         )
-        on_status(f"Copying {total_files} files...")
+        on_status(f"{total_files} Dateien werden kopiert …")
 
         self._copy_worker.copy_files(
             files=files,
@@ -234,9 +234,9 @@ class CopyJobController:
         """Request cancellation of a running job."""
         success = self._copy_worker.cancel_job(job_name)
         if success:
-            on_status(f"Cancelling job: {job_name}")
+            on_status(f"Auftrag wird abgebrochen: {job_name}")
         else:
-            on_status(f"Unable to cancel job: {job_name}")
+            on_status(f"Auftrag konnte nicht abgebrochen werden: {job_name}")
         return success
 
     def _handle_progress(self, job_name: str, current: int, total: int) -> None:
@@ -248,9 +248,9 @@ class CopyJobController:
         on_status: Callable[[str], None],
         on_completed: Callable[[str], None],
     ) -> None:
-        self._progress_manager.remove_progress_bar(job_name)
+        self._progress_manager.finish_progress(job_name, "completed: Import abgeschlossen")
         self._active_jobs.discard(job_name)
-        on_status(f"Copy completed: {job_name}")
+        on_status(f"Import abgeschlossen: {job_name}")
         on_completed(job_name)
 
     def _handle_error(
@@ -260,9 +260,9 @@ class CopyJobController:
         on_status: Callable[[str], None],
         on_failed: Callable[[str, str], None],
     ) -> None:
-        self._progress_manager.remove_progress_bar(job_name)
+        self._progress_manager.finish_progress(job_name, f"failed: {error_msg}")
         self._active_jobs.discard(job_name)
-        on_status(f"Copy failed: {error_msg}")
+        on_status(f"Kopieren fehlgeschlagen: {error_msg}")
         on_failed(job_name, error_msg)
 
     def _handle_status_change(
@@ -273,13 +273,13 @@ class CopyJobController:
         on_cancelled: Callable[[str], None],
     ) -> None:
         if state is JobState.RUNNING:
-            on_status(f"Copy in progress: {job_name}")
+            on_status(f"Kopieren läuft: {job_name}")
             return
 
         if state is JobState.CANCELLED:
-            self._progress_manager.remove_progress_bar(job_name)
+            self._progress_manager.finish_progress(job_name, "cancelled: Import abgebrochen")
             self._active_jobs.discard(job_name)
-            on_status(f"Copy cancelled: {job_name}")
+            on_status(f"Kopieren abgebrochen: {job_name}")
             on_cancelled(job_name)
 
     def close(self) -> None:

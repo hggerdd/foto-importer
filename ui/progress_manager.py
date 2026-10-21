@@ -1,141 +1,173 @@
-"""Progress bar manager for copy operations."""
+"""Compact, scrollable background jobs with a bounded session history."""
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
 from tkinter import ttk
-from typing import Callable
+from collections.abc import Callable
 
 
 @dataclass
 class ProgressEntry:
-    """Holds widgets associated with a progress bar row."""
-
     frame: ttk.Frame
     label: ttk.Label
     progress_bar: ttk.Progressbar
     total: int
     cancel_button: ttk.Button | None = None
+    terminal: bool = False
+    folder: Path | None = None
+    message: str = ''
 
 
 class ProgressManager:
-    """Manages progress bars for background copy operations."""
+    """Bound the panel height regardless of the number of imports."""
 
-    def __init__(self, parent: ttk.LabelFrame) -> None:
-        """Initialize progress manager.
-
-        Args:
-            parent: Parent frame to contain progress bars
-        """
-        self.parent: ttk.LabelFrame = parent
+    def __init__(self, parent: ttk.Frame) -> None:
+        self.parent = parent
         self.progress_bars: dict[str, ProgressEntry] = {}
         self._cancel_callbacks: dict[str, Callable[[], bool]] = {}
+        self._history: list[tuple[str, str, Path | None]] = []
+        self._history_window = None
+        header = ttk.Frame(parent)
+        header.pack(fill='x', pady=(0, 6))
+        ttk.Label(header, text='Aufträge', style='Heading.TLabel').pack(side='left')
+        self.summary_label = ttk.Label(header, text='Keine aktiven Aufträge', style='Small.TLabel')
+        self.summary_label.pack(side='left', padx=18)
+        ttk.Button(header, text='Verlauf', style='Link.TButton', command=self.show_history).pack(side='right')
+        self.canvas = tk.Canvas(parent, height=76, bg='white', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        self.canvas.pack(fill='x', expand=True)
+        self.rows = ttk.Frame(self.canvas)
+        self._window = self.canvas.create_window((0, 0), window=self.rows, anchor='nw')
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfigure(self._window, width=e.width))
+        self.rows.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<MouseWheel>', self._wheel)
 
-    def add_progress_bar(
-        self,
-        job_name: str,
-        total_files: int,
-        on_cancel: Callable[[], bool] | None = None
-    ) -> None:
-        """Add a progress bar for a copy job.
+    def _wheel(self, event):
+        self.canvas.yview_scroll(-int(event.delta / 120), 'units')
+        return 'break'
 
-        Args:
-            job_name: Name of the copy job
-            total_files: Total number of files to copy
-            on_cancel: Optional callback invoked when the cancel button is pressed.
-        """
-        job_frame = ttk.Frame(self.parent)
-        job_frame.pack(fill=tk.X, pady=(0, 5))
-
-        label = ttk.Label(job_frame, text=f"{job_name}: 0 / {total_files} files")
-        label.pack(side=tk.LEFT, padx=(0, 10))
-
-        progress_bar = ttk.Progressbar(job_frame, mode='determinate', maximum=total_files)
-        progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        cancel_button: ttk.Button | None = None
+    def add_progress_bar(self, job_name: str, total_files: int,
+                         on_cancel: Callable[[], bool] | None = None) -> None:
+        self.remove_progress_bar(job_name)
+        frame = ttk.Frame(self.rows, padding=(0, 3))
+        frame.columnconfigure(1, weight=1)
+        label = ttk.Label(frame, text=f'{job_name}: 0 / {total_files}', width=46,
+                          style='Small.TLabel', anchor='w')
+        label.grid(row=0, column=0, padx=(0, 16), sticky='w')
+        bar = ttk.Progressbar(frame, mode='determinate', maximum=max(1, total_files))
+        bar.grid(row=0, column=1, sticky='ew', padx=(0, 16))
+        button = ttk.Button(frame, text='Abbrechen', command=lambda: self._handle_cancel(job_name))
+        button.grid(row=0, column=2, sticky='e')
+        self.progress_bars[job_name] = ProgressEntry(frame, label, bar, total_files, button)
         if on_cancel:
-            cancel_button = ttk.Button(job_frame, text="Cancel")
-            cancel_button.pack(side=tk.RIGHT, padx=(10, 0))
             self._cancel_callbacks[job_name] = on_cancel
-            cancel_button.config(command=lambda j=job_name: self._handle_cancel(j))
+        else:
+            button.config(state='disabled')
+        for widget in (frame, label, bar, button):
+            widget.bind('<MouseWheel>', self._wheel)
+        self._refresh()
 
-        self.progress_bars[job_name] = ProgressEntry(
-            frame=job_frame,
-            label=label,
-            progress_bar=progress_bar,
-            total=total_files,
-            cancel_button=cancel_button
-        )
+    def set_target(self, job_name: str, folder: Path) -> None:
+        if job_name in self.progress_bars:
+            self.progress_bars[job_name].folder = folder
 
     def update_progress(self, job_name: str, current: int, total: int) -> None:
-        """Update progress for a copy job."""
         entry = self.progress_bars.get(job_name)
-        if not entry:
-            return
-
-        entry.total = total
-        entry.progress_bar['maximum'] = max(total, 1)
-        entry.label.config(text=f"{job_name}: {current} / {entry.total} files")
-        entry.progress_bar['value'] = current
+        if entry and not entry.terminal:
+            entry.total = total
+            entry.progress_bar.config(maximum=max(total, 1), value=current)
+            phase = 'konvertiert' if job_name.startswith('DNG: ') else 'kopiert'
+            entry.label.config(text=f'{job_name} · {current} / {total} {phase}')
 
     def finish_progress(self, job_name: str, message: str) -> None:
-        """Keep a terminal result visible until the user dismisses it."""
         entry = self.progress_bars.get(job_name)
         if not entry:
             return
-        entry.label.config(text=f"{job_name}: {message}", wraplength=650, justify=tk.LEFT)
+        entry.terminal = True
+        entry.message = message
+        translated = message.replace('completed', 'Abgeschlossen').replace('failed', 'Fehlgeschlagen').replace('cancelled', 'Abgebrochen')
+        entry.label.config(text=f'{job_name} · {translated}')
+        entry.progress_bar.grid_remove()
         self._cancel_callbacks.pop(job_name, None)
-        if entry.cancel_button:
-            entry.cancel_button.config(
-                text="Dismiss", state="normal",
-                command=lambda: self.remove_progress_bar(job_name),
-            )
+        entry.cancel_button.config(text='Ausblenden', state='normal',
+                                   command=lambda: self.remove_progress_bar(job_name))
+        if entry.folder:
+            ttk.Button(entry.frame, text='Ordner öffnen', style='Link.TButton',
+                       command=lambda: os.startfile(entry.folder)).grid(row=0, column=1, sticky='e', padx=12)
+        self._history.append((job_name, message, entry.folder))
+        self._history = self._history[-100:]
+        # Keep just two terminal widget rows; full results remain in history.
+        terminal = [name for name, row in self.progress_bars.items() if row.terminal]
+        for name in terminal[:-2]:
+            self.remove_progress_bar(name)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        for entry in self.progress_bars.values():
+            entry.frame.pack_forget()
+        for terminal in (False, True):
+            for entry in self.progress_bars.values():
+                if entry.terminal == terminal:
+                    entry.frame.pack(fill='x')
+        active = sum(not row.terminal for row in self.progress_bars.values())
+        self.summary_label.config(text=f'{len(self._history)} abgeschlossen · {active} aktiv')
 
     def mark_cancelling(self, job_name: str) -> None:
-        """Mark a job as pending cancellation (disables the cancel button)."""
         entry = self.progress_bars.get(job_name)
-        if not entry or not entry.cancel_button:
-            return
-        entry.cancel_button.config(state='disabled', text='Cancelling...')
+        if entry and entry.cancel_button:
+            entry.cancel_button.config(state='disabled', text='Wird abgebrochen …')
 
     def mark_cancel_failed(self, job_name: str) -> None:
-        """Re-enable cancel controls if cancellation was rejected."""
         entry = self.progress_bars.get(job_name)
-        if not entry or not entry.cancel_button:
-            return
-        entry.cancel_button.config(state='normal', text='Cancel')
+        if entry and entry.cancel_button:
+            entry.cancel_button.config(state='normal', text='Abbrechen')
 
     def remove_progress_bar(self, job_name: str) -> None:
-        """Remove progress bar after job completion."""
         entry = self.progress_bars.pop(job_name, None)
-        if not entry:
-            return
-
-        entry.frame.destroy()
+        if entry:
+            entry.frame.destroy()
         self._cancel_callbacks.pop(job_name, None)
+        self._refresh()
 
     def has_progress_bar(self, job_name: str) -> bool:
-        """Check if progress bar exists for a job."""
         return job_name in self.progress_bars
 
     def clear_all(self) -> None:
-        """Clear all progress bars."""
-        for job_name in list(self.progress_bars.keys()):
-            self.remove_progress_bar(job_name)
+        for name in list(self.progress_bars):
+            self.remove_progress_bar(name)
 
     def _handle_cancel(self, job_name: str) -> None:
-        """Invoke a cancellation callback and update the UI."""
         callback = self._cancel_callbacks.get(job_name)
         if not callback:
             return
-
         self.mark_cancelling(job_name)
-
         try:
             success = callback()
         except Exception:
             success = False
-
         if not success:
             self.mark_cancel_failed(job_name)
+
+    def show_history(self) -> None:
+        """Show the latest 100 session results without blocking the main window."""
+        if self._history_window and self._history_window.winfo_exists():
+            self._history_window.destroy()
+        window = self._history_window = tk.Toplevel(self.parent)
+        window.title('Auftragsverlauf · Foto-Importer')
+        window.geometry('850x400')
+        tree = ttk.Treeview(window, columns=('result',), show='tree headings')
+        tree.heading('#0', text='Ordner')
+        tree.heading('result', text='Ergebnis')
+        tree.column('#0', width=280)
+        tree.column('result', width=520)
+        tree.pack(side='left', fill='both', expand=True)
+        scroll = ttk.Scrollbar(window, command=tree.yview)
+        scroll.pack(side='right', fill='y')
+        tree.config(yscrollcommand=scroll.set)
+        for name, message, folder in reversed(self._history):
+            tree.insert('', 'end', text=name, values=(message,))
