@@ -1,6 +1,4 @@
 """Version comparisons and Adobe's download redirect contract."""
-from pathlib import Path
-
 import pytest
 
 from core.dng_updates import (

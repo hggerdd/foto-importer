@@ -58,7 +58,6 @@ def installed_version(converter: Path) -> str | None:
 def latest_version() -> str:
     """Follow Adobe's HEAD redirect without downloading the installer."""
     request = Request(DNG_DOWNLOAD_URL, method='HEAD', headers={
-        'User-Agent': 'CameraOrganizer/0.1 (DNG update check)',
         'Cache-Control': 'no-cache',
     })
     with urlopen(request, timeout=DNG_UPDATE_TIMEOUT_SECONDS) as response:
