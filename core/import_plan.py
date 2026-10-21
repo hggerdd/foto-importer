@@ -10,7 +10,7 @@ PREVIEW_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif"}
 
 @dataclass
 class SelectionSummary:
-    """Counts for checked days and sample images for the focused day."""
+    """Counts for checked days and all previewable images for the focused day."""
 
     counts: dict[str, int]
     focused_counts: dict[str, int]
@@ -22,7 +22,6 @@ def summarize_selection(
     groups: dict[str, list[Path]],
     selected: set[str],
     focused: str | None,
-    limit: int,
     cancel: Event,
 ) -> SelectionSummary | None:
     """Count extensions on a worker; stop promptly for superseded selections."""
@@ -40,8 +39,7 @@ def summarize_selection(
                 focused_counts[extension] += 1
                 if path.suffix.lower() in PREVIEW_EXTENSIONS:
                     preview_total += 1
-                    if len(previews) < limit:
-                        previews.append(path)
+                    previews.append(path)
     return SelectionSummary(dict(counts), dict(focused_counts), previews, preview_total)
 
 

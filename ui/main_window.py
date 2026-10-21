@@ -66,7 +66,6 @@ class MainWindow:
             settings=self.settings,
             on_source_selected=self._on_source_selected,
             on_target_selected=self._on_target_selected,
-            on_preview_count_changed=self._on_preview_count_changed,
             on_date_source_changed=self._on_date_source_changed,
             on_date_selection_changed=self._on_date_selection_changed,
             on_custom_name_changed=self._update_execute_button_state,
@@ -77,7 +76,6 @@ class MainWindow:
         self.folder_selector = self.layout.folder_selector
         self.date_list = self.layout.date_list
         self.preview_widget = self.layout.preview_widget
-        self.preview_count_var = self.layout.preview_count_var
         self.date_source_var = self.layout.date_source_var
         self.custom_name_var = self.layout.custom_name_var
         self.custom_name_entry = self.layout.custom_name_entry
@@ -158,16 +156,6 @@ class MainWindow:
         self.target_folder = folder_path
         self.settings.last_target_folder = str(folder_path)
         self._update_execute_button_state()
-
-    def _on_preview_count_changed(self) -> None:
-        """Handle preview count change."""
-        try:
-            count = max(1, min(50, self.preview_count_var.get()))
-        except tk.TclError:
-            count = self.settings.preview_count
-        self.preview_count_var.set(count)
-        self.settings.preview_count = count
-        self._on_date_selection_changed(self.date_list.get_selected_dates())
 
     def _on_date_source_changed(self) -> None:
         """Handle preferred date source changes."""
@@ -288,7 +276,6 @@ class MainWindow:
             self.file_manager.files_by_date,
             selected_dates,
             focused,
-            self.preview_count_var.get(),
             lambda result: self._selection_ready(focused, result),
         )
 
@@ -300,7 +287,7 @@ class MainWindow:
         )
         self.layout.preview_details.config(text=details or "Keine Dateien ausgewählt")
         self.layout.preview_caption.config(
-            text=f"Bildvorschau · {len(result.previews)} von {result.preview_total} Bildern"
+            text=f"Bildvorschau · {result.preview_total} Bilder"
         )
         self.preview_widget.load_previews(
             result.previews,

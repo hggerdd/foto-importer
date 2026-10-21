@@ -29,7 +29,6 @@ class MainLayout(ttk.Frame):
         *,
         on_source_selected: Callable[[Path], None],
         on_target_selected: Callable[[Path], None],
-        on_preview_count_changed: Callable[[], None],
         on_date_source_changed: Callable[[], None],
         on_date_selection_changed: Callable[[set[str]], None],
         on_custom_name_changed: Callable[[], None],
@@ -45,7 +44,6 @@ class MainLayout(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
         self.settings = settings
-        self.preview_count_var = tk.IntVar(value=settings.preview_count)
         self.date_source_var = tk.StringVar(value=settings.date_source)
         self.custom_name_var = tk.StringVar()
         self.convert_to_dng_var = tk.BooleanVar(
@@ -264,20 +262,12 @@ class MainLayout(ttk.Frame):
         ttk.Label(options, text="Einstellungen", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 10)
         )
-        ttk.Label(options, text="Anzahl Vorschaubilder").grid(
-            row=1, column=0, sticky="w"
-        )
-        self.preview_spinbox = ttk.Spinbox(
+        ttk.Label(
             options,
-            from_=1,
-            to=50,
-            width=6,
-            textvariable=self.preview_count_var,
-            command=on_preview_count_changed,
-        )
-        self.preview_spinbox.grid(row=1, column=1, sticky="w", padx=12)
-        self.preview_spinbox.bind("<Return>", lambda e: on_preview_count_changed())
-        self.preview_spinbox.bind("<FocusOut>", lambda e: on_preview_count_changed())
+            text="Alle Bilder sind in der Galerie verfügbar.\n"
+            "Vorschauen werden beim Scrollen nachgeladen.",
+            style="Muted.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w")
         ttk.Label(options, text="Adobe DNG Converter").grid(
             row=2, column=0, sticky="w", pady=(24, 8)
         )

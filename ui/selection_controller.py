@@ -35,7 +35,6 @@ class SelectionController:
         groups: dict[str, list[Path]],
         selected: set[str],
         focused: str | None,
-        limit: int,
         callback: Callable[[SelectionSummary], None],
     ) -> None:
         """Capture list references; the importer never mutates their contents."""
@@ -49,7 +48,7 @@ class SelectionController:
         }
 
         def work():
-            result = summarize_selection(snapshot, selected, focused, limit, cancel)
+            result = summarize_selection(snapshot, selected, focused, cancel)
             if result is not None:
                 self._dispatcher.post(deliver, result, key="summary")
 

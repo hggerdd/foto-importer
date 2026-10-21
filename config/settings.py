@@ -12,6 +12,7 @@ BACKGROUND_DNG_JOBS = 1
 BACKGROUND_COPY_CHUNK_BYTES = 1024 * 1024
 FOREGROUND_SETTLE_SECONDS = 0.15
 THUMBNAIL_CACHE_SIZE = 128
+PREVIEW_PREFETCH_ROWS = 2
 DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
 DNG_DOWNLOAD_URL = "https://adobe.com/go/dng_converter_win/"
 DNG_UPDATE_TIMEOUT_SECONDS = 5
@@ -44,7 +45,6 @@ class Settings:
         return {
             'last_source_folder': '',
             'last_target_folder': '',
-            'preview_count': 12,
             'window_geometry': '1500x980',
             'date_source': 'filesystem',
             'convert_to_dng': False,
@@ -100,16 +100,6 @@ class Settings:
     def last_target_folder(self, value: str) -> None:
         """Set last used target folder."""
         self.set('last_target_folder', value)
-
-    @property
-    def preview_count(self) -> int:
-        """Get preview count."""
-        return self.get('preview_count', 10)
-
-    @preview_count.setter
-    def preview_count(self, value: int) -> None:
-        """Set preview count."""
-        self.set('preview_count', value)
 
     @property
     def window_geometry(self) -> str:

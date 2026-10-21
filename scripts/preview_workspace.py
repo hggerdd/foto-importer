@@ -38,7 +38,6 @@ def main() -> None:
         settings = Settings(str(Path(directory) / "settings.json"))
         settings.settings.update(
             window_geometry=args.geometry,
-            preview_count=12,
             date_source="filesystem" if args.filesystem_dates else "metadata",
             convert_to_dng=True,
         )
@@ -82,8 +81,7 @@ def main() -> None:
                 root.after(1500, capture)
 
         def capture():
-            expected = len(app.preview_widget._paths)
-            if not app._selection_counts or len(app.preview_widget._tiles) < expected:
+            if not app._selection_counts or not app.preview_widget.viewport_ready:
                 if monotonic() >= capture_deadline:
                     app._on_closing()
                     raise RuntimeError(

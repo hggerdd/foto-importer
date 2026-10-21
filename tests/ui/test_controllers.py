@@ -99,7 +99,7 @@ def test_cancelled_queued_summaries_do_not_leak_foreground_priority(monkeypatch)
     try:
         for index in range(10):
             controller.request(
-                {"day": [Path("photo.jpg")]}, {"day"}, "day", 12, lambda _: None
+                {"day": [Path("photo.jpg")]}, {"day"}, "day", lambda _: None
             )
             if index == 0:
                 assert started.wait(1)

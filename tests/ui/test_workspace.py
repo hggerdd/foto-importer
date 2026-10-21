@@ -103,8 +103,10 @@ def test_summary_keeps_ui_responsive_and_discards_old_selection(workspace, monke
         pump(app.root, lambda: app._selection_counts == {"nef": 1, "mov": 1})
         assert "19. Oktober" in app.layout.preview_title.cget("text")
         assert not app.preview_widget.image_references
-        labels = app.preview_widget.scrollable_frame.winfo_children()
-        assert "RAW-Dateien und Videos" in labels[0].cget("text")
+        label = app.preview_widget.canvas.find_withtag("empty")[0]
+        assert "RAW-Dateien und Videos" in app.preview_widget.canvas.itemcget(
+            label, "text"
+        )
     finally:
         release.set()
 
@@ -297,8 +299,21 @@ def test_preview_has_priority_while_user_creates_more_imports(workspace, monkeyp
         assert heartbeat
 
         release.set()
+
         pump(app.root, lambda: not app._pending_groups)
         assert (app.target_folder / "first" / "jpg" / "photo.jpg").is_file()
         assert (app.target_folder / "second" / "nef" / "sample.nef").is_file()
     finally:
         release.set()
+
+
+def test_legacy_preview_limit_does_not_restrict_the_gallery(workspace):
+    app = workspace
+    app.settings.set("preview_count", 1)
+    photo = app.file_manager.get_files_for_date("2026-10-20")[0]
+    app.file_manager.files_by_date["2026-10-20"] = [photo] * 250
+    app._populate_date_list()
+    app.date_list.set_selected_dates({"2026-10-20"})
+    pump(app.root, lambda: len(app.preview_widget._paths) == 250)
+    assert "250 Bilder" in app.layout.preview_caption.cget("text")
+    assert not hasattr(app.layout, "preview_spinbox")

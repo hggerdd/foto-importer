@@ -13,20 +13,18 @@ def test_checked_days_and_focused_preview_are_independent():
         "2026-10-20": [Path("a.JPG"), Path("b.nef"), Path("c.MOV")],
         "2026-10-19": [Path("d.jpg"), Path("e.JPG"), Path("f.nef")],
     }
-    result = summarize_selection(groups, {"2026-10-20"}, "2026-10-19", 1, Event())
+    result = summarize_selection(groups, {"2026-10-20"}, "2026-10-19", Event())
     assert result.counts == {"jpg": 1, "nef": 1, "mov": 1}
     assert result.focused_counts == {"jpg": 2, "nef": 1}
-    assert result.previews == [Path("d.jpg")]
+    assert result.previews == [Path("d.jpg"), Path("e.JPG")]
     assert result.preview_total == 2
 
 
 def test_summary_cancellation_and_empty_selection():
     cancel = Event()
     cancel.set()
-    assert (
-        summarize_selection({"day": [Path("a.jpg")]}, {"day"}, None, 12, cancel) is None
-    )
-    result = summarize_selection({}, set(), None, 12, Event())
+    assert summarize_selection({"day": [Path("a.jpg")]}, {"day"}, None, cancel) is None
+    result = summarize_selection({}, set(), None, Event())
     assert result.counts == result.focused_counts == {}
     assert result.previews == []
 
