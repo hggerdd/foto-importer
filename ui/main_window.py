@@ -315,4 +315,6 @@ class MainWindow:
         """Handle window closing event."""
         # Save window geometry
         self.settings.window_geometry = self.root.geometry()
+        self.scan_controller.close()
+        self.job_controller.close()
         self.root.destroy()

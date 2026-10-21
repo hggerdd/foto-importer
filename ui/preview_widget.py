@@ -5,6 +5,11 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, Future
+from threading import Event
+
+from core.thumbnails import ThumbnailLoader
+from ui.dispatcher import UiDispatcher
 
 
 class PreviewWidget(ttk.Frame):
@@ -14,6 +19,12 @@ class PreviewWidget(ttk.Frame):
         super().__init__(parent)
         self.thumbnail_size: tuple[int, int] = thumbnail_size
         self.image_references: list[ImageTk.PhotoImage] = []  # Keep references to prevent garbage collection
+        self._loader = ThumbnailLoader()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Preview")
+        self._dispatcher = UiDispatcher(self)
+        self._generation = 0
+        self._cancel_event = Event()
+        self._future: Future | None = None
 
         self._setup_ui()
 
@@ -45,6 +56,10 @@ class PreviewWidget(ttk.Frame):
 
     def clear_previews(self) -> None:
         """Clear all preview images."""
+        self._generation += 1
+        self._cancel_event.set()
+        if self._future:
+            self._future.cancel()
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.image_references.clear()
@@ -68,57 +83,52 @@ class PreviewWidget(ttk.Frame):
             label.grid(row=0, column=0, padx=20, pady=20)
             return
 
-        # Display images in grid
-        for idx, img_path in enumerate(image_paths):
-            row = idx // columns
-            col = idx % columns
+        generation = self._generation
+        self._cancel_event = Event()
+        cancel_event = self._cancel_event
+        size = self.thumbnail_size
 
-            try:
-                # Create thumbnail frame
-                frame = ttk.Frame(self.scrollable_frame, relief='solid', borderwidth=1)
-                frame.grid(row=row, column=col, padx=5, pady=5)
-
-                # Load and resize image using context manager to release file handles
-                with Image.open(img_path) as img:
-                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
-                    tk_ready_image = img.copy()
-
-                # Convert to PhotoImage
-                photo = ImageTk.PhotoImage(tk_ready_image)
-                self.image_references.append(photo)  # Keep reference
-
-                # Create label with image
-                img_label = ttk.Label(frame, image=photo)
-                img_label.pack(padx=2, pady=2)
-
-                # Add filename below image
-                name_label = ttk.Label(
-                    frame,
-                    text=img_path.name,
-                    font=('Arial', 8),
-                    wraplength=self.thumbnail_size[0]
+        def load() -> None:
+            for idx, path in enumerate(image_paths):
+                if cancel_event.is_set():
+                    return
+                try:
+                    thumbnail = self._loader.load(path, size)
+                except Exception:  # A corrupt image must not stop other previews.
+                    thumbnail = None
+                if cancel_event.is_set():
+                    return
+                self._dispatcher.post(
+                    self._display_thumbnail, generation, idx, path, thumbnail,
+                    max(1, columns), key=("preview", idx),
                 )
-                name_label.pack()
 
-            except Exception as e:  # noqa: BLE001 - display error to user
-                # If image can't be loaded, show error
-                error_frame = ttk.Frame(self.scrollable_frame, relief='solid', borderwidth=1)
-                error_frame.grid(row=row, column=col, padx=5, pady=5)
+        self._future = self._executor.submit(load)
 
-                error_label = ttk.Label(
-                    error_frame,
-                    text=f"Error loading\n{img_path.name}",
-                    font=('Arial', 8),
-                    foreground='red',
-                    wraplength=self.thumbnail_size[0]
-                )
-                error_label.pack(padx=10, pady=10)
-
-        # Update scroll region
-        self.scrollable_frame.update_idletasks()
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+    def _display_thumbnail(
+        self, generation: int, index: int, path: Path,
+        thumbnail: Image.Image | None, columns: int,
+    ) -> None:
+        """Create Tk images exclusively on the UI thread."""
+        if generation != self._generation:
+            return
+        frame = ttk.Frame(self.scrollable_frame, relief='solid', borderwidth=1)
+        frame.grid(row=index // columns, column=index % columns, padx=5, pady=5)
+        if thumbnail is not None:
+            photo = ImageTk.PhotoImage(thumbnail, master=self)
+            self.image_references.append(photo)
+            ttk.Label(frame, image=photo).pack(padx=2, pady=2)
+        ttk.Label(
+            frame,
+            text=path.name if thumbnail is not None else f"Error loading\n{path.name}",
+            foreground='' if thumbnail is not None else 'red',
+            font=('Arial', 8), wraplength=self.thumbnail_size[0],
+        ).pack(padx=2, pady=2)
 
     def destroy(self) -> None:
         """Clean up resources."""
+        self._cancel_event.set()
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._dispatcher.close()
         self.canvas.unbind_all("<MouseWheel>")
         super().destroy()

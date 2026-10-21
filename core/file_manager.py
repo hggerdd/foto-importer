@@ -7,6 +7,7 @@ from datetime import datetime
 from collections import defaultdict
 import os
 from collections.abc import Callable
+from itertools import islice
 from threading import Event
 
 from PIL import Image, ExifTags
@@ -109,17 +110,32 @@ class FileManager:
         if cancel_event and cancel_event.is_set():
             raise ScanCancelledError()
 
-        # Recursively find all supported files
-        candidates: list[Path] = []
-        for file_path in source_folder.rglob('*'):
-            if not file_path.is_file():
-                continue
-
-            # Check if file extension is supported
-            if file_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
-                continue
-
-            candidates.append(file_path)
+        # DirEntry reuses timestamps returned by directory enumeration on Windows.
+        # Check cancellation during discovery, including unsupported files.
+        date_source = self.date_source
+        candidates: list[tuple[Path, os.stat_result]] = []
+        directories = [source_folder]
+        while directories:
+            directory = directories.pop()
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if cancel_event and cancel_event.is_set():
+                            raise ScanCancelledError()
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                directories.append(Path(entry.path))
+                            elif (
+                                os.path.splitext(entry.name)[1].lower()
+                                in self.SUPPORTED_EXTENSIONS and entry.is_file()
+                            ):
+                                candidates.append((Path(entry.path), entry.stat()))
+                        except OSError as exc:
+                            print(f"Failed to inspect {entry.path}: {exc}")
+            except OSError as exc:
+                if directory == source_folder:
+                    raise
+                print(f"Failed to scan {directory}: {exc}")
 
         total_files = len(candidates)
         if on_progress:
@@ -128,15 +144,15 @@ class FileManager:
         processed = 0
 
         # Process collected files while checking for cancellation
-        for file_path in candidates:
+        for file_path, stat_result in candidates:
             if cancel_event and cancel_event.is_set():
                 raise ScanCancelledError()
 
-            date_str = self._resolve_date_for_file(file_path)
-            if not date_str:
-                continue
-
-            files_by_date[date_str].append(file_path)
+            date_str = self._resolve_date_for_file(
+                file_path, stat_result, date_source=date_source
+            )
+            if date_str:
+                files_by_date[date_str].append(file_path)
 
             processed += 1
             if on_progress:
@@ -162,9 +178,8 @@ class FileManager:
 
         # Filter to only image extensions (not videos)
         image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif'}
-        image_files = [f for f in files if f.suffix.lower() in image_extensions]
-
-        return image_files[:limit]
+        image_files = (f for f in files if f.suffix.lower() in image_extensions)
+        return list(islice(image_files, max(0, limit)))
 
     def get_file_count(self, date_str: str) -> int:
         """Get total file count for a date."""
@@ -175,23 +190,29 @@ class FileManager:
         if date_str in self.files_by_date:
             del self.files_by_date[date_str]
 
-    def _resolve_date_for_file(self, file_path: Path) -> str | None:
+    def _resolve_date_for_file(
+        self, file_path: Path, stat_result: os.stat_result | None = None,
+        *, date_source: DateSource | None = None,
+    ) -> str | None:
         """Determine the grouping date for a file."""
-        if self.date_source is DateSource.METADATA:
+        if (date_source or self.date_source) is DateSource.METADATA:
             metadata_date = self._get_metadata_date(file_path)
             if metadata_date:
                 return metadata_date
 
-        return self._get_filesystem_date(file_path)
+        return self._get_filesystem_date(file_path, stat_result)
 
-    def _get_filesystem_date(self, file_path: Path) -> str | None:
+    def _get_filesystem_date(
+        self, file_path: Path, stat_result: os.stat_result | None = None,
+    ) -> str | None:
         """Fetch date based on filesystem timestamps."""
         try:
+            stat_result = stat_result or file_path.stat()
             if os.name == 'nt':  # Windows
-                timestamp = file_path.stat().st_ctime
+                timestamp = stat_result.st_ctime
             else:
                 # On Unix, st_ctime is metadata change time, use st_mtime
-                timestamp = file_path.stat().st_mtime
+                timestamp = stat_result.st_mtime
             return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
         except OSError as exc:
             print(f"Failed to read filesystem timestamp for {file_path}: {exc}")

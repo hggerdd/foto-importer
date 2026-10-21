@@ -1,6 +1,7 @@
 """Background copy worker for file operations."""
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 from enum import Enum
@@ -189,24 +190,29 @@ class CopyJob(threading.Thread):
 
                 ext_folder = main_folder / ext
                 ext_folder.mkdir(exist_ok=True)
+                next_suffix: dict[str, int] = {}
 
                 for file_path in ext_files:
                     if self._cancel_event.is_set():
                         self._set_state(JobState.CANCELLED)
                         return
 
+                    original_dest = ext_folder / file_path.name
+                    name_key = os.path.normcase(file_path.name)
+                    counter = next_suffix.get(name_key, 0)
+                    dest_path = (
+                        original_dest.with_stem(f"{original_dest.stem}_{counter}")
+                        if counter else original_dest
+                    )
+                    while dest_path.exists():
+                        counter += 1
+                        dest_path = original_dest.with_stem(f"{original_dest.stem}_{counter}")
+
+                    shutil.copy2(file_path, dest_path)
+                    next_suffix[name_key] = counter + 1
                     current_file += 1
                     if self.on_progress:
                         self.on_progress(current_file, total_files)
-
-                    dest_path = ext_folder / file_path.name
-                    counter = 1
-                    original_dest = dest_path
-                    while dest_path.exists():
-                        dest_path = original_dest.with_stem(f"{original_dest.stem}_{counter}")
-                        counter += 1
-
-                    shutil.copy2(file_path, dest_path)
 
             self._set_state(JobState.COMPLETED)
 

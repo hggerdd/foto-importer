@@ -9,6 +9,7 @@ from typing import Callable
 from core.copy_worker import CopyWorker, JobState
 from core.file_manager import FileManager, ScanCancelledError
 from ui.progress_manager import ProgressManager
+from ui.dispatcher import UiDispatcher
 
 
 class SourceScanController:
@@ -16,6 +17,7 @@ class SourceScanController:
 
     def __init__(self, root: tk.Misc, file_manager: FileManager) -> None:
         self._root = root
+        self._dispatcher = UiDispatcher(root)
         self._file_manager = file_manager
         self._request_lock = threading.Lock()
         self._request_id = 0
@@ -48,32 +50,30 @@ class SourceScanController:
             try:
                 files_by_date = self._file_manager.gather_files_by_date(
                     folder_path,
-                    on_progress=lambda current, total: self._root.after(
-                        0,
+                    on_progress=lambda current, total: self._dispatcher.post(
                         self._handle_progress,
                         request_id,
                         current,
                         total,
                         on_progress,
+                        key=("scan", request_id),
                     ),
                     cancel_event=cancel_event,
                 )
             except ScanCancelledError:
-                self._root.after(
-                    0,
+                self._dispatcher.post(
                     self._handle_cancelled,
                     request_id,
                     on_cancelled,
                 )
                 return
             except Exception as exc:  # noqa: BLE001 - surface to UI
-                self._root.after(
-                    0, self._handle_error, request_id, str(exc), on_error
+                self._dispatcher.post(
+                    self._handle_error, request_id, str(exc), on_error
                 )
                 return
 
-            self._root.after(
-                0,
+            self._dispatcher.post(
                 self._handle_success,
                 request_id,
                 folder_path,
@@ -153,6 +153,11 @@ class SourceScanController:
         cancel_event.set()
         return True
 
+    def close(self) -> None:
+        """Cancel the scan and stop delivering UI callbacks."""
+        self.cancel_current_scan()
+        self._dispatcher.close()
+
     def _finalize_request(self) -> None:
         with self._request_lock:
             self._cancel_event = None
@@ -169,6 +174,7 @@ class CopyJobController:
         progress_manager: ProgressManager,
     ) -> None:
         self._root = root
+        self._dispatcher = UiDispatcher(root)
         self._copy_worker = copy_worker
         self._progress_manager = progress_manager
         self._active_jobs: set[str] = set()
@@ -201,17 +207,17 @@ class CopyJobController:
             files=files,
             target_folder=target_folder,
             custom_name=job_name,
-            on_complete=lambda name: self._root.after(
-                0, self._handle_complete, name, on_status, on_completed
+            on_complete=lambda name: self._dispatcher.post(
+                self._handle_complete, name, on_status, on_completed
             ),
-            on_error=lambda name, err: self._root.after(
-                0, self._handle_error, name, err, on_status, on_failed
+            on_error=lambda name, err: self._dispatcher.post(
+                self._handle_error, name, err, on_status, on_failed
             ),
-            on_progress=lambda current, total: self._root.after(
-                0, self._handle_progress, job_name, current, total
+            on_progress=lambda current, total: self._dispatcher.post(
+                self._handle_progress, job_name, current, total,
+                key=("copy", job_name),
             ),
-            on_status_change=lambda name, state: self._root.after(
-                0,
+            on_status_change=lambda name, state: self._dispatcher.post(
                 self._handle_status_change,
                 name,
                 state,
@@ -275,3 +281,7 @@ class CopyJobController:
             self._active_jobs.discard(job_name)
             on_status(f"Copy cancelled: {job_name}")
             on_cancelled(job_name)
+
+    def close(self) -> None:
+        """Stop delivering callbacks when the window closes."""
+        self._dispatcher.close()

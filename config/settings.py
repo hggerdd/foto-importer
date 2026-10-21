@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 
+UI_POLL_INTERVAL_MS = 50
+THUMBNAIL_CACHE_SIZE = 128
+
+
 class Settings:
     """Manages application settings with persistent storage."""
 

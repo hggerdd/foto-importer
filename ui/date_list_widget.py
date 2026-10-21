@@ -60,8 +60,11 @@ class DateListWidget(ttk.LabelFrame):
             date_groups: Dictionary mapping date strings to file counts
         """
         self.listbox.delete(0, tk.END)
-        for date_str, file_count in date_groups.items():
-            self.listbox.insert(tk.END, f"{date_str} ({file_count} files)")
+        if date_groups:
+            self.listbox.insert(tk.END, *(
+                f"{date_str} ({file_count} files)"
+                for date_str, file_count in date_groups.items()
+            ))
 
     def get_selected_dates(self) -> set[str]:
         """Get the currently selected date strings.
