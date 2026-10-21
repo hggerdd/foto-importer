@@ -4,15 +4,23 @@ Tkinter-Anwendung zum Gruppieren von Kamera-Dateien nach Datum, mit
 Bildvorschau und Kopieren in Unterordner je Dateiendung. Als Datumsquelle
 stehen Dateisystem-Zeitstempel und Foto-Metadaten zur Verfügung.
 
-![Import-Arbeitsfläche mit Galerie und Zielvorschau](docs/screenshots/import-workspace.png)
+![Import-Arbeitsfläche mit vollständiger Galerie und Zielvorschau](docs/screenshots/lazy-gallery.png)
 
 ## Import-Arbeitsfläche
 
 Oben die Quelle auswählen. Links lassen sich einzelne Aufnahmetage ohne
-Strg-Taste ankreuzen oder gemeinsam auswählen. Die Mitte zeigt eine begrenzte
-Bildvorschau des zuletzt fokussierten Tages; die angekreuzten Tage bestimmen,
+Strg-Taste ankreuzen oder gemeinsam auswählen. Die Mitte zeigt alle verfügbaren
+Bildvorschauen des zuletzt fokussierten Tages; die angekreuzten Tage bestimmen,
 welche Dateien importiert werden. Die Vorschaugröße ist über den Schieberegler
-änderbar. Die Anzahl der Vorschaubilder steht unter **Einstellungen**.
+änderbar. Eine Begrenzung der Bildanzahl gibt es nicht mehr.
+
+Die Galerie reserviert sofort die Scrollfläche für den gesamten Tag. Sichtbare
+Bilder beginnen als weiße Platzhalter und werden im Hintergrund nachgeladen.
+Zuerst kommen die sichtbaren Bilder, danach je zwei benachbarte Reihen als
+Vorlauf. Beim Scrollen ersetzt der aktuelle Ausschnitt überholte Ladeaufträge.
+Auch bei Tausenden Bildern existieren nur für den sichtbaren Bereich
+Canvas-Elemente und Tk-Bilder. Nicht mehr benötigte Anzeigebilder werden
+freigegeben; der begrenzte Thumbnail-Cache erleichtert das Zurückscrollen.
 
 Rechts Zielordner und Ordnername festlegen. Die Ablagevorschau zeigt die
 Unterordner je Dateityp und gegebenenfalls die DNGs direkt im Importordner.
@@ -39,7 +47,8 @@ gibt nach rund 8 ms an die Ereignisschleife zurück; lange Datumslisten werden
 in Portionen von 100 Zeilen aufgebaut.
 
 Die bisherigen Benutzereinstellungen bleiben gültig. Neue Installationen
-starten mit 12 Vorschaubildern und einer Fenstergröße von 1500 × 980 Pixeln.
+starten mit einer Fenstergröße von 1500 × 980 Pixeln. Der frühere Wert
+`preview_count` wird ignoriert; die zugehörige Einstellung entfällt.
 Die Konstanten für Worker-Abfragen und Cachegrößen bleiben unverändert.
 
 Eine Vorschau mit isolierten Einstellungen und ohne Kopieren oder Konvertieren:
@@ -58,8 +67,6 @@ uv run python main.py
 ```
 
 ## Vorrang für Analyse und Vorschau
-
-![Auftrag wartet zugunsten der Analyse und Vorschau](docs/screenshots/task-priority.png)
 
 Ordner-Scan, Dateizählung, Bildvorschau und die Zielprüfung neuer Imports haben
 automatisch Vorrang vor Kopieren und DNG-Konvertierung. Weitere Aufnahmetage
@@ -150,14 +157,17 @@ werden zusammengefasst und alle 50 ms vom UI-Thread abgeholt. Damit wartet der
 Scan oder Kopiervorgang nicht mehr pro Datei auf Tkinter. Abschluss- und
 Fehlermeldungen bleiben erhalten.
 
-Vorschaubilder werden von einem einzelnen Hintergrund-Worker geladen.
+Vorschaubilder werden von einem einzelnen Hintergrund-Worker geladen. Es gibt
+höchstens einen aktiven und einen austauschbaren wartenden Ladeauftrag.
 Veraltete Vorschauaufträge werden abgebrochen; nur der UI-Thread erzeugt
-Tkinter-Bilder. Ein LRU-Cache hält bis zu 128 kleine Vorschaubilder und prüft
+Tkinter-Bilder für sichtbare Zellen. Ein LRU-Cache hält bis zu 128 kleine
+Vorschaubilder und prüft
 Dateigröße sowie Änderungs- und Erstellungs-/Metadatenzeit auf Änderungen.
 JPEG-Decodierung nutzt die reduzierte Auflösung des Decoders; EXIF-Rotation
 wird berücksichtigt. Die Grenzwerte `UI_POLL_INTERVAL_MS` und
-`THUMBNAIL_CACHE_SIZE` stehen zentral in `config/settings.py`; bestehende
-Benutzereinstellungen bleiben gültig.
+`THUMBNAIL_CACHE_SIZE` stehen zentral in `config/settings.py`. Die neue Konstante
+`PREVIEW_PREFETCH_ROWS = 2` bestimmt den Vorlauf je Seite des sichtbaren
+Ausschnitts; alle anderen Benutzereinstellungen bleiben gültig.
 
 Beim Kopieren gleichnamiger Dateien wird der nächste freie Nummernsuffix
 weitergezählt. Vorhandene Zieldateien werden weiterhin geprüft und behalten.
