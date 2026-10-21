@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Callable
 
-from config.settings import DNG_CONVERTER_PATH, Settings
+from config.settings import DNG_CONVERTER_PATH, DNG_DOWNLOAD_URL, Settings
 from ui.date_list_widget import DateListWidget
 from ui.folder_selector import FolderSelector
 from ui.preview_widget import PreviewWidget
@@ -136,6 +137,15 @@ class MainLayout(ttk.Frame):
         ttk.Button(settings_frame, text="Browse...", command=choose_converter).grid(
             row=4, column=2, padx=(10, 0),
         )
+        self.dng_version_label = ttk.Label(
+            settings_frame, text="DNG Converter: checking version...",
+        )
+        self.dng_version_label.grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        self.dng_download_button = ttk.Button(
+            settings_frame, text="Download update", state='disabled',
+            command=lambda: webbrowser.open(DNG_DOWNLOAD_URL),
+        )
+        self.dng_download_button.grid(row=5, column=2, padx=(10, 0), pady=(5, 0))
 
     def _build_date_list(self, on_selection_changed: Callable[[set[str]], None]) -> None:
         self.date_list = DateListWidget(

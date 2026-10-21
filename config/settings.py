@@ -9,6 +9,8 @@ from typing import Any
 UI_POLL_INTERVAL_MS = 50
 THUMBNAIL_CACHE_SIZE = 128
 DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
+DNG_DOWNLOAD_URL = "https://www.adobe.com/go/dng_converter_win/"
+DNG_UPDATE_TIMEOUT_SECONDS = 5
 
 
 class Settings:

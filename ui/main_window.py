@@ -10,6 +10,7 @@ from core.copy_worker import CopyWorker
 from core.file_manager import FileManager, DateSource
 from ui.controllers import CopyJobController, SourceScanController
 from ui.dng_controller import DngController
+from ui.dng_update_controller import DngUpdateController
 from ui.layout import MainLayout
 
 
@@ -72,10 +73,21 @@ class MainWindow:
             self.progress_manager,
         )
         self.dng_controller = DngController(self.root, self.progress_manager)
+        self.dng_update_controller = DngUpdateController(
+            self.root, self.settings, self._on_dng_version_checked,
+        )
+        self.dng_update_controller.start(Path(self.layout.dng_converter_var.get()))
         self.scan_progress.bind_on_cancel(self._cancel_active_scan)
 
         # Bind window close event to save settings
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+    def _on_dng_version_checked(self, text: str, update_available: bool) -> None:
+        """Show converter status independently of import progress."""
+        self.layout.dng_version_label.config(text=text)
+        self.layout.dng_download_button.config(
+            state='normal' if update_available else 'disabled',
+        )
 
     def _on_source_selected(self, folder_path: Path) -> None:
         """Handle source folder selection."""
@@ -341,4 +353,5 @@ class MainWindow:
         self.scan_controller.close()
         self.job_controller.close()
         self.dng_controller.close()
+        self.dng_update_controller.close()
         self.root.destroy()
