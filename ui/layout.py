@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 from typing import Callable
 
-from config.settings import Settings
+from config.settings import DNG_CONVERTER_PATH, Settings
 from ui.date_list_widget import DateListWidget
 from ui.folder_selector import FolderSelector
 from ui.preview_widget import PreviewWidget
@@ -58,7 +58,8 @@ class MainLayout(ttk.Frame):
         self._build_progress_section()
 
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=2)
 
     def _build_scan_progress(self) -> None:
         self.scan_progress = ScanProgressWidget(self)
@@ -106,12 +107,42 @@ class MainLayout(ttk.Frame):
         )
         metadata_radio.grid(row=2, column=1, sticky=tk.W)
 
+        self.convert_to_dng_var = tk.BooleanVar(value=settings.get('convert_to_dng', False))
+        ttk.Checkbutton(
+            settings_frame, text="Convert NEF to DNG after copying",
+            variable=self.convert_to_dng_var,
+            command=lambda: settings.set('convert_to_dng', self.convert_to_dng_var.get()),
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        ttk.Label(settings_frame, text="DNG Converter:").grid(row=4, column=0, sticky=tk.W)
+        self.dng_converter_var = tk.StringVar(
+            value=settings.get('dng_converter_path', DNG_CONVERTER_PATH),
+        )
+        converter_entry = ttk.Entry(settings_frame, textvariable=self.dng_converter_var)
+        converter_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(10, 0))
+        converter_entry.bind(
+            '<FocusOut>', lambda _event: settings.set(
+                'dng_converter_path', self.dng_converter_var.get(),
+            ),
+        )
+
+        def choose_converter() -> None:
+            path = filedialog.askopenfilename(
+                title="Select Adobe DNG Converter", filetypes=[("Executable", "*.exe")],
+            )
+            if path:
+                self.dng_converter_var.set(path)
+                settings.set('dng_converter_path', path)
+
+        ttk.Button(settings_frame, text="Browse...", command=choose_converter).grid(
+            row=4, column=2, padx=(10, 0),
+        )
+
     def _build_date_list(self, on_selection_changed: Callable[[set[str]], None]) -> None:
         self.date_list = DateListWidget(
             self,
             on_selection_changed=on_selection_changed,
         )
-        self.date_list.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.date_list.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
 
     def _build_preview_section(self) -> None:
         preview_frame = ttk.LabelFrame(self, text="Image Preview", padding="10")
@@ -157,6 +188,6 @@ class MainLayout(ttk.Frame):
         self.status_label.pack(fill=tk.X)
 
     def _build_progress_section(self) -> None:
-        progress_container = ttk.LabelFrame(self, text="Active Copy Jobs", padding="10")
+        progress_container = ttk.LabelFrame(self, text="Copy and DNG Jobs", padding="10")
         progress_container.grid(row=7, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
         self.progress_manager = ProgressManager(progress_container)

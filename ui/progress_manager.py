@@ -74,8 +74,23 @@ class ProgressManager:
         if not entry:
             return
 
+        entry.total = total
+        entry.progress_bar['maximum'] = max(total, 1)
         entry.label.config(text=f"{job_name}: {current} / {entry.total} files")
         entry.progress_bar['value'] = current
+
+    def finish_progress(self, job_name: str, message: str) -> None:
+        """Keep a terminal result visible until the user dismisses it."""
+        entry = self.progress_bars.get(job_name)
+        if not entry:
+            return
+        entry.label.config(text=f"{job_name}: {message}", wraplength=650, justify=tk.LEFT)
+        self._cancel_callbacks.pop(job_name, None)
+        if entry.cancel_button:
+            entry.cancel_button.config(
+                text="Dismiss", state="normal",
+                command=lambda: self.remove_progress_bar(job_name),
+            )
 
     def mark_cancelling(self, job_name: str) -> None:
         """Mark a job as pending cancellation (disables the cancel button)."""

@@ -9,6 +9,7 @@ from config.settings import Settings
 from core.copy_worker import CopyWorker
 from core.file_manager import FileManager, DateSource
 from ui.controllers import CopyJobController, SourceScanController
+from ui.dng_controller import DngController
 from ui.layout import MainLayout
 
 
@@ -70,6 +71,7 @@ class MainWindow:
             self.copy_worker,
             self.progress_manager,
         )
+        self.dng_controller = DngController(self.root, self.progress_manager)
         self.scan_progress.bind_on_cancel(self._cancel_active_scan)
 
         # Bind window close event to save settings
@@ -227,6 +229,17 @@ class MainWindow:
             messagebox.showwarning("Warning", "Please enter a custom name")
             return
 
+        if custom_name in self._pending_groups or self.dng_controller.is_active(custom_name):
+            messagebox.showwarning("Job Active", f"A job for '{custom_name}' is still running")
+            return
+
+        convert_to_dng = self.layout.convert_to_dng_var.get()
+        converter = Path(self.layout.dng_converter_var.get().strip())
+        if convert_to_dng and not converter.is_file():
+            messagebox.showerror("DNG Converter", f"Adobe DNG Converter not found:\n{converter}")
+            return
+        self.settings.set('dng_converter_path', str(converter))
+
         # Collect all files from selected dates
         all_files: list[Path] = []
         for date_str in selected_dates:
@@ -271,13 +284,23 @@ class MainWindow:
             files=all_files,
             target_folder=self.target_folder,
             on_status=self._set_status,
-            on_completed=self._on_job_completed,
+            on_completed=lambda name: self._on_copy_completed(
+                name, target_path, converter if convert_to_dng else None,
+            ),
             on_failed=self._on_job_failed,
             on_cancelled=self._on_job_cancelled,
         )
 
         # Clear selection for next operation
         self.custom_name_var.set("")
+
+    def _on_copy_completed(
+        self, job_name: str, folder: Path, converter: Path | None,
+    ) -> None:
+        """Commit copy success before starting the optional conversion phase."""
+        self._on_job_completed(job_name)
+        if converter is not None:
+            self.dng_controller.start_job(job_name, folder, converter, self._set_status)
 
     def _on_job_completed(self, job_name: str) -> None:
         """Handle successful completion callbacks."""
@@ -317,4 +340,5 @@ class MainWindow:
         self.settings.window_geometry = self.root.geometry()
         self.scan_controller.close()
         self.job_controller.close()
+        self.dng_controller.close()
         self.root.destroy()

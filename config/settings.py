@@ -8,6 +8,7 @@ from typing import Any
 
 UI_POLL_INTERVAL_MS = 50
 THUMBNAIL_CACHE_SIZE = 128
+DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
 
 
 class Settings:
@@ -40,6 +41,8 @@ class Settings:
             'preview_count': 10,
             'window_geometry': '1200x800',
             'date_source': 'filesystem',
+            'convert_to_dng': False,
+            'dng_converter_path': DNG_CONVERTER_PATH,
         }
 
     def save(self) -> None:

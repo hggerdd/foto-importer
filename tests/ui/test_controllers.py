@@ -1,9 +1,11 @@
 from threading import Thread, get_ident
+import time
 
 from core.copy_worker import CopyWorker
 from core.file_manager import FileManager
 from ui.controllers import CopyJobController, SourceScanController
 from ui.dispatcher import UiDispatcher
+from ui.dng_controller import DngController
 
 
 class FakeRoot:
@@ -110,3 +112,79 @@ def test_copy_callbacks_run_on_ui_thread(tmp_path):
     assert not errors
     assert progress.values[-1] == ("album", 5, 5)
     controller.close()
+
+
+def test_dng_callbacks_run_on_ui_thread_and_keep_result(tmp_path, fake_converter):
+    class Progress:
+        def __init__(self):
+            self.values, self.results = [], []
+
+        def add_progress_bar(self, *args, **kwargs):
+            assert get_ident() == root.owner
+
+        def remove_progress_bar(self, *args):
+            assert get_ident() == root.owner
+
+        def update_progress(self, *args):
+            assert get_ident() == root.owner
+            self.values.append(args)
+
+        def finish_progress(self, *args):
+            assert get_ident() == root.owner
+            self.results.append(args)
+
+    executable, _, _ = fake_converter
+    folder = tmp_path / "album"
+    (folder / "nef").mkdir(parents=True)
+    (folder / "nef" / "photo.nef").write_text("ok")
+    root, progress = FakeRoot(), Progress()
+    controller = DngController(root, progress)
+    controller.start_job("album", folder, executable, lambda _: None)
+    job = controller._jobs["album"]
+    job.join(timeout=5)
+    assert not job.is_alive()
+    assert not progress.values
+    assert controller.is_active("album")
+    root.poll()
+    assert not controller.is_active("album")
+    assert progress.values[-1] == ("DNG: album", 1, 1)
+    assert "completed" in progress.results[0][1]
+    controller.close()
+
+
+def test_closing_dng_controller_reaps_child_without_ui_callbacks(tmp_path, fake_converter):
+    class Progress:
+        def add_progress_bar(self, *args, **kwargs):
+            pass
+
+        def remove_progress_bar(self, *args):
+            pass
+
+        def update_progress(self, *args):
+            raise AssertionError("UI update after close")
+
+        def finish_progress(self, *args):
+            raise AssertionError("UI update after close")
+
+    executable, processes, _ = fake_converter
+    folder = tmp_path / "album"
+    (folder / "nef").mkdir(parents=True)
+    (folder / "nef" / "photo.nef").write_text("hang")
+    root = FakeRoot()
+    controller = DngController(root, Progress())
+    controller.start_job("album", folder, executable, lambda _: None)
+    job = controller._jobs["album"]
+    try:
+        deadline = time.monotonic() + 5
+        while not (folder / "nef" / "photo.started").exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not job.daemon  # Interpreter shutdown must allow cleanup.
+    finally:
+        controller.close()
+        job.join(timeout=5)
+    assert not job.is_alive()
+    assert all(process.poll() is not None for process in processes)
+    root.poll()
+    assert not root.pending
+    assert not list(folder.glob(".dng-*"))

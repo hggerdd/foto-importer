@@ -9,6 +9,47 @@ uv sync
 uv run python main.py
 ```
 
+## NEF nach DNG konvertieren
+
+Unter **Settings** die Option **Convert NEF to DNG after copying** aktivieren.
+Der Standardpfad ist
+`C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe`;
+über **Browse...** lässt sich eine andere Installation auswählen. Die Option
+ist zunächst deaktiviert. Option und Programmpfad werden gespeichert
+(`convert_to_dng`, `dng_converter_path` in den Benutzereinstellungen).
+
+![DNG-Einstellungen in der Anwendung](docs/screenshots/dng-settings.png)
+
+Nach erfolgreichem Kopieren verarbeitet die Anwendung alle `.nef`-Dateien
+aus `<Zielordner>/<Name>/nef` und legt die DNGs direkt in
+`<Zielordner>/<Name>` ab, entsprechend dem bisherigen Batch-Skript.
+Groß-/Kleinschreibung der NEF-Endung spielt keine Rolle. Bereits vorhandene
+DNG-Dateinamen werden übersprungen; RAW-Dateien bleiben erhalten.
+
+Jeder Ordner hat einen unabhängigen Hintergrundauftrag mit einem eigenen
+Adobe-Prozess für die gerade bearbeitete Datei. Verschiedene Ordner laufen
+parallel, Dateien innerhalb eines Ordners nacheinander. Unter Windows
+laufen die Adobe-Prozesse mit niedrigerer Priorität. Scan, Vorschau und neue
+Kopieraufträge bleiben bedienbar; CPU und Laufwerk werden weiterhin geteilt.
+Das Programm startet Adobe ohne Shell mit getrennten Pfadargumenten, sodass
+Leerzeichen und Sonderzeichen in Ordnernamen unterstützt werden.
+
+**Copy and DNG Jobs** zeigt pro Ordner die abgearbeiteten Dateien einschließlich
+übersprungener DNGs. Der Fortschritt steigt nach jeder fertigen Datei;
+innerhalb einer einzelnen Datei gibt es keine Prozentanzeige. Abschluss,
+Fehler oder Abbruch bleiben bis **Dismiss** sichtbar. **Cancel** beendet nur
+die Konvertierung dieses Ordners. Beim Schließen werden aktive
+Konvertierungen ebenfalls abgebrochen. Fertige DNGs und kopierte Dateien
+bleiben erhalten. Ein Konvertierungsfehler stellt die bereits erfolgreich
+kopierten Datumsgruppen nicht erneut in die Quellliste ein.
+
+Adobe schreibt zunächst in einen temporären Unterordner. Erst nach einem
+erfolgreichen Prozessende und einer nicht leeren DNG-Ausgabe wird die Datei
+ins Ziel übernommen. Ein Abbruch oder Fehler entfernt temporäre und
+unvollständige Ausgaben dieses Auftrags. Die Anwendung prüft dabei nicht den
+vollständigen DNG-Dateiinhalt. Ein Neustart desselben Imports ist erst nach
+Abschluss des bisherigen Kopier-/DNG-Auftrags möglich.
+
 ## Performance
 
 Die Optimierung verwendet beim rekursiven Scan `os.scandir`, um bereits vom
@@ -71,3 +112,7 @@ Die Tests prüfen Datumsermittlung, Scan-Abbruch, wiederverwendete
 Dateiinformationen, Dateinamenskollisionen, Kopierfehler, Cache-Verhalten,
 UI-Thread-Zustellung sowie den Ablauf Scan → Vorschau → Kopieren mit echten
 Tkinter-Widgets. Für die GUI-Tests wird eine grafische Sitzung benötigt.
+Die DNG-Tests verwenden echte, unabhängige Testprozesse anstelle von Adobe
+und prüfen Parallelität, Abbruch, Fehlerausgaben, vorhandene DNGs sowie
+Kopieren → Konvertieren mit echten Tkinter-Widgets. Eine Konvertierung
+echter NEF-Aufnahmen mit Adobe muss zusätzlich manuell geprüft werden.
