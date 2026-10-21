@@ -37,7 +37,7 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
         opened = []
         monkeypatch.setattr('ui.layout.webbrowser.open', lambda url: opened.append(url))
         app.layout.dng_download_button.invoke()
-        assert opened == ['https://www.adobe.com/go/dng_converter_win/']
+        assert opened == ['https://adobe.com/go/dng_converter_win/']
         app.date_list.listbox.selection_set(0)
         app._on_date_selection_changed(app.date_list.get_selected_dates())
         wait_for(lambda: len(app.preview_widget.image_references) == 1)

@@ -3,8 +3,6 @@ from datetime import date, timedelta
 from pathlib import Path
 import threading
 import time
-import tkinter as tk
-
 import pytest
 
 from config.settings import Settings

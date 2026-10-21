@@ -102,6 +102,26 @@ direkt aus Git):
 uv run python -m benchmarks.performance --baseline b0d08d7
 ```
 
+## DNG-Versionsprüfung
+
+Bei jedem Programmstart wird die installierte DNG-Converter-Version aus den
+Windows-Dateiinformationen gelesen. Die Einstellungen zeigen die Version und
+gegebenenfalls einen Updatehinweis mit einem Button zur Adobe-Downloadseite.
+Der Button öffnet den Browser; eine Installation startet nicht automatisch.
+
+Die aktuelle Adobe-Version wird im Hintergrund anhand der Weiterleitung des
+offiziellen Windows-Downloadlinks ermittelt. Eine HEAD-Anfrage lädt keinen
+Installer herunter. Pro lokalem Kalendertag erfolgt höchstens ein Versuch;
+weitere Programmstarts verwenden das gespeicherte Ergebnis. Auch fehlgeschlagene
+Versuche werden für den Tag gespeichert. Bei fehlendem Internet oder einem
+geänderten Adobe-Link erscheint ein Hinweis, und die nächste Prüfung erfolgt
+beim ersten Programmstart an einem folgenden Tag. Import und Konvertierung
+bleiben während der Prüfung bedienbar.
+
+`DNG_DOWNLOAD_URL` und `DNG_UPDATE_TIMEOUT_SECONDS` (5 Sekunden pro Netzwerkanfrage)
+stehen in `config/settings.py`. Prüftag und Ergebnis werden unter
+`dng_update_check` in der vorhandenen Benutzer-Einstellungsdatei gespeichert.
+
 ## Tests
 
 ```powershell
