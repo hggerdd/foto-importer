@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from threading import Event
 
 from core.thumbnails import ThumbnailLoader
+from core.task_scheduler import TaskScheduler
 from ui.dispatcher import UiDispatcher
 
 
@@ -17,9 +18,13 @@ class PreviewWidget(ttk.Frame):
     """Widget to display image thumbnails in a scrollable area."""
 
     def __init__(
-        self, parent: ttk.Frame, thumbnail_size: tuple[int, int] = (210, 140)
+        self,
+        parent: ttk.Frame,
+        thumbnail_size: tuple[int, int] = (210, 140),
+        scheduler: TaskScheduler | None = None,
     ) -> None:
         super().__init__(parent)
+        self._scheduler = scheduler
         self.thumbnail_size: tuple[int, int] = thumbnail_size
         self.image_references: list[
             ImageTk.PhotoImage
@@ -159,7 +164,15 @@ class PreviewWidget(ttk.Frame):
                     key=("preview", idx),
                 )
 
-        self._future = self._executor.submit(load)
+        lease = self._scheduler.foreground() if self._scheduler else None
+        try:
+            self._future = self._executor.submit(load)
+        except BaseException:
+            if lease:
+                lease.close()
+            raise
+        if lease:
+            self._future.add_done_callback(lambda _: lease.close())
 
     def _display_thumbnail(
         self,

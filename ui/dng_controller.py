@@ -8,6 +8,7 @@ import tkinter as tk
 
 from core.copy_worker import JobState
 from core.dng_worker import DngJob
+from core.task_scheduler import TaskScheduler
 from ui.dispatcher import UiDispatcher
 from ui.progress_manager import ProgressManager
 
@@ -15,7 +16,13 @@ from ui.progress_manager import ProgressManager
 class DngController:
     """Own an independent converter job and progress row for every folder."""
 
-    def __init__(self, root: tk.Misc, progress: ProgressManager) -> None:
+    def __init__(
+        self,
+        root: tk.Misc,
+        progress: ProgressManager,
+        scheduler: TaskScheduler | None = None,
+    ) -> None:
+        self._scheduler = scheduler
         self._dispatcher = UiDispatcher(root)
         self._progress = progress
         self._jobs: dict[str, DngJob] = {}
@@ -42,6 +49,13 @@ class DngController:
         job = DngJob(
             folder,
             converter,
+            scheduler=self._scheduler,
+            on_waiting=lambda reason: self._dispatcher.post(
+                self._progress.set_waiting,
+                row,
+                reason,
+                key=("dng-waiting", name),
+            ),
             on_progress=lambda current, total: self._dispatcher.post(
                 self._progress.update_progress,
                 row,

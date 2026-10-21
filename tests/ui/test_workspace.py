@@ -249,3 +249,52 @@ def test_primary_action_stays_visible_and_settings_are_modeless(workspace, geome
     app.root.update()
     assert app.root.grab_current() is None
     assert app.layout.settings_window.state() == "normal"
+
+
+def test_preview_has_priority_while_user_creates_more_imports(workspace, monkeypatch):
+    app = workspace
+    started, release = Event(), Event()
+    load = app.preview_widget._loader.load
+    for path in app.file_manager.get_files_for_date("2026-10-19"):
+        path.write_bytes(b"sample")
+
+    def slow_preview(path, size):
+        started.set()
+        assert release.wait(4)
+        return load(path, size)
+
+    monkeypatch.setattr(app.preview_widget._loader, "load", slow_preview)
+    try:
+        app.date_list.set_selected_dates({"2026-10-20"})
+        pump(app.root, started.is_set)
+        app.custom_name_var.set("first")
+        app._execute_copy()
+        pump(
+            app.root,
+            lambda: (
+                "first" in app._pending_groups
+                and app.progress_manager.progress_bars["first"].waiting_reason
+                is not None
+            ),
+        )
+        assert "Vorrang" in app.progress_manager.progress_bars["first"].waiting_reason
+        assert not (app.target_folder / "first").exists()
+
+        app.date_list.set_selected_dates({"2026-10-19"})
+        pump(app.root, lambda: app._selection_counts == {"nef": 1, "mov": 1})
+        app.custom_name_var.set("second")
+        assert str(app.execute_button.cget("state")) == "normal"
+        app._execute_copy()
+        pump(app.root, lambda: len(app._pending_groups) == 2)
+        assert not (app.target_folder / "second").exists()
+        heartbeat = []
+        app.root.after(0, lambda: heartbeat.append(True))
+        app.root.update()
+        assert heartbeat
+
+        release.set()
+        pump(app.root, lambda: not app._pending_groups)
+        assert (app.target_folder / "first" / "jpg" / "photo.jpg").is_file()
+        assert (app.target_folder / "second" / "nef" / "sample.nef").is_file()
+    finally:
+        release.set()

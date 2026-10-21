@@ -78,6 +78,43 @@ def test_dispatcher_yields_between_expensive_ui_callbacks(monkeypatch):
     dispatcher.close()
 
 
+def test_cancelled_queued_summaries_do_not_leak_foreground_priority(monkeypatch):
+    from pathlib import Path
+    from threading import Event
+
+    from core.import_plan import summarize_selection
+    from core.task_scheduler import TaskScheduler
+    from ui.selection_controller import SelectionController
+
+    root, scheduler = FakeRoot(), TaskScheduler(settle_seconds=0)
+    controller = SelectionController(root, scheduler)
+    started, release = Event(), Event()
+
+    def slow(*args):
+        started.set()
+        assert release.wait(3)
+        return summarize_selection(*args)
+
+    monkeypatch.setattr("ui.selection_controller.summarize_selection", slow)
+    try:
+        for index in range(10):
+            controller.request(
+                {"day": [Path("photo.jpg")]}, {"day"}, "day", 12, lambda _: None
+            )
+            if index == 0:
+                assert started.wait(1)
+        assert scheduler._foreground == 2  # Running work plus the latest queued future.
+        controller.close()
+        assert scheduler._foreground == 1
+        release.set()
+        deadline = time.monotonic() + 2
+        while scheduler._foreground and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert scheduler._foreground == 0
+    finally:
+        release.set()
+
+
 def test_scan_callbacks_run_on_ui_thread_and_ignore_obsolete_results(tmp_path):
     (tmp_path / "photo.jpg").touch()
     root, manager = FakeRoot(), FileManager()

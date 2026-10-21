@@ -6,12 +6,14 @@ from collections.abc import Callable
 import tkinter as tk
 
 from ui.dispatcher import UiDispatcher
+from core.task_scheduler import TaskScheduler
 
 
 class ImportPreflight:
     """Check one captured import destination without blocking the UI."""
 
-    def __init__(self, root: tk.Misc) -> None:
+    def __init__(self, root: tk.Misc, scheduler: TaskScheduler | None = None) -> None:
+        self._scheduler = scheduler
         self._dispatcher = UiDispatcher(root)
 
     def check(
@@ -34,7 +36,16 @@ class ImportPreflight:
             else:
                 self._dispatcher.post(callback, exists, None, files)
 
-        Thread(target=work, name="ImportPreflight", daemon=True).start()
+        lease = self._scheduler.foreground() if self._scheduler else None
+
+        def run():
+            try:
+                work()
+            finally:
+                if lease:
+                    lease.close()
+
+        Thread(target=run, name="ImportPreflight", daemon=True).start()
 
     def close(self) -> None:
         self._dispatcher.close()

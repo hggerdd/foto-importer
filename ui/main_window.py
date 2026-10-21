@@ -8,6 +8,7 @@ from tkinter import messagebox
 
 from config.settings import Settings
 from core.copy_worker import CopyWorker
+from core.task_scheduler import TaskScheduler
 from core.file_manager import FileManager, DateSource
 from core.import_plan import SelectionSummary, folder_name_error
 from ui.dates import date_label
@@ -40,7 +41,8 @@ class MainWindow:
         self.file_manager.set_date_source(
             DateSource.from_value(self.settings.date_source)
         )
-        self.copy_worker: CopyWorker = CopyWorker()
+        self.task_scheduler = TaskScheduler()
+        self.copy_worker: CopyWorker = CopyWorker(self.task_scheduler)
 
         # State
         self.source_folder: Path | None = None
@@ -69,6 +71,7 @@ class MainWindow:
             on_date_selection_changed=self._on_date_selection_changed,
             on_custom_name_changed=self._update_execute_button_state,
             on_execute_copy=self._execute_copy,
+            task_scheduler=self.task_scheduler,
         )
 
         self.folder_selector = self.layout.folder_selector
@@ -84,15 +87,19 @@ class MainWindow:
         self.progress_manager = self.layout.progress_manager
 
         # Controllers for background tasks
-        self.selection_controller = SelectionController(self.root)
-        self.import_preflight = ImportPreflight(self.root)
-        self.scan_controller = SourceScanController(self.root, self.file_manager)
+        self.selection_controller = SelectionController(self.root, self.task_scheduler)
+        self.import_preflight = ImportPreflight(self.root, self.task_scheduler)
+        self.scan_controller = SourceScanController(
+            self.root, self.file_manager, self.task_scheduler
+        )
         self.job_controller = CopyJobController(
             self.root,
             self.copy_worker,
             self.progress_manager,
         )
-        self.dng_controller = DngController(self.root, self.progress_manager)
+        self.dng_controller = DngController(
+            self.root, self.progress_manager, self.task_scheduler
+        )
         self.dng_update_controller = DngUpdateController(
             self.root,
             self.settings,

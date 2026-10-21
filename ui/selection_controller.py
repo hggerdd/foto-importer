@@ -8,12 +8,14 @@ import tkinter as tk
 
 from core.import_plan import SelectionSummary, summarize_selection
 from ui.dispatcher import UiDispatcher
+from core.task_scheduler import TaskScheduler
 
 
 class SelectionController:
     """Only publish the latest selection and cancel superseded computation."""
 
-    def __init__(self, root: tk.Misc) -> None:
+    def __init__(self, root: tk.Misc, scheduler: TaskScheduler | None = None) -> None:
+        self._scheduler = scheduler
         self._dispatcher = UiDispatcher(root)
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="Selection"
@@ -55,7 +57,15 @@ class SelectionController:
             if generation == self._generation:
                 callback(result)
 
-        self._future = self._executor.submit(work)
+        lease = self._scheduler.foreground() if self._scheduler else None
+        try:
+            self._future = self._executor.submit(work)
+        except BaseException:
+            if lease:
+                lease.close()
+            raise
+        if lease:
+            self._future.add_done_callback(lambda _: lease.close())
 
     def close(self) -> None:
         self.cancel()

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.copy_worker import CopyWorker, JobState
+from core.task_scheduler import TaskScheduler
 from core.file_manager import FileManager, ScanCancelledError
 from ui.progress_manager import ProgressManager
 from ui.dispatcher import UiDispatcher
@@ -16,10 +17,16 @@ from ui.dispatcher import UiDispatcher
 class SourceScanController:
     """Runs source-folder scans on a worker thread and marshals results."""
 
-    def __init__(self, root: tk.Misc, file_manager: FileManager) -> None:
+    def __init__(
+        self,
+        root: tk.Misc,
+        file_manager: FileManager,
+        scheduler: TaskScheduler | None = None,
+    ) -> None:
         self._root = root
         self._dispatcher = UiDispatcher(root)
         self._file_manager = file_manager
+        self._scheduler = scheduler
         self._request_lock = threading.Lock()
         self._request_id = 0
         self._cancel_event: threading.Event | None = None
@@ -44,10 +51,11 @@ class SourceScanController:
             self._cancel_event = threading.Event()
             cancel_event = self._cancel_event
 
+        lease = self._scheduler.foreground() if self._scheduler else None
         if on_started:
             on_started()
 
-        def worker() -> None:
+        def scan_work() -> None:
             try:
                 files_by_date = self._file_manager.gather_files_by_date(
                     folder_path,
@@ -81,6 +89,13 @@ class SourceScanController:
                 files_by_date,
                 on_success,
             )
+
+        def worker() -> None:
+            try:
+                scan_work()
+            finally:
+                if lease:
+                    lease.close()
 
         thread = threading.Thread(target=worker, daemon=True)
         self._active_thread = thread
@@ -221,6 +236,12 @@ class CopyJobController:
                 total,
                 key=("copy", job_name),
             ),
+            on_waiting=lambda reason: self._dispatcher.post(
+                self._progress_manager.set_waiting,
+                job_name,
+                reason,
+                key=("copy-waiting", job_name),
+            ),
             on_status_change=lambda name, state: self._dispatcher.post(
                 self._handle_status_change,
                 name,
@@ -291,5 +312,7 @@ class CopyJobController:
             on_cancelled(job_name)
 
     def close(self) -> None:
-        """Stop delivering callbacks when the window closes."""
+        """Cancel queued/running copies and stop delivering callbacks."""
+        for name in self._active_jobs:
+            self._copy_worker.cancel_job(name)
         self._dispatcher.close()

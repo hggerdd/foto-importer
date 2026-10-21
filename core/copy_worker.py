@@ -1,4 +1,5 @@
 """Background copy worker for file operations."""
+
 from __future__ import annotations
 
 import os
@@ -8,6 +9,10 @@ from enum import Enum
 from pathlib import Path
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import nullcontext
+
+from config.settings import BACKGROUND_COPY_CHUNK_BYTES
+from core.task_scheduler import TaskScheduler, WaitingCallback, background_thread
 
 
 class JobState(Enum):
@@ -56,8 +61,9 @@ class CopyJobRegistry:
 class CopyWorker:
     """Handles background file copy operations."""
 
-    def __init__(self) -> None:
+    def __init__(self, scheduler: TaskScheduler | None = None) -> None:
         self._registry = CopyJobRegistry()
+        self._scheduler = scheduler
 
     def copy_files(
         self,
@@ -68,6 +74,7 @@ class CopyWorker:
         on_error: Callable[[str, str], None] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
         on_status_change: Callable[[str, JobState], None] | None = None,
+        on_waiting: WaitingCallback | None = None,
     ) -> CopyJob:
         """Queue a copy job and start it on a background thread."""
 
@@ -85,6 +92,8 @@ class CopyWorker:
             on_error=on_error,
             on_progress=on_progress,
             on_state_change=_state_handler,
+            scheduler=self._scheduler,
+            on_waiting=on_waiting,
         )
 
         self._registry.register(job)
@@ -123,6 +132,9 @@ class CopyJob(threading.Thread):
         on_error: Callable[[str, str], None] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
         on_state_change: Callable[[str, JobState], None] | None = None,
+        *,
+        scheduler: TaskScheduler | None = None,
+        on_waiting: WaitingCallback | None = None,
     ) -> None:
         super().__init__(daemon=True, name=f"CopyJob-{custom_name}")
         self.files: list[Path] = files
@@ -137,6 +149,8 @@ class CopyJob(threading.Thread):
         self._state_lock = threading.Lock()
         self._state: JobState = JobState.QUEUED
         self.error: str | None = None
+        self._scheduler = scheduler
+        self._on_waiting = on_waiting
 
         self._emit_state(JobState.QUEUED)
 
@@ -162,7 +176,48 @@ class CopyJob(threading.Thread):
             return self._state
 
     def run(self) -> None:
-        """Execute the copy operation."""
+        """Acquire an execution slot on the worker, never on Tk's thread."""
+        try:
+            slot = (
+                self._scheduler.background_slot(
+                    "copy", self._cancel_event, self._on_waiting
+                )
+                if self._scheduler
+                else nullcontext()
+            )
+            with background_thread(threading.current_thread() is self), slot:
+                self._run_copy()
+        except InterruptedError:
+            self._set_state(JobState.CANCELLED)
+
+    def _checkpoint(self) -> None:
+        if self._cancel_event.is_set():
+            raise InterruptedError
+        if self._scheduler:
+            self._scheduler.checkpoint(self._cancel_event, self._on_waiting)
+
+    def _copy_file(self, file_path: Path, destination: Path) -> None:
+        """Copy in yielding chunks; remove only our partial output on failure."""
+        created = False
+        try:
+            with file_path.open("rb") as source, destination.open("xb") as output:
+                created = True
+                while True:
+                    self._checkpoint()
+                    chunk = source.read(BACKGROUND_COPY_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    self._checkpoint()
+                    output.write(chunk)
+            self._checkpoint()
+            shutil.copystat(file_path, destination)
+        except BaseException:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
+
+    def _run_copy(self) -> None:
+        """Execute the copy operation with cooperative priority checkpoints."""
         if self._cancel_event.is_set():
             self._set_state(JobState.CANCELLED)
             return
@@ -170,14 +225,16 @@ class CopyJob(threading.Thread):
         self._set_state(JobState.RUNNING)
 
         try:
+            self._checkpoint()
             main_folder = self.target_folder / self.custom_name
             main_folder.mkdir(parents=True, exist_ok=True)
 
             files_by_ext: defaultdict[str, list[Path]] = defaultdict(list)
             for file_path in self.files:
-                ext = file_path.suffix.lower().lstrip('.')
+                self._checkpoint()
+                ext = file_path.suffix.lower().lstrip(".")
                 if not ext:
-                    ext = 'no_extension'
+                    ext = "no_extension"
                 files_by_ext[ext].append(file_path)
 
             total_files = len(self.files)
@@ -202,13 +259,17 @@ class CopyJob(threading.Thread):
                     counter = next_suffix.get(name_key, 0)
                     dest_path = (
                         original_dest.with_stem(f"{original_dest.stem}_{counter}")
-                        if counter else original_dest
+                        if counter
+                        else original_dest
                     )
                     while dest_path.exists():
                         counter += 1
-                        dest_path = original_dest.with_stem(f"{original_dest.stem}_{counter}")
+                        dest_path = original_dest.with_stem(
+                            f"{original_dest.stem}_{counter}"
+                        )
 
-                    shutil.copy2(file_path, dest_path)
+                    self._checkpoint()
+                    self._copy_file(file_path, dest_path)
                     next_suffix[name_key] = counter + 1
                     current_file += 1
                     if self.on_progress:
@@ -219,6 +280,8 @@ class CopyJob(threading.Thread):
             if self.on_complete:
                 self.on_complete(self.custom_name)
 
+        except InterruptedError:
+            self._set_state(JobState.CANCELLED)
         except Exception as exc:
             self.error = str(exc)
             self._set_state(JobState.FAILED)

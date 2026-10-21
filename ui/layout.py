@@ -15,6 +15,7 @@ from ui.preview_widget import PreviewWidget
 from ui.progress_manager import ProgressManager
 from ui.scan_progress import ScanProgressWidget
 from ui.theme import configure_theme
+from core.task_scheduler import TaskScheduler
 from ui.scroll_frame import ScrollFrame
 
 
@@ -33,6 +34,7 @@ class MainLayout(ttk.Frame):
         on_date_selection_changed: Callable[[set[str]], None],
         on_custom_name_changed: Callable[[], None],
         on_execute_copy: Callable[[], None],
+        task_scheduler: TaskScheduler | None = None,
     ) -> None:
         configure_theme(root)
         super().__init__(root, padding=12, style="Canvas.TFrame")
@@ -116,7 +118,9 @@ class MainLayout(ttk.Frame):
             center, text="Bildvorschau", style="Small.TLabel"
         )
         self.preview_caption.grid(row=2, column=0, sticky="w", pady=(0, 8))
-        self.preview_widget = PreviewWidget(center, thumbnail_size=(240, 160))
+        self.preview_widget = PreviewWidget(
+            center, thumbnail_size=(240, 160), scheduler=task_scheduler
+        )
         self.preview_widget.grid(row=3, column=0, sticky="nsew")
         self.preview_widget.load_previews([])
         zoom = ttk.Frame(center)

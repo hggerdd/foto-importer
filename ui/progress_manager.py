@@ -20,6 +20,8 @@ class ProgressEntry:
     terminal: bool = False
     folder: Path | None = None
     message: str = ""
+    current: int = 0
+    waiting_reason: str | None = None
 
 
 class ProgressManager:
@@ -104,9 +106,25 @@ class ProgressManager:
         entry = self.progress_bars.get(job_name)
         if entry and not entry.terminal:
             entry.total = total
+            entry.current = current
             entry.progress_bar.config(maximum=max(total, 1), value=current)
+            self._render_progress(job_name, entry)
+
+    def set_waiting(self, job_name: str, reason: str | None) -> None:
+        """Show cooperative pauses without changing progress or cancel controls."""
+        entry = self.progress_bars.get(job_name)
+        if entry and not entry.terminal:
+            entry.waiting_reason = reason
+            self._render_progress(job_name, entry)
+
+    def _render_progress(self, job_name: str, entry: ProgressEntry) -> None:
+        if entry.waiting_reason:
+            entry.label.config(text=f"{job_name} · {entry.waiting_reason}")
+        else:
             phase = "konvertiert" if job_name.startswith("DNG: ") else "kopiert"
-            entry.label.config(text=f"{job_name} · {current} / {total} {phase}")
+            entry.label.config(
+                text=f"{job_name} · {entry.current} / {entry.total} {phase}"
+            )
 
     def finish_progress(self, job_name: str, message: str) -> None:
         entry = self.progress_bars.get(job_name)

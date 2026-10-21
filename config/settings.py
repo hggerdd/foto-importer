@@ -7,6 +7,10 @@ from typing import Any
 
 
 UI_POLL_INTERVAL_MS = 50
+BACKGROUND_COPY_JOBS = 1
+BACKGROUND_DNG_JOBS = 1
+BACKGROUND_COPY_CHUNK_BYTES = 1024 * 1024
+FOREGROUND_SETTLE_SECONDS = 0.15
 THUMBNAIL_CACHE_SIZE = 128
 DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
 DNG_DOWNLOAD_URL = "https://adobe.com/go/dng_converter_win/"
