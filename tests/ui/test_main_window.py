@@ -32,6 +32,12 @@ def test_scan_preview_copy_and_close(tmp_path, monkeypatch, tk_root):
     try:
         app._on_source_selected(source)
         wait_for(lambda: app.date_list.listbox.size() == 1)
+        wait_for(lambda: 'Update available' in app.layout.dng_version_label.cget('text'))
+        assert str(app.layout.dng_download_button.cget('state')) == 'normal'
+        opened = []
+        monkeypatch.setattr('ui.layout.webbrowser.open', lambda url: opened.append(url))
+        app.layout.dng_download_button.invoke()
+        assert opened == ['https://www.adobe.com/go/dng_converter_win/']
         app.date_list.listbox.selection_set(0)
         app._on_date_selection_changed(app.date_list.get_selected_dates())
         wait_for(lambda: len(app.preview_widget.image_references) == 1)
