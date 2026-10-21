@@ -278,6 +278,10 @@ def test_preview_has_priority_while_user_creates_more_imports(workspace, monkeyp
             ),
         )
         assert "Vorrang" in app.progress_manager.progress_bars["first"].waiting_reason
+        assert "Vorrang" in app.progress_manager.progress_bars[
+            "first"
+        ].waiting_label.cget("text")
+        assert not app.progress_manager.progress_bars["first"].progress_bar.grid_info()
         assert not (app.target_folder / "first").exists()
 
         app.date_list.set_selected_dates({"2026-10-19"})

@@ -170,6 +170,17 @@ def test_converter_waits_for_analysis_and_only_one_folder_runs(
         while not processes and time.monotonic() < deadline:
             time.sleep(0.005)
         assert len(processes) == 1
+        import os
+
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            import subprocess
+
+            get_priority = ctypes.WinDLL("kernel32").GetPriorityClass
+            get_priority.argtypes = [wintypes.HANDLE]
+            get_priority.restype = wintypes.DWORD
+            assert get_priority(processes[0]._handle) == subprocess.IDLE_PRIORITY_CLASS
         jobs[0].cancel()
         jobs[1].cancel()
     finally:

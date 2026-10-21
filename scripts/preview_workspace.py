@@ -71,6 +71,9 @@ def main() -> None:
                 "DNG: 2026-10-19_Bergtour", 21, lambda: False
             )
             app.progress_manager.update_progress("DNG: 2026-10-19_Bergtour", 14, 21)
+            app.progress_manager.set_waiting(
+                "DNG: 2026-10-19_Bergtour", "Analyse/Vorschau hat Vorrang"
+            )
             app.progress_manager.add_progress_bar("2026-10-18_Herbstwald", 42)
             app.progress_manager.finish_progress(
                 "2026-10-18_Herbstwald", "completed: Import abgeschlossen"

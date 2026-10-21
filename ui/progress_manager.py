@@ -22,6 +22,7 @@ class ProgressEntry:
     message: str = ""
     current: int = 0
     waiting_reason: str | None = None
+    waiting_label: ttk.Label | None = None
 
 
 class ProgressManager:
@@ -90,6 +91,9 @@ class ProgressManager:
         self.progress_bars[job_name] = ProgressEntry(
             frame, label, bar, total_files, button
         )
+        self.progress_bars[job_name].waiting_label = ttk.Label(
+            frame, style="Small.TLabel"
+        )
         if on_cancel:
             self._cancel_callbacks[job_name] = on_cancel
         else:
@@ -119,8 +123,13 @@ class ProgressManager:
 
     def _render_progress(self, job_name: str, entry: ProgressEntry) -> None:
         if entry.waiting_reason:
-            entry.label.config(text=f"{job_name} · {entry.waiting_reason}")
+            entry.label.config(text=job_name)
+            entry.progress_bar.grid_remove()
+            entry.waiting_label.config(text=entry.waiting_reason)
+            entry.waiting_label.grid(row=0, column=1, sticky="w", padx=(0, 16))
         else:
+            entry.waiting_label.grid_remove()
+            entry.progress_bar.grid()
             phase = "konvertiert" if job_name.startswith("DNG: ") else "kopiert"
             entry.label.config(
                 text=f"{job_name} · {entry.current} / {entry.total} {phase}"
@@ -139,6 +148,7 @@ class ProgressManager:
         )
         entry.label.config(text=f"{job_name} · {translated.split(':', 1)[0]}")
         entry.progress_bar.grid_remove()
+        entry.waiting_label.grid_remove()
         self._cancel_callbacks.pop(job_name, None)
         entry.cancel_button.config(
             text="Ausblenden",

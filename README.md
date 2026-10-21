@@ -57,6 +57,47 @@ uv sync
 uv run python main.py
 ```
 
+## Vorrang für Analyse und Vorschau
+
+![Auftrag wartet zugunsten der Analyse und Vorschau](docs/screenshots/task-priority.png)
+
+Ordner-Scan, Dateizählung, Bildvorschau und die Zielprüfung neuer Imports haben
+automatisch Vorrang vor Kopieren und DNG-Konvertierung. Weitere Aufnahmetage
+lassen sich deshalb auch bei laufenden Aufträgen analysieren und als neue
+Imports einreihen. Es muss dafür keine Priorität pro Auftrag eingestellt werden.
+
+Während dieser interaktiven Arbeit warten neue Kopier-/Konvertieraufträge.
+Laufende Kopien geben zwischen Datenblöcken von 1 MiB nach, auch mitten in
+einer großen Datei. Danach werden sie automatisch fortgesetzt. Ein bereits
+laufender Adobe-Prozess beendet seine aktuelle Datei mit niedriger CPU-Priorität;
+die nächste Datei startet erst nach Ende der Analyse. Bereits an das Laufwerk
+übergebene Zugriffe lassen sich dabei nicht unterbrechen.
+
+Standardmäßig führen höchstens **ein Kopierauftrag und eine DNG-Konvertierung**
+gleichzeitig aus. Weitere Aufträge warten je Kategorie in Eingangsreihenfolge
+und lassen sich auch im Wartezustand abbrechen. Die Auftragsleiste zeigt
+**Analyse/Vorschau hat Vorrang** oder **Wartet auf freien Ausführungsplatz**.
+Beim Abbruch einer Kopie wird ihre unvollständige Zieldatei entfernt; fertige
+Kopien und Quelldateien bleiben erhalten.
+
+Unter Windows laufen die Python-Kopier-/Konvertierthreads im
+[Windows-Hintergrundmodus](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadpriority).
+Adobe startet mit `IDLE_PRIORITY_CLASS`. Die Priorität des GUI-Prozesses und
+seiner Analyse-/Vorschau-Threads wird nicht abgesenkt. Auf anderen Plattformen
+bleiben die Warteschlange und die kooperativen Pausen wirksam.
+
+Zentrale Vorgaben in `config/settings.py`:
+
+| Vorgabe | Standard |
+| --- | --- |
+| `BACKGROUND_COPY_JOBS` | 1 gleichzeitig ausführender Kopierauftrag |
+| `BACKGROUND_DNG_JOBS` | 1 gleichzeitig ausführender DNG-Auftrag |
+| `BACKGROUND_COPY_CHUNK_BYTES` | 1.048.576 Bytes |
+| `FOREGROUND_SETTLE_SECONDS` | 0,15 Sekunden Ruhe vor Wiederaufnahme |
+
+Die kurze Ruhezeit verhindert ständiges Anlaufen der Hintergrundaufträge
+zwischen Dateizählung und Bildvorschau oder beim schnellen Wechsel der Auswahl.
+
 ## NEF nach DNG konvertieren
 
 Rechts unter **Konvertierung** die Option **NEF zusätzlich als DNG** aktivieren.
@@ -73,10 +114,11 @@ Groß-/Kleinschreibung der NEF-Endung spielt keine Rolle. Bereits vorhandene
 DNG-Dateinamen werden übersprungen; RAW-Dateien bleiben erhalten.
 
 Jeder Ordner hat einen unabhängigen Hintergrundauftrag mit einem eigenen
-Adobe-Prozess für die gerade bearbeitete Datei. Verschiedene Ordner laufen
-parallel, Dateien innerhalb eines Ordners nacheinander. Unter Windows
-laufen die Adobe-Prozesse mit niedrigerer Priorität. Scan, Vorschau und neue
-Kopieraufträge bleiben bedienbar; CPU und Laufwerk werden weiterhin geteilt.
+Adobe-Prozess für die gerade bearbeitete Datei. Die gemeinsame Steuerung begrenzt
+gleichzeitig ausführende Ordner und gibt Analyse und Vorschau Vorrang; Dateien
+innerhalb eines Ordners werden nacheinander konvertiert. Unter Windows laufen
+die Adobe-Prozesse mit niedrigerer Priorität. Scan, Vorschau und neue
+Kopieraufträge bleiben bedienbar.
 Das Programm startet Adobe ohne Shell mit getrennten Pfadargumenten, sodass
 Leerzeichen und Sonderzeichen in Ordnernamen unterstützt werden.
 
