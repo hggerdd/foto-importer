@@ -6,6 +6,8 @@ stehen Dateisystem-Zeitstempel und Foto-Metadaten zur Verfügung.
 
 Die Sammlung unterstützt außerdem lokale Gesichtserkennung, Personen, Vorschläge,
 Referenzdatensätze und Familienbeziehungen unter **Gesichter & Personen**.
+Unter **Benennen** einen Namen direkt neben der Gesichtergruppe eingeben und
+Enter drücken; Ausreißer lassen sich abwählen. **Prüfen** verwendet denselben Ablauf.
 [Installation und Bedienung](docs/gesichtserkennung-umsetzung.md) ·
 [Modellgewichte und Lizenzen](models/README.md).
 

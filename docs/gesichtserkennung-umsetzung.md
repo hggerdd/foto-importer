@@ -6,21 +6,42 @@
 2. App mit `uv run python main.py` starten, Zielordner auswählen und den
    Sammlungsindex erfassen. Für sichere RAW/JPEG-Paarung und Aufnahmejahre
    **Metadaten ergänzen** ausführen; RAW-Vorschauen benötigen ExifTool.
-3. Unter **Sammlung · Metadaten → Gesichter & Personen** die Sammlung oder
-   einen Unterordner analysieren. Abbrechen ist möglich; erneut starten setzt
-   bei noch nicht abgeschlossenen bzw. geänderten Fotos fort.
-4. Unter **Unbekannte** eine Gruppe auswählen, einzelne Ausreißer abwählen,
-   eine Person anlegen oder auswählen und **Auswahl zuordnen** drücken.
-   Die Personenauswahl vervollständigt vorhandene Namen. IDs bleiben die Identität.
-5. Unter **Vorschläge** mit J/N/S bestätigen, ablehnen oder überspringen.
-   Eine Kachel anklicken setzt den Tastaturfokus. Ohne Auswahl bezieht sich
-   J/N auf die erste Kachel; S verschiebt diese ans Ende der aktuellen Seite.
-6. Unter **Person**, **Referenz**, **Validierung** und **Bitte prüfen** lassen
-   sich Zuordnungen, Ausreißer und Datensätze kontrollieren. **Alle Gesichter**
+3. Unter **Sammlung · Metadaten → Gesichter & Personen → Fotos analysieren**
+   die Sammlung untersuchen. Ordnerauswahl und Abbruch stehen unter
+   **Weitere Optionen**. Erneutes Starten setzt die Analyse fort.
+4. **Benennen** zeigt pro Gruppe genau eine Zeile: ähnliche Gesichter,
+   Anzahl und Aufnahmejahre links, das Namensfeld direkt rechts. Alle Gesichter
+   sind ausgewählt. Ausreißer durch Anklicken abwählen, Namen tippen und **Enter**
+   drücken. Bestehende Namen werden vorgeschlagen; Pfeil hoch/runter wählt einen
+   Vorschlag. Ein neuer Name legt die Person zusammen mit der Zuordnung an.
+   Ein zusätzlicher Dialog oder ein vorheriges Anlegen der Person entfällt.
+5. Nach der Zuordnung geht der Fokus zur nächsten Gruppe. **Tab / Umschalt+Tab**
+   wechselt zwischen Namen. **Rückgängig / Strg+Z** nimmt bis zu 20 Zuordnungen
+   der laufenden Sitzung zurück, einschließlich Ablehnungen und Fixierungen.
+   Andere Änderungen, eine neue Analyse oder ein Sammlungswechsel beenden diesen
+   Zuordnungsverlauf. Bei gleichnamigen Personen die richtige Person aus der Liste
+   wählen; die Identität bleibt intern ihre ID.
+6. Große Gruppen bleiben zusammen. **Weitere Bilder** blättert durch ihre
+   Gesichter; Auswahl und Namensentwurf bleiben erhalten. Der Zuordnungsbutton
+   nennt die Anzahl über die ganze Gruppe, einschließlich weiterer Bilder.
+   Abgewählte Gesichter werden für diesen Namen als Ablehnung gespeichert, damit
+   die automatische Erkennung sie nicht sofort wieder derselben Person zuordnet.
+7. **Prüfen** zeigt Vorschläge ebenfalls als Gruppen mit bereits ausgefülltem
+   Namen. Enter bestätigt die Gruppe. Falsche Gesichter abwählen oder den Namen
+   direkt korrigieren. Damit funktioniert die Prüfung mit derselben Bedienung.
+8. Unter **Weitere Optionen** sind Personenverwaltung, Referenz- und
+   Validierungsbilder, Ausreißerprüfung, Modelle, Datensatzexport und Kalibrierung
+   erreichbar. **Alle Gesichter**
    zeigt auch niedrige Qualität und ignorierte Gesichter. Eine ausdrückliche
    Zuordnung hebt das Ignorieren auf.
 
-![Gesichter-Ansicht mit gezeichneten Testgesichtern](screenshots/faces-workspace.png)
+![Gruppen benennen mit gezeichneten Testgesichtern](screenshots/face-group-naming.png)
+
+Pro Seite werden höchstens acht Gruppen und pro Gruppe acht Vorschauen geladen.
+Auch eine Gruppe mit mehr als 60 Gesichtern wird nicht zwischen Seiten zerteilt.
+Die Konstanten `FACE_GROUPS_PER_PAGE`, `FACE_GROUP_PREVIEWS`,
+`FACE_GROUP_THUMBNAIL_SIZE` und `FACE_NAMING_UNDO_LIMIT` stehen zentral in
+`config/settings.py`. Am Datenbankschema ändert dieser UI-Umbau nichts.
 
 **Person / Beziehungen** zeigt Attribute, Datensatzgrößen, abgedeckte Jahre,
 Foto-Dateien und abgeleitete Verwandtschaft. Eltern-/Kindbeziehungen werden
@@ -50,7 +71,7 @@ Nachtoptionen werden pro Sammlung gespeichert. **Modelle / Einstellungen** zeigt
 Lizenz, Installation und Größe. Geschwindigkeit ist als nicht gemessen markiert,
 solange kein eigener Messwert im Manifest vorliegt.
 
-Nach einem Modellwechsel **Sammlung analysieren** starten. Der Fortschritt zeigt
+Nach einem Modellwechsel **Fotos analysieren** starten. Der Fortschritt zeigt
 fertige und übersprungene Fotos. Ein Embedderwechsel ergänzt fehlende Vektoren;
 alte Vektoren bleiben erhalten. Ein Zurückwechseln verwendet den Cache.
 Während der Neuindizierung werden neue Zuordnungen erst nach dem Abschluss
@@ -105,13 +126,15 @@ Extern kopierte Backups liegen außerhalb der Verwaltung der App.
 
 ```powershell
 uv run python -m pytest
-uv run python scripts/preview_faces.py --output docs/screenshots/faces-workspace.png
+uv run python scripts/preview_faces.py --output docs/screenshots/face-group-naming.png
 ```
 
 Tests verwenden synthetische Bilder und deterministische Modelle; sie benötigen
 keine Downloads. Sie prüfen unter anderem Abbruch/Wiederaufnahme, Paarung,
 Modellwechsel, Ablehnungen, Konflikte, Alignment, alle acht EXIF-Orientierungen,
 RAW-Vorschauen, Referenzauswahl, Export, Löschung, Graph und echte Tk-Interaktionen.
+Die Gruppenbedienung wird zusätzlich mit 70 Gesichtern, Ausreißer-Ablehnung,
+Autovervollständigung, Enter, Tab, Seitenwechsel, Fokus und Rückgängig geprüft.
 Die beiden echten Modellkonsistenztests werden ohne private Referenzbilder
 übersprungen. Mit `$env:FACE_REFERENCE_DIR='D:/Testset'` werden auch diese Tests
 gegen die installierten Embedder ausgeführt.

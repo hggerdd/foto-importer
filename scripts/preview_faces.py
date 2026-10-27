@@ -29,31 +29,32 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="foto-face-preview-") as temporary:
         collection = Path(temporary) / "Sammlung"
         collection.mkdir()
-        for i in range(12):
+        for i in range(24):
             image = Image.new(
-                "RGB", (300, 300), ("#cadde8", "#e7d7c1", "#d3decb")[i // 4]
+                "RGB", (300, 300), ("#cadde8", "#e7d7c1", "#d3decb")[i // 8]
             )
             draw = ImageDraw.Draw(image)
             draw.ellipse(
-                (65, 35, 235, 225), fill=("#d5ac87", "#be906b", "#edc8a1")[i // 4]
+                (65, 35, 235, 225), fill=("#d5ac87", "#be906b", "#edc8a1")[i // 8]
             )
             draw.arc((65, 20, 235, 170), 180, 355, fill="#58483e", width=32)
             draw.ellipse((110, 110, 121, 122), fill="#3e4448")
             draw.ellipse((178, 110, 189, 122), fill="#3e4448")
             draw.arc((115, 125, 185, 185), 5, 175, fill="#7a5145", width=4)
             draw.ellipse(
-                (70, 225, 230, 380), fill=("#56899f", "#bc7b5f", "#7a9372")[i // 4]
+                (70, 225, 230, 380), fill=("#56899f", "#bc7b5f", "#7a9372")[i // 8]
             )
             image.save(collection / f"Aufnahme_{i + 1:03}.jpg")
         with CollectionIndex.open(collection) as index:
             index.quick_scan()
             service = FaceService(index)
             service.create_person({"name": "Anna", "birth_year": "1988"})
+            service.create_person({"name": "Otto", "birth_year": "2015"})
             for i, source in enumerate(
                 index.db.execute("SELECT * FROM files ORDER BY id").fetchall()
             ):
                 vector = np.zeros(128, dtype="<f4")
-                vector[i // 4] = 1
+                vector[i // 8] = 1
                 with index.db:
                     face = index.db.execute(
                         """INSERT INTO faces(photo_id,source_file_id,source_relpath,detector_id,
@@ -99,6 +100,11 @@ def main() -> None:
                     raise RuntimeError("Face workspace did not finish loading")
                 root.after(100, capture)
                 return
+            if controller.face_view.group_rows:
+                row = controller.face_view.group_rows[0]
+                row.name.set("Otto")
+                controller.window.focus_force()
+                controller.face_view.focus_group(row)
             root.after(400, save)
 
         def save():
