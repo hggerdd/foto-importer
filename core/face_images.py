@@ -1,9 +1,10 @@
 """Read oriented previews and crop faces without developing RAW files."""
+
 from __future__ import annotations
 
+import subprocess
 from io import BytesIO
 from pathlib import Path
-import subprocess
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -20,15 +21,23 @@ def safe_path(root: Path, relpath: str) -> Path:
     return path
 
 
-def load_image(path: Path, *, exiftool: str = "exiftool", orientation: int = 1,
-               max_edge: int = FACE_MAX_EDGE) -> Image.Image:
+def load_image(
+    path: Path,
+    *,
+    exiftool: str = "exiftool",
+    orientation: int = 1,
+    max_edge: int = FACE_MAX_EDGE,
+) -> Image.Image:
     """Extract embedded RAW JPEG, apply orientation once, close source handles."""
     if path.suffix.lower().lstrip(".") in RAW_EXTENSIONS:
         data = b""
         for tag in ("JpgFromRaw", "PreviewImage", "ThumbnailImage"):
             result = subprocess.run(
-                [exiftool, "-b", f"-{tag}", str(path)], capture_output=True,
-                timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                [exiftool, "-b", f"-{tag}", str(path)],
+                capture_output=True,
+                check=False,
+                timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if result.returncode == 0 and result.stdout.startswith(b"\xff\xd8"):
                 data = result.stdout
@@ -48,10 +57,21 @@ def load_image(path: Path, *, exiftool: str = "exiftool", orientation: int = 1,
 
 def crop_face(image: Image.Image, bbox, size: int = 256) -> Image.Image:
     """Crop a 1.6x square in the oriented source coordinate frame."""
-    x1, y1, x2, y2 = np.asarray(bbox) * [image.width, image.height, image.width, image.height]
+    x1, y1, x2, y2 = np.asarray(bbox) * [
+        image.width,
+        image.height,
+        image.width,
+        image.height,
+    ]
     side = max(x2 - x1, y2 - y1) * 1.6
     if side <= 0:
         raise ValueError("Ungültiger Gesichtsausschnitt")
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-    return image.crop((round(cx - side / 2), round(cy - side / 2),
-                       round(cx + side / 2), round(cy + side / 2))).resize((size, size))
+    return image.crop(
+        (
+            round(cx - side / 2),
+            round(cy - side / 2),
+            round(cx + side / 2),
+            round(cy + side / 2),
+        )
+    ).resize((size, size))

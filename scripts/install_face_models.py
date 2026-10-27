@@ -1,13 +1,14 @@
 """Explicitly install trusted model artifacts; inference itself stays offline."""
+
 from __future__ import annotations
 
 import argparse
 import hashlib
-from pathlib import Path
 import sys
 import tempfile
 import urllib.request
 import zipfile
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.settings import FACE_MODEL_DIR

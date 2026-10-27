@@ -1,4 +1,5 @@
 """Versioned face data in the collection DB; all writes use its writer lock."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,17 @@ import sqlite3
 
 def migrate(db: sqlite3.Connection) -> None:
     """Extend inventory v1 atomically without replacing its photos or file IDs."""
-    if db.execute("PRAGMA user_version").fetchone()[0] != 1:
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version == 2:
+        db.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE TABLE training_exclusions(face_id INTEGER, embedder_id TEXT,
+                PRIMARY KEY(face_id,embedder_id));
+            PRAGMA user_version=3;
+            COMMIT;
+        """)
+        return
+    if version != 1:
         return
     db.executescript("""
         BEGIN IMMEDIATE;
@@ -46,10 +57,12 @@ def migrate(db: sqlite3.Connection) -> None:
         PRAGMA user_version=2;
         COMMIT;
     """)
+    migrate(db)
 
 
 def settings(db: sqlite3.Connection) -> dict:
     from config.settings import FACE_DEFAULTS
+
     return dict(FACE_DEFAULTS) | {
         row[0]: json.loads(row[1]) for row in db.execute("SELECT * FROM face_settings")
     }
@@ -57,5 +70,7 @@ def settings(db: sqlite3.Connection) -> dict:
 
 def save_settings(db: sqlite3.Connection, values: dict) -> None:
     """Persist validated service settings inside the caller's transaction."""
-    db.executemany("INSERT OR REPLACE INTO face_settings VALUES(?,?)",
-                   [(key, json.dumps(value)) for key, value in values.items()])
+    db.executemany(
+        "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
+        [(key, json.dumps(value)) for key, value in values.items()],
+    )

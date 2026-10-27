@@ -4,6 +4,11 @@ Tkinter-Anwendung zum Gruppieren von Kamera-Dateien nach Datum, mit
 Bildvorschau und Kopieren in Unterordner je Dateiendung. Als Datumsquelle
 stehen Dateisystem-Zeitstempel und Foto-Metadaten zur Verfügung.
 
+Die Sammlung unterstützt außerdem lokale Gesichtserkennung, Personen, Vorschläge,
+Referenzdatensätze und Familienbeziehungen unter **Gesichter & Personen**.
+[Installation und Bedienung](docs/gesichtserkennung-umsetzung.md) ·
+[Modellgewichte und Lizenzen](models/README.md).
+
 ![Import-Arbeitsfläche mit vollständiger Galerie und Zielvorschau](docs/screenshots/lazy-gallery.png)
 
 ## Import-Arbeitsfläche

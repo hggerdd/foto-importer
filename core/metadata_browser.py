@@ -203,6 +203,21 @@ def load_metadata_detail(root: Path, photo_id: int) -> dict | None:
             (path for row, path in paths if row["file_id"] == selected["file_id"]), None
         )
         selected["image"] = image
+        selected["people"] = []
+        if index.db.execute("PRAGMA user_version").fetchone()[0] >= 2:
+            selected["people"] = [
+                dict(r)
+                for r in index.db.execute(
+                    """
+                SELECT DISTINCT f.person_id,coalesce(a.value,'Person #' || f.person_id) AS name,
+                    f.assignment FROM faces f LEFT JOIN person_attrs a
+                    ON a.person_id=f.person_id AND a.key='name'
+                WHERE f.photo_id=? AND f.person_id IS NOT NULL AND f.ignored=0
+                  AND (f.retained=0 OR f.assignment='user') ORDER BY name
+            """,
+                    (photo_id,),
+                )
+            ]
         return selected
 
 

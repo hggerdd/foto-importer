@@ -11,12 +11,16 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from core.collection_index import CollectionIndex
 from ui.dispatcher import UiDispatcher
 from ui.metadata_view import MetadataView
+from ui.face_controller import FaceController
+from ui.face_view import FaceView
 
 
 class CollectionController:
     """Keep SQLite and filesystem work outside Tk's event loop."""
 
-    def __init__(self, root: tk.Misc, settings, target, on_import_status=None) -> None:
+    def __init__(
+        self, root: tk.Misc, settings, target, on_import_status=None, scheduler=None
+    ) -> None:
         self.root = root
         self.settings = settings
         self.target = target
@@ -27,6 +31,9 @@ class CollectionController:
         self.window = None
         self.report = None
         self.metadata_view = None
+        self.face_controller = FaceController(root, target, scheduler)
+        self.face_view = None
+        self._face_night_date = None
         self.last_result = None
         self.last_root = None
         self._closed = False
@@ -50,6 +57,16 @@ class CollectionController:
 
     def _night_tick(self) -> None:
         date = datetime.now()
+        if (
+            date.hour == 3
+            and self._face_night_date != date.date()
+            and not self.busy
+            and not self.settings.get("collection_auto_metadata", False)
+        ):
+            root = self.target()
+            if root and (root / ".myfotomanager").exists():
+                self._face_night_date = date.date()
+                self.face_controller.automatic(root, nightly=True)
         if (
             date.hour == 3
             and self._night_date != date.date()
@@ -86,6 +103,8 @@ class CollectionController:
             self.notebook, self.target, lambda: self.run("enrich_metadata")
         )
         self.notebook.add(self.metadata_view, text="  Metadaten  ")
+        self.face_view = FaceView(self.notebook, self.face_controller)
+        self.notebook.add(self.face_view, text="  Gesichter & Personen  ")
         self.notebook.select(self.metadata_view)
         self.notebook.bind("<<NotebookTabChanged>>", self._tab_changed)
         self.status_var = tk.StringVar(value="Zielordner auswählen und Status laden.")
@@ -138,6 +157,8 @@ class CollectionController:
         self.refresh()
 
     def _tab_changed(self, event=None) -> None:
+        if self.face_view and self.notebook.select() == str(self.face_view):
+            self.face_view.reload()
         if (
             self.metadata_view
             and not self.metadata_view._closed
@@ -147,6 +168,7 @@ class CollectionController:
 
     def target_changed(self) -> None:
         """Refresh an open collection browser after choosing another destination."""
+        self.face_controller.target_changed()
         if self.window and self.window.winfo_exists():
             self.collection_path_var.set(str(self.target() or "Zielordner auswählen"))
             self.metadata_view.page = 0
@@ -318,6 +340,15 @@ class CollectionController:
                     for item in items
                 )
             self._show("\n".join(lines))
+            if kind == "quick_scan" and result.status == "done":
+                self.face_controller.automatic(root, scope)
+            elif (
+                kind == "enrich_metadata"
+                and datetime.now().hour == 3
+                and result.status == "done"
+            ):
+                self._face_night_date = datetime.now().date()
+                self.face_controller.automatic(root, nightly=True)
             if self.window and self.window.winfo_exists():
                 self.progress_var.set(state)
             if result.status == "needs_confirmation" and messagebox.askyesno(
@@ -512,6 +543,7 @@ class CollectionController:
 
     def close(self) -> None:
         self._closed = True
+        self.face_controller.close()
         self.cancel.set()
         self.root.after_cancel(self._night_timer)
         self.root.after_cancel(self._offer_timer)

@@ -1,4 +1,5 @@
 """Settings management for camera organizer."""
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,9 @@ FACE_DEFAULTS = {
     "auto_import": False,
     "nightly": False,
 }
-DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
+DNG_CONVERTER_PATH = (
+    r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
+)
 DNG_DOWNLOAD_URL = "https://adobe.com/go/dng_converter_win/"
 DNG_UPDATE_TIMEOUT_SECONDS = 5
 
@@ -53,7 +56,7 @@ class Settings:
         """Load settings from file."""
         if self.config_path.exists():
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except (json.JSONDecodeError, OSError):
                 return self._get_defaults()
@@ -62,18 +65,18 @@ class Settings:
     def _get_defaults(self) -> dict[str, Any]:
         """Get default settings."""
         return {
-            'last_source_folder': '',
-            'last_target_folder': '',
-            'window_geometry': '1500x980',
-            'date_source': 'filesystem',
-            'convert_to_dng': False,
-            'dng_converter_path': DNG_CONVERTER_PATH,
+            "last_source_folder": "",
+            "last_target_folder": "",
+            "window_geometry": "1500x980",
+            "date_source": "filesystem",
+            "convert_to_dng": False,
+            "dng_converter_path": DNG_CONVERTER_PATH,
         }
 
     def save(self) -> None:
         """Save settings to file."""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=2)
         except OSError as e:
             print(f"Failed to save settings: {e}")
@@ -103,39 +106,39 @@ class Settings:
     @property
     def last_source_folder(self) -> str:
         """Get last used source folder."""
-        return self.get('last_source_folder', '')
+        return self.get("last_source_folder", "")
 
     @last_source_folder.setter
     def last_source_folder(self, value: str) -> None:
         """Set last used source folder."""
-        self.set('last_source_folder', value)
+        self.set("last_source_folder", value)
 
     @property
     def last_target_folder(self) -> str:
         """Get last used target folder."""
-        return self.get('last_target_folder', '')
+        return self.get("last_target_folder", "")
 
     @last_target_folder.setter
     def last_target_folder(self, value: str) -> None:
         """Set last used target folder."""
-        self.set('last_target_folder', value)
+        self.set("last_target_folder", value)
 
     @property
     def window_geometry(self) -> str:
         """Get window geometry."""
-        return self.get('window_geometry', '1200x800')
+        return self.get("window_geometry", "1200x800")
 
     @window_geometry.setter
     def window_geometry(self, value: str) -> None:
         """Set window geometry."""
-        self.set('window_geometry', value)
+        self.set("window_geometry", value)
 
     @property
     def date_source(self) -> str:
         """Get preferred date source."""
-        return self.get('date_source', 'filesystem')
+        return self.get("date_source", "filesystem")
 
     @date_source.setter
     def date_source(self, value: str) -> None:
         """Set preferred date source."""
-        self.set('date_source', value)
+        self.set("date_source", value)

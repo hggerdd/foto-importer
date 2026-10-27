@@ -110,7 +110,7 @@ class CollectionIndex:
                 ):
                     self.db.execute("PRAGMA " + pragma)
                 self._schema()
-            if self.db.execute("PRAGMA user_version").fetchone()[0] not in (1, 2):
+            if self.db.execute("PRAGMA user_version").fetchone()[0] not in (1, 2, 3):
                 raise ValueError("Nicht unterstützte Index-Version")
             self.settings = {
                 row[0]: json.loads(row[1])
@@ -124,8 +124,9 @@ class CollectionIndex:
 
     def _schema(self) -> None:
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version == 1:
+        if version in (1, 2):
             from core.face_store import migrate
+
             migrate(self.db)
             return
         if version != 0:
@@ -169,6 +170,7 @@ class CollectionIndex:
         )
         self.db.commit()
         from core.face_store import migrate
+
         migrate(self.db)
 
     def _indexes(self) -> None:
@@ -875,8 +877,12 @@ class CollectionIndex:
                 "UPDATE files SET photo_id=? WHERE photo_id=?", (winner, loser)
             )
             if self.db.execute("PRAGMA user_version").fetchone()[0] >= 2:
-                self.db.execute("UPDATE faces SET photo_id=? WHERE photo_id=?", (winner, loser))
-                self.db.execute("DELETE FROM face_jobs WHERE photo_id IN (?,?)", (winner, loser))
+                self.db.execute(
+                    "UPDATE faces SET photo_id=? WHERE photo_id=?", (winner, loser)
+                )
+                self.db.execute(
+                    "DELETE FROM face_jobs WHERE photo_id IN (?,?)", (winner, loser)
+                )
             # Keep the old anchor for future modules, with an explicit merge log.
             self.db.execute("UPDATE photos SET status='missing' WHERE id=?", (loser,))
             self.db.execute(

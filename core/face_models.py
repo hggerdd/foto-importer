@@ -1,12 +1,13 @@
 """Manifest-driven CPU detectors and embedders. Never download at inference time."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import cv2
@@ -57,10 +58,17 @@ def normalize(vectors: np.ndarray) -> np.ndarray:
 
 def align_face(rgb: np.ndarray, landmarks: np.ndarray, spec: InputSpec) -> np.ndarray:
     """Least-squares five-point similarity fit; output remains RGB."""
-    template = np.array(spec.template or (
-        (38.2946, 51.6963), (73.5318, 51.5014), (56.0252, 71.7366),
-        (41.5493, 92.3655), (70.7299, 92.2041),
-    ), dtype=np.float64)
+    template = np.array(
+        spec.template
+        or (
+            (38.2946, 51.6963),
+            (73.5318, 51.5014),
+            (56.0252, 71.7366),
+            (41.5493, 92.3655),
+            (70.7299, 92.2041),
+        ),
+        dtype=np.float64,
+    )
     if not spec.template:
         if spec.align != "arcface_5pt":
             raise ValueError("Alignment benötigt ein explizites 5-Punkt-Template")
@@ -70,8 +78,12 @@ def align_face(rgb: np.ndarray, landmarks: np.ndarray, spec: InputSpec) -> np.nd
         raise ValueError("Fünf gültige Landmarks erforderlich")
     # x'=a*x-b*y+tx; y'=b*x+a*y+ty; no reflection or random RANSAC.
     design = np.zeros((10, 4))
-    design[0::2] = np.column_stack((points[:, 0], -points[:, 1], np.ones(5), np.zeros(5)))
-    design[1::2] = np.column_stack((points[:, 1], points[:, 0], np.zeros(5), np.ones(5)))
+    design[0::2] = np.column_stack(
+        (points[:, 0], -points[:, 1], np.ones(5), np.zeros(5))
+    )
+    design[1::2] = np.column_stack(
+        (points[:, 1], points[:, 0], np.zeros(5), np.ones(5))
+    )
     params, _, rank, _ = np.linalg.lstsq(design, template.ravel(), rcond=None)
     if rank < 4:
         raise ValueError("Degenerierte Landmarks")
@@ -105,7 +117,16 @@ class ModelRegistry:
                 self.errors.append(f"{path.name}: {exc}")
 
     def _validate(self, model: dict) -> None:
-        for key in ("id", "version", "kind", "runtime", "file", "sha256", "license", "source_url"):
+        for key in (
+            "id",
+            "version",
+            "kind",
+            "runtime",
+            "file",
+            "sha256",
+            "license",
+            "source_url",
+        ):
             if not isinstance(model[key], str) or not model[key]:
                 raise ValueError(f"Ungültiges Feld: {key}")
         if not re.fullmatch(r"[a-zA-Z0-9_.-]+", model["id"]):
@@ -117,8 +138,18 @@ class ModelRegistry:
         if model["runtime"] not in ("onnxruntime", "opencv_yunet", "opencv_sface"):
             raise ValueError("Nicht unterstützte Runtime")
         self.path(model)
-        spec = InputSpec(**(model.get("input", {}) | {"size": tuple(model.get("input", {}).get("size", [112, 112]))}))
-        if spec.color not in ("RGB", "BGR") or spec.std <= 0 or min(spec.size) <= 0:
+        spec = InputSpec(
+            **(
+                model.get("input", {})
+                | {"size": tuple(model.get("input", {}).get("size", [112, 112]))}
+            )
+        )
+        if (
+            spec.color not in ("RGB", "BGR")
+            or spec.std <= 0
+            or min(spec.size) <= 0
+            or not np.isfinite([spec.mean, spec.std]).all()
+        ):
             raise ValueError("Ungültige Eingabespezifikation")
         if spec.template and np.asarray(spec.template).shape != (5, 2):
             raise ValueError("Alignment-Template muss 5x2 sein")
@@ -140,10 +171,17 @@ class ModelRegistry:
         return f"{model_id}@{model['version']}:{model['sha256']}"
 
     def list_models(self) -> list[dict]:
-        return [model | {"installed": self.path(model).is_file(),
-                         "size": self.path(model).stat().st_size if self.path(model).is_file() else model.get("size"),
-                         "speed": model.get("speed", "nicht gemessen")}
-                for model in self.models.values()]
+        return [
+            model
+            | {
+                "installed": self.path(model).is_file(),
+                "size": self.path(model).stat().st_size
+                if self.path(model).is_file()
+                else model.get("size"),
+                "speed": model.get("speed", "nicht gemessen"),
+            }
+            for model in self.models.values()
+        ]
 
     def verify(self, model_id: str) -> Path:
         model = self.models[model_id]
@@ -166,7 +204,11 @@ class ModelRegistry:
             elif model["runtime"] == "opencv_sface":
                 adapter = SFace(model, path)
             else:
-                adapter = OnnxDetector(model, path) if model["kind"] == "detector" else OnnxEmbedder(model, path)
+                adapter = (
+                    OnnxDetector(model, path)
+                    if model["kind"] == "detector"
+                    else OnnxEmbedder(model, path)
+                )
             self._loaded[key] = adapter
         return self._loaded[key]
 
@@ -188,10 +230,18 @@ class YuNet(Adapter):
     def detect(self, img_rgb: np.ndarray) -> list[Detection]:
         self.net.setInputSize((img_rgb.shape[1], img_rgb.shape[0]))
         _, rows = self.net.detect(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))
-        return [] if rows is None else [
-            Detection(np.array((r[0], r[1], r[0] + r[2], r[1] + r[3])),
-                      float(r[14]), r[4:14].reshape(5, 2).copy()) for r in rows
-        ]
+        return (
+            []
+            if rows is None
+            else [
+                Detection(
+                    np.array((r[0], r[1], r[0] + r[2], r[1] + r[3])),
+                    float(r[14]),
+                    r[4:14].reshape(5, 2).copy(),
+                )
+                for r in rows
+            ]
+        )
 
 
 class SFace(Adapter):
@@ -201,9 +251,14 @@ class SFace(Adapter):
 
     def embed(self, aligned_faces: np.ndarray) -> np.ndarray:
         # OpenCV owns SFace normalization; the manifest specifies channel order.
-        rows = [self.net.feature(np.ascontiguousarray(
-            face[..., ::-1] if self.input_spec.color == "BGR" else face
-        )).reshape(-1) for face in aligned_faces]
+        rows = [
+            self.net.feature(
+                np.ascontiguousarray(
+                    face[..., ::-1] if self.input_spec.color == "BGR" else face
+                )
+            ).reshape(-1)
+            for face in aligned_faces
+        ]
         return normalize(np.array(rows))
 
 
@@ -211,11 +266,13 @@ class OnnxAdapter(Adapter):
     def __init__(self, model: dict, path: Path) -> None:
         super().__init__(model, path)
         import onnxruntime as ort
+
         options = ort.SessionOptions()
         options.intra_op_num_threads = os.cpu_count() or 1
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        self.net = ort.InferenceSession(str(path), sess_options=options,
-                                        providers=["CPUExecutionProvider"])
+        self.net = ort.InferenceSession(
+            str(path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
         self.input = self.net.get_inputs()[0]
 
 
@@ -226,10 +283,12 @@ class OnnxEmbedder(OnnxAdapter):
         batch = fixed if isinstance(fixed, int) and fixed > 0 else len(tensor)
         rows = []
         for start in range(0, len(tensor), batch):
-            part = tensor[start:start + batch]
+            part = tensor[start : start + batch]
             count = len(part)
             if count < batch:
-                part = np.concatenate((part, np.repeat(part[-1:], batch - count, axis=0)))
+                part = np.concatenate(
+                    (part, np.repeat(part[-1:], batch - count, axis=0))
+                )
             rows.append(self.net.run(None, {self.input.name: part})[0][:count])
         result = normalize(np.concatenate(rows).reshape(len(tensor), -1))
         if result.shape[1] != self.dim:
@@ -243,10 +302,14 @@ class OnnxDetector(OnnxAdapter):
     def detect(self, img_rgb: np.ndarray) -> list[Detection]:
         width, height = self.model.get("input", {}).get("size", [640, 640])
         ratio = min(width / img_rgb.shape[1], height / img_rgb.shape[0])
-        resized = cv2.resize(img_rgb, (round(img_rgb.shape[1] * ratio), round(img_rgb.shape[0] * ratio)))
+        resized = cv2.resize(
+            img_rgb, (round(img_rgb.shape[1] * ratio), round(img_rgb.shape[0] * ratio))
+        )
         padded = np.zeros((height, width, 3), np.uint8)
-        padded[:resized.shape[0], :resized.shape[1]] = resized
-        outputs = self.net.run(None, {self.input.name: prepare_input(padded[None], self.input_spec)})
+        padded[: resized.shape[0], : resized.shape[1]] = resized
+        outputs = self.net.run(
+            None, {self.input.name: prepare_input(padded[None], self.input_spec)}
+        )
         levels = 3 if len(outputs) == 9 else 5 if len(outputs) == 15 else 0
         if not levels:
             raise ValueError("SCRFD benötigt 9 oder 15 Ausgaben inklusive Landmarks")
@@ -255,15 +318,33 @@ class OnnxDetector(OnnxAdapter):
             scores = outputs[i].reshape(-1)
             boxes = outputs[i + levels].reshape(-1, 4) * stride
             marks = outputs[i + 2 * levels].reshape(-1, 5, 2) * stride
-            grid = np.stack(np.meshgrid(np.arange(width // stride), np.arange(height // stride)), axis=-1).reshape(-1, 2) * stride
+            grid = (
+                np.stack(
+                    np.meshgrid(
+                        np.arange(width // stride), np.arange(height // stride)
+                    ),
+                    axis=-1,
+                ).reshape(-1, 2)
+                * stride
+            )
             anchors = len(scores) // len(grid)
             centers = np.repeat(grid, anchors, axis=0)
             for j in np.flatnonzero(scores >= 0.5):
                 center, box = centers[j], boxes[j]
                 bbox = np.r_[center - box[:2], center + box[2:]] / ratio
-                detections.append(Detection(bbox, float(scores[j]), (marks[j] + center) / ratio))
+                detections.append(
+                    Detection(bbox, float(scores[j]), (marks[j] + center) / ratio)
+                )
         if not detections:
             return []
-        boxes = [[float(d.bbox[0]), float(d.bbox[1]), float(d.bbox[2] - d.bbox[0]), float(d.bbox[3] - d.bbox[1])] for d in detections]
+        boxes = [
+            [
+                float(d.bbox[0]),
+                float(d.bbox[1]),
+                float(d.bbox[2] - d.bbox[0]),
+                float(d.bbox[3] - d.bbox[1]),
+            ]
+            for d in detections
+        ]
         keep = cv2.dnn.NMSBoxes(boxes, [d.score for d in detections], 0.5, 0.4)
         return [detections[int(i)] for i in np.asarray(keep).ravel()]

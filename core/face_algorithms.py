@@ -1,4 +1,5 @@
 """Model-isolated matching, conservative clustering and balanced references."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,24 +22,49 @@ class NumpySearch:
         return queries @ self.references.T
 
 
-def match_photo(queries: np.ndarray, references: np.ndarray, people: list[int],
-                rejections: list[set[int]], occupied: set[int], auto: float,
-                suggest: float, eligible: list[bool], forbidden=None, priors=None) -> list[tuple]:
+def match_photo(
+    queries: np.ndarray,
+    references: np.ndarray,
+    people: list[int],
+    rejections: list[set[int]],
+    occupied: set[int],
+    auto: float,
+    suggest: float,
+    eligible: list[bool],
+    forbidden=None,
+    priors=None,
+) -> list[tuple]:
     """Optimize top-three person scores jointly, with an unknown slot per face."""
     result = [(None, None, None)] * len(queries)
     if not len(queries) or not len(references):
         return result
     similarities = NumpySearch(references).similarities(queries)
-    ids = sorted(set(people) - occupied)
+    all_ids, inverse, counts = np.unique(
+        people, return_inverse=True, return_counts=True
+    )
+    available = np.flatnonzero(~np.isin(all_ids, list(occupied)))
+    ids = all_ids[available].tolist()
     scores = np.full((len(queries), len(ids) + len(queries)), suggest - 1e-6)
+    ends = np.cumsum(counts) - 1
+    # Sort scores within person groups once per query, then gather the last
+    # three. Avoid an O(persons * references) boolean scan for every person.
+    for row, similarities_row in enumerate(similarities):
+        ordered = similarities_row[np.lexsort((similarities_row, inverse))]
+        totals = ordered[ends].copy()
+        for k in (1, 2):
+            totals += np.where(counts > k, ordered[np.maximum(0, ends - k)], 0)
+        scores[row, : len(ids)] = (totals / np.minimum(counts, 3))[available]
     for col, person in enumerate(ids):
-        subset = similarities[:, np.array(people) == person]
-        top = np.partition(subset, max(0, subset.shape[1] - 3), axis=1)[:, -3:]
-        scores[:, col] = top.mean(axis=1)
         for row in range(len(queries)):
             if priors and suggest - 0.03 <= scores[row, col] < auto:
-                scores[row, col] = min(auto - 1e-6, scores[row, col] + priors.get(person, 0))
-            if not eligible[row] or person in rejections[row] or (forbidden and person in forbidden[row]):
+                scores[row, col] = min(
+                    auto - 1e-6, scores[row, col] + priors.get(person, 0)
+                )
+            if (
+                not eligible[row]
+                or person in rejections[row]
+                or (forbidden and person in forbidden[row])
+            ):
                 scores[row, col] = -2
     rows, cols = linear_sum_assignment(scores, maximize=True)
     for row, col in zip(rows, cols):
@@ -59,7 +85,10 @@ def cluster_unknown(rows: list[dict], threshold: float = 0.6) -> list[list[int]]
         for group in clusters:
             if any(item["photo_id"] == row["photo_id"] for item in group):
                 continue
-            if min(float(row["vector"] @ item["vector"]) for item in group) >= threshold:
+            if (
+                min(float(row["vector"] @ item["vector"]) for item in group)
+                >= threshold
+            ):
                 group.append(row)
                 break
         else:
@@ -83,9 +112,14 @@ def _time(value: str | None) -> datetime | None:
         return None
 
 
-def select_references(rows: list[dict], limit: int = 100, duplicate: float = 0.92,
-                      validation_fraction: float = 0.2, seed: int = 42,
-                      outlier_threshold: float = 0.2) -> ReferenceSelection:
+def select_references(
+    rows: list[dict],
+    limit: int = 100,
+    duplicate: float = 0.92,
+    validation_fraction: float = 0.2,
+    seed: int = 42,
+    outlier_threshold: float = 0.2,
+) -> ReferenceSelection:
     """Deterministic quality-aware FPS, year quotas, pins and day-separated validation."""
     rows = sorted(rows, key=lambda r: r["id"])
     if not rows:
@@ -98,24 +132,38 @@ def select_references(rows: list[dict], limit: int = 100, duplicate: float = 0.9
     medoid_scores = vectors @ vectors[medoid]
     nearest = np.full(len(rows), -1.0)
     for start in range(0, len(rows), 128):
-        block = vectors[start:start + 128] @ vectors.T
+        block = vectors[start : start + 128] @ vectors.T
         for offset in range(len(block)):
             block[offset, start + offset] = -1
         k = min(3, max(1, len(rows) - 1))
-        nearest[start:start + len(block)] = np.sort(block, axis=1)[:, -k:].mean(axis=1)
+        nearest[start : start + len(block)] = np.partition(block, -k, axis=1)[
+            :, -k:
+        ].mean(axis=1)
     pins = [i for i, r in enumerate(rows) if r.get("pinned")]
     if len(pins) > limit:
         raise ValueError("Mehr fixierte Gesichter als das Referenzlimit")
-    outliers = [i for i in range(len(rows)) if len(rows) >= 4 and
-                medoid_scores[i] < outlier_threshold and nearest[i] < outlier_threshold and i not in pins]
+    outliers = [
+        i
+        for i in range(len(rows))
+        if len(rows) >= 4
+        and medoid_scores[i] < outlier_threshold
+        and nearest[i] < outlier_threshold
+        and i not in pins
+    ]
     times = [_time(r.get("captured_at")) for r in rows]
     keep = list(pins)
-    for i in sorted(range(len(rows)), key=lambda i: (-rows[i]["quality"], rows[i]["id"])):
+    for i in sorted(
+        range(len(rows)), key=lambda i: (-rows[i]["quality"], rows[i]["id"])
+    ):
         if i in pins or i in outliers:
             continue
-        if any(float(vectors[i] @ vectors[j]) > duplicate or (
-            times[i] and times[j] and abs((times[i] - times[j]).total_seconds()) < 2
-        ) for j in keep):
+        if any(
+            float(vectors[i] @ vectors[j]) > duplicate
+            or (
+                times[i] and times[j] and abs((times[i] - times[j]).total_seconds()) < 2
+            )
+            for j in keep
+        ):
             continue
         keep.append(i)
     chosen = list(pins)
@@ -128,10 +176,13 @@ def select_references(rows: list[dict], limit: int = 100, duplicate: float = 0.9
     def pick(candidates):
         if not chosen:
             return max(candidates, key=lambda i: (medoid_scores[i], -rows[i]["id"]))
-        return max(candidates, key=lambda i: (
-            distances[i] * (0.5 + 0.5 * rows[i]["quality"]),
-            -rows[i]["id"],
-        ))
+        return max(
+            candidates,
+            key=lambda i: (
+                distances[i] * (0.5 + 0.5 * rows[i]["quality"]),
+                -rows[i]["id"],
+            ),
+        )
 
     def add(i):
         chosen.append(i)
@@ -140,13 +191,21 @@ def select_references(rows: list[dict], limit: int = 100, duplicate: float = 0.9
     # Round-robin years prevents earlier buckets consuming all available slots.
     for _ in range(quota):
         for year in years:
-            options = [i for i in keep if i not in chosen and (times[i].year if times[i] else 0) == year]
+            options = [
+                i
+                for i in keep
+                if i not in chosen and (times[i].year if times[i] else 0) == year
+            ]
             if options and len(chosen) < limit:
                 add(pick(options))
     while len(chosen) < min(limit, len(keep)):
         add(pick([i for i in keep if i not in chosen]))
     # Never withhold every example of a person; need at least one reference.
-    count = min(max(2, round(len(chosen) * validation_fraction)), len(chosen) - 1) if len(chosen) >= 3 else 0
+    count = (
+        min(max(2, round(len(chosen) * validation_fraction)), len(chosen) - 1)
+        if len(chosen) >= 3 and validation_fraction > 0
+        else 0
+    )
     rng = np.random.default_rng(seed)
     order = list(rng.permutation(chosen))
     val, days = [], set()
@@ -156,6 +215,9 @@ def select_references(rows: list[dict], limit: int = 100, duplicate: float = 0.9
             val.append(i)
             days.add(day)
     # If dates cannot be separated, still produce a reproducible validation set.
-    val += [i for i in order if i not in val][:count - len(val)]
-    return ReferenceSelection([rows[i]["id"] for i in chosen if i not in val],
-                              [rows[i]["id"] for i in val], [rows[i]["id"] for i in outliers])
+    val += [i for i in order if i not in val][: count - len(val)]
+    return ReferenceSelection(
+        [rows[i]["id"] for i in chosen if i not in val],
+        [rows[i]["id"] for i in val],
+        [rows[i]["id"] for i in outliers],
+    )

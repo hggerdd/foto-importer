@@ -617,6 +617,19 @@ class MetadataView(ttk.Frame):
             dict.fromkeys(item["ext"].upper() for item in detail["variants"])
         )
         self.selection_var.set(f"1 Foto ausgewählt · {variants}")
+        if detail.get("people"):
+            names = ", ".join(
+                p["name"]
+                + (
+                    " (Vorschlag)"
+                    if p["assignment"] == "suggested"
+                    else " (automatisch)"
+                    if p["assignment"] == "auto"
+                    else ""
+                )
+                for p in detail["people"]
+            )
+            self.selection_var.set(f"1 Foto ausgewählt · {variants} · {names}")
         extras = [
             ("Hersteller", detail.get("make")),
             ("Seriennummer", detail.get("serial")),

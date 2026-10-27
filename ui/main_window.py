@@ -85,11 +85,15 @@ class MainWindow:
         self.scan_progress = self.layout.scan_progress
         self.progress_manager = self.layout.progress_manager
         self.collection_controller = CollectionController(
-            self.root, self.settings, lambda: self.target_folder,
+            self.root,
+            self.settings,
+            lambda: self.target_folder,
             self._on_import_status,
+            scheduler=self.task_scheduler,
         )
         ttk.Button(
-            self.layout, text="Sammlung · Metadaten",
+            self.layout,
+            text="Sammlung · Metadaten",
             command=self.collection_controller.open_window,
         ).grid(row=3, column=0, sticky="w", pady=(6, 0))
 
@@ -232,12 +236,19 @@ class MainWindow:
             return
         revision = self._source_revision
         target = self.target_folder
-        files = [path for paths in self.file_manager.files_by_date.values() for path in paths]
+        files = [
+            path for paths in self.file_manager.files_by_date.values() for path in paths
+        ]
         if files:
             self.collection_controller.inspect_import(
-                target, files,
-                lambda statuses: self._on_import_status(statuses)
-                if revision == self._source_revision and target == self.target_folder else None,
+                target,
+                files,
+                lambda statuses: (
+                    self._on_import_status(statuses)
+                    if revision == self._source_revision
+                    and target == self.target_folder
+                    else None
+                ),
             )
 
     def _on_scan_error(self, error_msg: str) -> None:
@@ -439,10 +450,15 @@ class MainWindow:
             ):
                 return
             self.collection_controller.check_import(
-                target_folder, files,
-                lambda filtered: self._start_copy(
-                    custom_name, pending_groups, target_folder, converter, filtered
-                ) if revision == self._source_revision else None,
+                target_folder,
+                files,
+                lambda filtered: (
+                    self._start_copy(
+                        custom_name, pending_groups, target_folder, converter, filtered
+                    )
+                    if revision == self._source_revision
+                    else None
+                ),
             )
 
         self.import_preflight.check(target_path, converter, pending_groups, checked)
@@ -513,8 +529,13 @@ class MainWindow:
         if converter is not None:
             self.progress_manager.remove_progress_bar(job_name)
             self.dng_controller.start_job(
-                job_name, folder, converter, self._on_dng_status,
-                on_complete=lambda: self.collection_controller.after_copy(folder.parent, folder),
+                job_name,
+                folder,
+                converter,
+                self._on_dng_status,
+                on_complete=lambda: self.collection_controller.after_copy(
+                    folder.parent, folder
+                ),
             )
             self.progress_manager.set_target(f"DNG: {job_name}", folder)
 
@@ -563,7 +584,11 @@ class MainWindow:
 
     def _on_import_status(self, statuses) -> None:
         """Annotate each source day and dim fully imported days."""
-        imported = {item.card_path for item in statuses if item.status in ("imported", "imported_likely")}
+        imported = {
+            item.card_path
+            for item in statuses
+            if item.status in ("imported", "imported_likely")
+        }
         counts = {
             day: sum(path in imported for path in paths)
             for day, paths in self.file_manager.files_by_date.items()
