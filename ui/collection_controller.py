@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from core.collection_index import CollectionIndex
 from ui.dispatcher import UiDispatcher
+from ui.metadata_view import MetadataView
 
 
 class CollectionController:
@@ -25,6 +26,7 @@ class CollectionController:
         self.busy = False
         self.window = None
         self.report = None
+        self.metadata_view = None
         self.last_result = None
         self.last_root = None
         self._closed = False
@@ -64,10 +66,28 @@ class CollectionController:
             self.window.lift()
             return
         self.window = tk.Toplevel(self.root)
-        self.window.title("Sammlung · Index")
-        self.window.geometry("900x650")
-        pane = ttk.Frame(self.window, padding=16)
-        pane.pack(fill="both", expand=True)
+        self.window.title("Sammlung · Foto-Importer")
+        self.window.geometry("1450x950")
+        self.window.minsize(1120, 780)
+        header = ttk.Frame(self.window, padding=(24, 16))
+        header.pack(fill="x")
+        ttk.Label(header, text="Sammlung", style="Title.TLabel").pack(anchor="w")
+        self.collection_path_var = tk.StringVar(
+            value=str(self.target() or "Zielordner auswählen")
+        )
+        ttk.Label(
+            header, textvariable=self.collection_path_var, style="Muted.TLabel"
+        ).pack(anchor="w", pady=(4, 0))
+        self.notebook = ttk.Notebook(self.window)
+        self.notebook.pack(fill="both", expand=True)
+        pane = ttk.Frame(self.notebook, padding=16)
+        self.notebook.add(pane, text="  Index  ")
+        self.metadata_view = MetadataView(
+            self.notebook, self.target, lambda: self.run("enrich_metadata")
+        )
+        self.notebook.add(self.metadata_view, text="  Metadaten  ")
+        self.notebook.select(self.metadata_view)
+        self.notebook.bind("<<NotebookTabChanged>>", self._tab_changed)
         self.status_var = tk.StringVar(value="Zielordner auswählen und Status laden.")
         ttk.Label(pane, textvariable=self.status_var, wraplength=850).pack(anchor="w")
         buttons = ttk.Frame(pane)
@@ -117,6 +137,23 @@ class CollectionController:
         self.report.pack(fill="both", expand=True)
         self.refresh()
 
+    def _tab_changed(self, event=None) -> None:
+        if (
+            self.metadata_view
+            and not self.metadata_view._closed
+            and self.notebook.select() == str(self.metadata_view)
+        ):
+            self.metadata_view.reload()
+
+    def target_changed(self) -> None:
+        """Refresh an open collection browser after choosing another destination."""
+        if self.window and self.window.winfo_exists():
+            self.collection_path_var.set(str(self.target() or "Zielordner auswählen"))
+            self.metadata_view.page = 0
+            self.metadata_view.camera.set("Alle Kameras")
+            self.metadata_view.year.set("Alle Jahre")
+            self.metadata_view.reload()
+
     def _show(self, text: str) -> None:
         if self.window and self.window.winfo_exists():
             self.report.configure(state="normal")
@@ -164,6 +201,8 @@ class CollectionController:
             )
         if callback:
             callback(result)
+        if self.metadata_view and not self.metadata_view._closed:
+            self.metadata_view.reload()
 
     def _error(self, error: str) -> None:
         self.busy = False
@@ -477,3 +516,5 @@ class CollectionController:
         self.root.after_cancel(self._night_timer)
         self.root.after_cancel(self._offer_timer)
         self.dispatcher.close()
+        if self.metadata_view:
+            self.metadata_view.close()

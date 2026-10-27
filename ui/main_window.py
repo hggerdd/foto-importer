@@ -89,7 +89,7 @@ class MainWindow:
             self._on_import_status,
         )
         ttk.Button(
-            self.layout, text="Sammlung · Index",
+            self.layout, text="Sammlung · Metadaten",
             command=self.collection_controller.open_window,
         ).grid(row=3, column=0, sticky="w", pady=(6, 0))
 
@@ -166,6 +166,7 @@ class MainWindow:
         self.settings.last_target_folder = str(folder_path)
         self._update_execute_button_state()
         self.collection_controller.offer_index()
+        self.collection_controller.target_changed()
         self._check_source_imports()
 
     def _on_date_source_changed(self) -> None:

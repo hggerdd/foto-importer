@@ -38,6 +38,7 @@ def main() -> None:
             root, Settings(str(Path(temporary) / "settings.json")), lambda: collection
         )
         controller.open_window()
+        controller.notebook.select(0)
 
         def scan():
             if controller.busy:
