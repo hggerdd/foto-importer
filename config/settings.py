@@ -22,6 +22,10 @@ FACE_MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
 FACE_MAX_EDGE = 1600
 FACE_BATCH_SIZE = 32
 FACE_MIN_QUALITY = 0.5
+FACE_GROUPS_PER_PAGE = 8
+FACE_GROUP_PREVIEWS = 8
+FACE_GROUP_THUMBNAIL_SIZE = 104
+FACE_NAMING_UNDO_LIMIT = 20
 FACE_DEFAULTS = {
     "active_detector": "yunet",
     "active_embedder": "sface",

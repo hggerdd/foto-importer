@@ -1,4 +1,4 @@
-"""Face review workspace: models, clusters, suggestions, people and references."""
+"""Advanced face tools alongside the group-first naming workspace."""
 
 from __future__ import annotations
 
@@ -6,287 +6,15 @@ import json
 import tkinter as tk
 import warnings
 from pathlib import Path
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 
 import numpy as np
-from PIL import ImageTk
 
-from core.face_dataset import calibrate, export_dataset
+from ui.face_workspace import FaceWorkspace
 from ui.scroll_frame import ScrollFrame
 
 
-class FaceView(ttk.Frame):
-    def __init__(self, parent, controller) -> None:
-        super().__init__(parent, padding=12)
-        self.controller = controller
-        controller.view = self
-        self.page = 0
-        self.snapshot = {}
-        self.images = []
-        self.selected = {}
-        self.cards = []
-        self.status = tk.StringVar(
-            value="Lokal auf der CPU · Modelle separat installieren (models/README.md)."
-        )
-        self.mode = tk.StringVar(value="Unbekannte")
-        self.person = tk.StringVar()
-        self.people = {}
-        top = ttk.Frame(self)
-        top.pack(fill="x")
-        for text, command in (
-            ("Sammlung analysieren", lambda: controller.run("scan")),
-            ("Ordner analysieren …", self.scan_folder),
-            ("Abbrechen", controller.cancel.set),
-            ("Aktualisieren", self.reload),
-            ("Modelle / Einstellungen …", self.configure_models),
-        ):
-            ttk.Button(top, text=text, command=command).pack(side="left", padx=3)
-        ttk.Label(self, textvariable=self.status, wraplength=1250).pack(
-            fill="x", pady=8
-        )
-        filters = ttk.Frame(self)
-        filters.pack(fill="x")
-        combo = ttk.Combobox(
-            filters,
-            textvariable=self.mode,
-            state="readonly",
-            width=18,
-            values=(
-                "Unbekannte",
-                "Vorschläge",
-                "Person",
-                "Referenz",
-                "Validierung",
-                "Bitte prüfen",
-                "Alle Gesichter",
-            ),
-        )
-        combo.pack(side="left")
-        combo.bind("<<ComboboxSelected>>", lambda _: self.reload(reset=True))
-        self.person_combo = ttk.Combobox(filters, textvariable=self.person, width=30)
-        self.person_combo.pack(side="left", padx=6)
-        self.person_combo.bind(
-            "<<ComboboxSelected>>", lambda _: self.reload(reset=True)
-        )
-        self.person_combo.bind("<KeyRelease>", self.autocomplete)
-        ttk.Button(filters, text="Neue Person …", command=self.new_person).pack(
-            side="left"
-        )
-        ttk.Button(
-            filters, text="Person / Beziehungen …", command=self.person_details
-        ).pack(side="left", padx=6)
-        ttk.Button(filters, text="←", command=lambda: self.turn_page(-1)).pack(
-            side="right"
-        )
-        ttk.Button(filters, text="→", command=lambda: self.turn_page(1)).pack(
-            side="right"
-        )
-        self.surface = ScrollFrame(self)
-        self.surface.pack(fill="both", expand=True, pady=10)
-        self.surface.canvas.bind("<Configure>", self._reflow, add="+")
-        actions = ttk.Frame(self)
-        actions.pack(fill="x")
-        for number, (text, command) in enumerate(
-            (
-                ("Auswahl zuordnen", self.assign),
-                ("Ja / bestätigen (J)", lambda: self.face_action("confirm")),
-                ("Nein / ablehnen (N)", lambda: self.face_action("reject")),
-                ("Überspringen (S)", self.skip),
-                ("Ignorieren", lambda: self.face_action("ignore")),
-                ("Fixieren", lambda: self.face_action("pin")),
-                ("Fixierung lösen", lambda: self.face_action("unpin")),
-                (
-                    "Aus Datensatz entfernen",
-                    lambda: self.face_action("exclude_training"),
-                ),
-            )
-        ):
-            ttk.Button(actions, text=text, command=command).grid(
-                row=number // 4, column=number % 4, sticky="ew", padx=2, pady=2
-            )
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", pady=(8, 0))
-        for text, command in (
-            (
-                "Datensatz neu aufbauen",
-                lambda: controller.run(
-                    lambda s: (s.rebuild_training(), s.rematch())[0]
-                ),
-            ),
-            ("Datensatz exportieren", lambda: controller.run(export_dataset)),
-            ("Kalibrierung …", lambda: controller.run(calibrate)),
-            ("Alle Gesichtsdaten löschen …", self.delete_all),
-        ):
-            ttk.Button(bottom, text=text, command=command).pack(side="left", padx=3)
-        for key, command in (
-            ("j", lambda: self.face_action("confirm")),
-            ("n", lambda: self.face_action("reject")),
-            ("s", self.skip),
-        ):
-            self.bind(key, lambda event, callback=command: callback())
-
-    def selected_person(self) -> int | None:
-        return self.people.get(self.person.get())
-
-    def autocomplete(self, event=None) -> None:
-        query = self.person.get().casefold()
-        self.person_combo.configure(
-            values=[name for name in self.people if query in name.casefold()]
-        )
-
-    def clear(self) -> None:
-        for child in self.surface.content.winfo_children():
-            child.destroy()
-        self.images.clear()
-        self.cards.clear()
-        self.selected.clear()
-        self.snapshot = {}
-        self.people = {}
-        self.person.set("")
-        self.page = 0
-
-    def reload(self, reset=False) -> None:
-        if reset:
-            self.page = 0
-        self.controller.run()
-
-    def render(self, snapshot) -> None:
-        self.snapshot = snapshot
-        self.page = snapshot["page"]
-        self.people = {
-            f"{p['attrs'].get('name', 'Unbenannt')} · #{p['id']}": p["id"]
-            for p in snapshot["persons"]
-        }
-        self.person_combo.configure(values=list(self.people))
-        for child in self.surface.content.winfo_children():
-            child.destroy()
-        self.images, self.selected = [], {}
-        self.cards = []
-        self._group_selection = []
-        cluster_map = {
-            face: i + 1 for i, group in enumerate(snapshot["groups"]) for face in group
-        }
-        people = {
-            p["id"]: p["attrs"].get("name", f"#{p['id']}") for p in snapshot["persons"]
-        }
-        pins = {r["face_id"] for r in snapshot["dataset"] if r["pinned"]}
-        for position, face in enumerate(snapshot["rows"]):
-            frame = ttk.Frame(self.surface.content, padding=8, relief="solid")
-            self.cards.append(frame)
-            frame.grid(
-                row=position // 6, column=position % 6, sticky="nsew", padx=3, pady=3
-            )
-            variable = tk.BooleanVar()
-            self.selected[face["id"]] = variable
-            if face.get("image"):
-                photo = ImageTk.PhotoImage(face["image"], master=self)
-                self.images.append(photo)
-                label = ttk.Label(frame, image=photo)
-            else:
-                label = ttk.Label(frame, text="Vorschau fehlt", width=16)
-            label.pack()
-            label.bind(
-                "<Button-1>",
-                lambda _, v=variable: (v.set(not v.get()), self.focus_set()),
-            )
-            group = cluster_map.get(face["id"])
-            title = (
-                f"Gruppe {group}"
-                if group
-                else people.get(face["person_id"], "Unbekannt")
-            )
-            ttk.Checkbutton(
-                frame, text=f"{title} · #{face['id']}", variable=variable
-            ).pack(anchor="w")
-            info = f"Qualität {face['quality']:.2f}"
-            if face["assignment"]:
-                info += f" · {face['assignment']}"
-            if face["retained"]:
-                info += " · beibehalten"
-            if face["id"] in pins:
-                info += " · fixiert"
-            ttk.Label(frame, text=info, wraplength=170).pack(anchor="w")
-            ttk.Label(frame, text=face["relpath"], wraplength=170).pack(anchor="w")
-            if group:
-                ttk.Button(
-                    frame,
-                    text="Gruppe auswählen",
-                    command=lambda g=group: self.select_group(g, cluster_map),
-                ).pack()
-        stats = snapshot["status"]
-        self.status.set(
-            f"{stats['faces']} Gesichter · {stats['persons']} Personen · {snapshot['total']} Treffer · Seite {self.page + 1} · "
-            "Gesicht anklicken, Gruppe auswählen oder Vorschläge mit J / N / S prüfen."
-        )
-        self.surface.bind_wheel()
-        self._reflow()
-
-    def _reflow(self, event=None) -> None:
-        columns = max(1, min(6, self.surface.canvas.winfo_width() // 200))
-        for position, card in enumerate(self.cards):
-            card.grid_configure(row=position // columns, column=position % columns)
-
-    def select_group(self, group, mapping) -> None:
-        # Include the complete group even when its members cross a page boundary.
-        self._group_selection = [
-            face
-            for face, value in mapping.items()
-            if value == group and face not in self.selected
-        ]
-        for face, variable in self.selected.items():
-            variable.set(mapping.get(face) == group)
-        self.focus_set()
-
-    def ids(self) -> list[int]:
-        visible = [face for face, variable in self.selected.items() if variable.get()]
-        group = getattr(self, "_group_selection", [])
-        return sorted(set(group + visible))
-
-    def assign(self) -> None:
-        ids, person = self.ids(), self.selected_person()
-        if ids and person:
-            self.controller.run(lambda s: s.assign(ids, person))
-        else:
-            self.status.set(
-                "Bitte Gesichter und eine bestehende Person auswählen oder eine Person anlegen."
-            )
-
-    def face_action(self, action) -> None:
-        ids = self.ids() or [r["id"] for r in self.snapshot.get("rows", [])[:1]]
-        if not ids:
-            return
-
-        def operation(service):
-            for face in ids:
-                if action == "unpin":
-                    service.pin(face, False)
-                else:
-                    getattr(service, action)(face)
-
-        self.controller.run(operation)
-
-    def skip(self) -> None:
-        rows = self.snapshot.get("rows", [])
-        if rows:
-            self.snapshot = self.snapshot | {"rows": rows[1:] + rows[:1]}
-            self.render(self.snapshot)
-        self.focus_set()
-
-    def turn_page(self, delta) -> None:
-        self.page = max(0, self.page + delta)
-        self.reload()
-
-    def new_person(self) -> None:
-        name = simpledialog.askstring(
-            "Person anlegen",
-            "Name (optional, Identität ist die Personen-ID):",
-            parent=self,
-        )
-        if name is not None:
-            self.controller.run(
-                lambda s: {"person_id": s.create_person({"name": name})}
-            )
-
+class FaceView(FaceWorkspace, ttk.Frame):
     def scan_folder(self) -> None:
         from tkinter import filedialog
 
@@ -532,6 +260,14 @@ class FaceView(ttk.Frame):
         surface.bind_wheel()
 
     def show_result(self, result) -> None:
+        if isinstance(result, dict) and "named_count" in result:
+            self.status.set(
+                f"{result['named_count']} Fotos als „{result['name']}“ zugeordnet. Weiter mit der nächsten Gruppe."
+            )
+            return
+        if isinstance(result, dict) and "undone" in result:
+            self.status.set("Letzte Zuordnung rückgängig gemacht.")
+            return
         if isinstance(result, dict) and result.get("warnings"):
             self.status.set(" · ".join(result["warnings"]))
             return

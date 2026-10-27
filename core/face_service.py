@@ -846,41 +846,47 @@ class FaceService:
         self.graph._person(person)
         face_ids = sorted(set(face_ids))
         with self.db:
-            photos = set()
-            for face_id in face_ids:
-                row = self.db.execute(
-                    "SELECT * FROM faces WHERE id=?", (face_id,)
-                ).fetchone()
-                if not row:
-                    raise ValueError("Gesicht fehlt")
-                if (
-                    row["photo_id"] in photos
-                    or self.db.execute(
-                        "SELECT 1 FROM faces WHERE photo_id=? AND person_id=? AND assignment='user' AND id!=? AND ignored=0",
-                        (row["photo_id"], person, face_id),
-                    ).fetchone()
-                ):
-                    raise ValueError("Person ist auf diesem Foto bereits zugeordnet")
-                photos.add(row["photo_id"])
-                if row["person_id"] and row["person_id"] != person:
-                    self.db.execute(
-                        "INSERT OR IGNORE INTO face_rejections VALUES(?,?)",
-                        (face_id, row["person_id"]),
-                    )
-                self.db.execute(
-                    "DELETE FROM training_set WHERE face_id=? AND person_id!=?",
-                    (face_id, person),
-                )
-                self.db.execute(
-                    "DELETE FROM face_rejections WHERE face_id=? AND person_id=?",
-                    (face_id, person),
-                )
-                self.db.execute(
-                    "UPDATE faces SET person_id=?,assignment='user',ignored=0,confidence=1,assigned_at=? WHERE id=?",
-                    (person, timestamp(), face_id),
-                )
+            self._assign_faces(face_ids, person)
         self.rebuild_training()
         self.rematch()
+
+    def _assign_faces(self, face_ids: list[int], person: int) -> None:
+        """Apply explicit labels inside the caller's transaction."""
+        self.graph._person(person)
+        face_ids = sorted(set(face_ids))
+        photos = set()
+        for face_id in face_ids:
+            row = self.db.execute(
+                "SELECT * FROM faces WHERE id=?", (face_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("Gesicht fehlt")
+            if (
+                row["photo_id"] in photos
+                or self.db.execute(
+                    "SELECT 1 FROM faces WHERE photo_id=? AND person_id=? AND assignment='user' AND id!=? AND ignored=0",
+                    (row["photo_id"], person, face_id),
+                ).fetchone()
+            ):
+                raise ValueError("Person ist auf diesem Foto bereits zugeordnet")
+            photos.add(row["photo_id"])
+            if row["person_id"] and row["person_id"] != person:
+                self.db.execute(
+                    "INSERT OR IGNORE INTO face_rejections VALUES(?,?)",
+                    (face_id, row["person_id"]),
+                )
+            self.db.execute(
+                "DELETE FROM training_set WHERE face_id=? AND person_id!=?",
+                (face_id, person),
+            )
+            self.db.execute(
+                "DELETE FROM face_rejections WHERE face_id=? AND person_id=?",
+                (face_id, person),
+            )
+            self.db.execute(
+                "UPDATE faces SET person_id=?,assignment='user',ignored=0,confidence=1,assigned_at=? WHERE id=?",
+                (person, timestamp(), face_id),
+            )
 
     def confirm(self, face: int) -> None:
         row = self.db.execute(

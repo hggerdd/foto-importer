@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
-from config.settings import FACE_MODEL_DIR
+from config.settings import (
+    FACE_GROUP_PREVIEWS,
+    FACE_GROUP_THUMBNAIL_SIZE,
+    FACE_GROUPS_PER_PAGE,
+    FACE_MODEL_DIR,
+    FACE_NAMING_UNDO_LIMIT,
+)
 from core.collection_index import CollectionIndex
 from core.face_models import ModelRegistry
+from core.face_naming import assign_name, undo_name
 from core.face_service import FaceService
 from core.face_store import settings
 from core.task_scheduler import background_thread
@@ -28,16 +35,55 @@ class FaceController:
         self.registry = None
         self._refresh_pending = False
         self._cache = OrderedDict()
+        self._undo = deque(maxlen=FACE_NAMING_UNDO_LIMIT)
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo) and not self.busy
+
+    def assign_group(
+        self,
+        face_ids: list[int],
+        name: str,
+        person_id: int | None = None,
+        excluded_ids: list[int] | None = None,
+    ) -> bool:
+        def operation(service):
+            change = assign_name(service, face_ids, name, person_id, excluded_ids)
+            return {
+                "naming_change": change,
+                "named_count": len(face_ids),
+                "name": change.name,
+            }
+
+        return self.run(operation, naming=True)
+
+    def undo_naming(self) -> None:
+        if not self._undo or self.busy:
+            return
+        change = self._undo[-1]
+
+        def operation(service):
+            undo_name(service, change)
+            return {"undone": change}
+
+        self.run(operation, naming=True)
 
     def _status(self, message: str) -> None:
         if self.view and self.view.winfo_exists():
             self.view.status.set(message)
 
     def run(
-        self, action=None, *, root: Path | None = None, scope: str = "", refresh=True
-    ) -> None:
+        self,
+        action=None,
+        *,
+        root: Path | None = None,
+        scope: str = "",
+        refresh=True,
+        naming=False,
+    ) -> bool:
         if self.closed:
-            return
+            return False
         if self.busy:
             if action is None:
                 self._refresh_pending = True
@@ -45,17 +91,21 @@ class FaceController:
                 self._status(
                     "Gesichtsauftrag läuft. Bitte Abschluss abwarten oder abbrechen."
                 )
-            return
+            return False
         root = root or self.target()
         if not root or not (root / ".myfotomanager").exists():
             self._status("Bitte zuerst die Sammlung im Index erfassen.")
-            return
+            return False
         self.busy = True
         self.cancel.clear()
         revision = self.revision
-        mode = self.view.mode.get() if self.view else "Unbekannte"
-        person = self.view.selected_person() if self.view else None
-        page = self.view.page if self.view else 0
+        view = self.view if self.view and self.view.winfo_exists() else None
+        mode = view.mode.get() if view else "Unbekannte"
+        person = view.selected_person() if view else None
+        page = view.page if view else 0
+        offsets = dict(view.preview_offsets) if view else {}
+        if action is not None and not naming:
+            self._undo.clear()
         self._status("Gesichtsdaten werden geladen …")
 
         def worker():
@@ -81,7 +131,7 @@ class FaceController:
                         elif callable(action):
                             result = action(service)
                         snapshot = (
-                            self._snapshot(service, mode, person, page)
+                            self._snapshot(service, mode, person, page, offsets)
                             if refresh
                             else None
                         )
@@ -90,8 +140,10 @@ class FaceController:
                 self.dispatcher.post(self._error, revision, str(exc))
 
         threading.Thread(target=worker, name="FaceService", daemon=True).start()
+        return True
 
-    def _snapshot(self, service, mode, person, page) -> dict:
+    def _snapshot(self, service, mode, person, page, offsets=None) -> dict:
+        offsets = offsets or {}
         groups = []
         if mode == "Unbekannte":
             groups = service.clusters()
@@ -107,6 +159,10 @@ class FaceController:
             rows = service.face_rows(
                 "assignment IN ('suggested','auto') AND ignored=0 AND retained=0"
             )
+            by_person = {}
+            for row in rows:
+                by_person.setdefault(row["person_id"], []).append(row["id"])
+            groups = list(by_person.values())
         elif mode == "Bitte prüfen":
             rows = service.face_rows(
                 "f.id IN (SELECT face_id FROM face_review WHERE embedder_id=?)",
@@ -126,9 +182,29 @@ class FaceController:
         else:
             rows = service.face_rows("person_id=? AND ignored=0", (person or -1,))
         total = len(rows)
-        page = min(page, max(0, (total - 1) // 60))
-        rows = rows[page * 60 : (page + 1) * 60]
+        grouped = mode in ("Unbekannte", "Vorschläge")
+        if grouped:
+            pages = max(
+                1, (len(groups) + FACE_GROUPS_PER_PAGE - 1) // FACE_GROUPS_PER_PAGE
+            )
+            page = min(page, pages - 1)
+            groups = groups[
+                page * FACE_GROUPS_PER_PAGE : (page + 1) * FACE_GROUPS_PER_PAGE
+            ]
+            ids = {face for group in groups for face in group}
+            rows = [row for row in rows if row["id"] in ids]
+            preview_ids = set()
+            for group in groups:
+                start = max(0, min(offsets.get(group[0], 0), max(0, len(group) - 1)))
+                preview_ids.update(group[start : start + FACE_GROUP_PREVIEWS])
+        else:
+            pages = max(1, (total + 59) // 60)
+            page = min(page, pages - 1)
+            rows = rows[page * 60 : (page + 1) * 60]
+            preview_ids = {row["id"] for row in rows}
         for row in rows:
+            if row["id"] not in preview_ids:
+                continue
             if self.cancel.is_set():
                 break
             try:
@@ -143,7 +219,9 @@ class FaceController:
                     stat.st_ctime_ns,
                 )
                 if key not in self._cache:
-                    self._cache[key] = service.thumbnail(row["id"], 112)
+                    self._cache[key] = service.thumbnail(
+                        row["id"], FACE_GROUP_THUMBNAIL_SIZE
+                    )
                     while len(self._cache) > 256:
                         self._cache.popitem(last=False)
                 self._cache.move_to_end(key)
@@ -169,6 +247,12 @@ class FaceController:
             "status": service.status(),
             "page": page,
             "total": total,
+            "pages": pages,
+            "mode": mode,
+            "group_start": page * FACE_GROUPS_PER_PAGE,
+            "named_faces": service.db.execute(
+                "SELECT count(*) FROM faces WHERE person_id IS NOT NULL AND ignored=0 AND (retained=0 OR assignment='user')"
+            ).fetchone()[0],
             "dataset": dataset,
             "relations": service.graph.derived(active) if active else {},
             "photos": service.person_photos(active) if active else [],
@@ -179,10 +263,21 @@ class FaceController:
         if self.closed:
             return
         if revision != self.revision or root != self.target():
+            self._undo.clear()
             self.run()
             return
+        if isinstance(result, dict) and "naming_change" in result:
+            self._undo.append(result["naming_change"])
+        elif isinstance(result, dict) and "undone" in result:
+            self._undo.pop()
+            if self.view and self.view.winfo_exists():
+                self.view._focus_after_undo = {
+                    face["id"] for face in result["undone"].faces
+                }
         if self.view and self.view.winfo_exists():
-            if snapshot:
+            if snapshot and snapshot.get("mode") != self.view.mode.get():
+                self._refresh_pending = True
+            elif snapshot:
                 self.view.render(snapshot)
                 if snapshot["status"]["faces"] == 0:
                     self._cache.clear()
@@ -196,6 +291,11 @@ class FaceController:
         self.busy = False
         if revision == self.revision:
             self._status(error)
+            if self.view and self.view.winfo_exists():
+                self.view._pending_naming = False
+                self.view._focus_after_assign = None
+                for row in self.view.group_rows:
+                    row._selection_changed()
         elif not self.closed:
             self.run()
 
@@ -203,6 +303,7 @@ class FaceController:
         self.revision += 1
         self.cancel.set()
         self._cache.clear()
+        self._undo.clear()
         if self.view and self.view.winfo_exists():
             self.view.clear()
         if not self.busy and self.view and self.view.winfo_exists():
