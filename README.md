@@ -241,3 +241,7 @@ Unter **Sammlung · Index** lässt sich der Zielordner erfassen, mit Kamera-Meta
 anreichern und auf Verschiebungen sowie Prüfsummenfehler prüfen. Bekannte Fotos
 werden beim Import standardmäßig übersprungen. Metadaten und Import-Prüfung
 benötigen ExifTool. Details: [Bedienung und Betriebshinweise](docs/collection-index.md).
+
+Die neue [Metadatenansicht](docs/metadata-visualization.md) zeigt Kennzahlen,
+Kamera- und ISO-Diagramme, eine filterbare Fotoliste und Bildvorschau mit EXIF-Daten.
+Über **Sammlung · Metadaten** öffnen; Scan-Funktionen bleiben im Reiter **Index**.

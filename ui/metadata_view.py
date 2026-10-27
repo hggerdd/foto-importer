@@ -6,9 +6,11 @@ import os
 import subprocess
 import sys
 import tkinter as tk
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from fractions import Fraction
+from pathlib import Path
 from tkinter import ttk
 
 from PIL import ImageTk
@@ -52,9 +54,9 @@ def exposure_text(value) -> str:
 class MetadataChart(tk.Canvas):
     """Draw small responsive camera bars and ISO bins without chart dependencies."""
 
-    def __init__(self, parent, *, histogram=False):
+    def __init__(self, parent: tk.Misc, *, histogram: bool = False) -> None:
         super().__init__(
-            parent, background=SURFACE, highlightthickness=0, height=205, width=240
+            parent, background=SURFACE, highlightthickness=0, height=175, width=240
         )
         self.histogram = histogram
         self.values = []
@@ -132,7 +134,12 @@ class MetadataChart(tk.Canvas):
 class MetadataView(ttk.Frame):
     """Query one page at a time, ignoring outdated filter and selection results."""
 
-    def __init__(self, parent, target, enrich) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        target: Callable[[], Path | None],
+        enrich: Callable[[], None],
+    ) -> None:
         super().__init__(parent, padding=14, style="Canvas.TFrame")
         self.target = target
         self._closed = False
@@ -154,6 +161,7 @@ class MetadataView(ttk.Frame):
         self.descending = True
         self.selected_detail = None
         self.preview_image = None
+        self._resize_timer = None
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         toolbar = ttk.Frame(self, padding=(10, 4, 10, 10))
@@ -290,7 +298,9 @@ class MetadataView(ttk.Frame):
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
         inspector = ScrollFrame(right)
+        self.inspector = inspector
         inspector.grid(row=0, column=0, sticky="nsew")
+        inspector.bind("<Configure>", self._preview_resized)
         details = inspector.content
         self.name_var = tk.StringVar(value="Foto auswählen")
         ttk.Label(
@@ -302,7 +312,8 @@ class MetadataView(ttk.Frame):
             anchor="center",
             background="#edf1f5",
         )
-        self.preview.pack(fill="x", ipady=25)
+        self.preview.pack(fill="x")
+        self.preview.bind("<Configure>", self._preview_resized)
         self.exposure_var = tk.StringVar(value="–     –     –     –")
         ttk.Label(
             details,
@@ -337,9 +348,12 @@ class MetadataView(ttk.Frame):
                     row=number, column=0, sticky="nw", padx=(0, 14), pady=3
                 )
                 variable = self.detail_vars[key] = tk.StringVar(value="–")
-                ttk.Label(group, textvariable=variable, wraplength=270).grid(
-                    row=number, column=1, sticky="w", pady=3
-                )
+                ttk.Label(
+                    group,
+                    textvariable=variable,
+                    wraplength=270,
+                    foreground=ACCENT if key == "rating" else TEXT,
+                ).grid(row=number, column=1, sticky="w", pady=3)
         ttk.Separator(details).pack(fill="x", pady=12)
         self.extra_button = ttk.Button(
             details,
@@ -490,6 +504,17 @@ class MetadataView(ttk.Frame):
     def _sort(self, key) -> None:
         self.descending = not self.descending if key == self.sort else False
         self.sort, self.page = key, 0
+        for column, label in (
+            ("name", "Datei"),
+            ("date", "Aufgenommen"),
+            ("camera", "Kamera"),
+            ("iso", "ISO"),
+        ):
+            self.tree.heading(
+                column,
+                text=label
+                + ((" ↓" if self.descending else " ↑") if column == key else ""),
+            )
         self.reload()
 
     def _page(self, direction) -> None:
@@ -549,10 +574,7 @@ class MetadataView(ttk.Frame):
         self.selected_detail = detail
         self.name_var.set(detail["name"])
         if detail["image"] is not None:
-            image = detail["image"].copy()
-            image.thumbnail((max(280, min(480, self.preview.winfo_width())), 265))
-            self.preview_image = ImageTk.PhotoImage(image, master=self)
-            self.preview.configure(image=self.preview_image, text="", padding=0)
+            self._render_preview()
         else:
             self.preview.configure(
                 image="", text="Für diese Datei ist keine Vorschau verfügbar."
@@ -575,8 +597,15 @@ class MetadataView(ttk.Frame):
             if detail.get("width") and detail.get("height")
             else "–"
         )
+        size = detail["size"]
         self.detail_vars["size"].set(
-            f"{detail['size'] / (1024 * 1024):.1f} MB".replace(".", ",")
+            (
+                f"{size / (1024 * 1024):.1f} MB"
+                if size >= 1024 * 1024
+                else f"{size / 1024:.1f} KB"
+                if size >= 1024
+                else f"{size} B"
+            ).replace(".", ",")
         )
         rating = detail.get("rating")
         self.detail_vars["rating"].set(
@@ -626,6 +655,30 @@ class MetadataView(ttk.Frame):
             text="▸ Weitere Metadaten" if visible else "▾ Weitere Metadaten"
         )
 
+    def _preview_resized(self, event=None) -> None:
+        if self._resize_timer:
+            self.after_cancel(self._resize_timer)
+        if not self._closed:
+            self._resize_timer = self.after(60, self._render_preview)
+
+    def _render_preview(self) -> None:
+        self._resize_timer = None
+        if (
+            self._closed
+            or not self.selected_detail
+            or self.selected_detail["image"] is None
+        ):
+            return
+        image = self.selected_detail["image"].copy()
+        image.thumbnail(
+            (
+                max(1, min(480, self.preview.winfo_width())),
+                max(140, min(245, self.inspector.winfo_height() - 440)),
+            )
+        )
+        self.preview_image = ImageTk.PhotoImage(image, master=self)
+        self.preview.configure(image=self.preview_image, text="", padding=0)
+
     def reveal(self) -> None:
         if not self.selected_detail or not self.selected_detail["path"]:
             return
@@ -644,6 +697,8 @@ class MetadataView(ttk.Frame):
         if self._closed:
             return
         self._closed = True
+        if self._resize_timer:
+            self.after_cancel(self._resize_timer)
         if self._debounce:
             self.after_cancel(self._debounce)
         self._query_pool.shutdown(wait=False, cancel_futures=True)
