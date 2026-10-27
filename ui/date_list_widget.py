@@ -21,6 +21,7 @@ class DateListWidget(ttk.Frame):
         self.on_selection_changed = on_selection_changed
         self._selected: set[str] = set()
         self._counts: dict[str, int] = {}
+        self._imported_counts: dict[str, int] = {}
         self._focused: str | None = None
         self._populate_id = None
         header = ttk.Frame(self)
@@ -48,6 +49,7 @@ class DateListWidget(ttk.Frame):
         self.tree.tag_configure(
             "month", foreground="#68717e", font=("Segoe UI", 9, "bold")
         )
+        self.tree.tag_configure("imported", foreground="#89919b")
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<space>", self._space)
         self.tree.bind("<<TreeviewSelect>>", self._focus_changed)
@@ -57,6 +59,7 @@ class DateListWidget(ttk.Frame):
     def populate(self, date_groups: dict[str, int]) -> None:
         """Replace rows while retaining checked days that still exist."""
         self._counts = date_groups
+        self._imported_counts = {}
         if self._populate_id:
             self.after_cancel(self._populate_id)
             self._populate_id = None
@@ -97,7 +100,16 @@ class DateListWidget(ttk.Frame):
         self._update_all_label()
 
     def _row_text(self, day: str) -> str:
-        return f"{'☑' if day in self._selected else '☐'}  {date_label(day)}"
+        text = f"{'☑' if day in self._selected else '☐'}  {date_label(day)}"
+        if day in self._imported_counts:
+            text += f" · {self._imported_counts[day]} von {self._counts[day]} importiert"
+        return text
+
+    def set_imported_counts(self, counts: dict[str, int]) -> None:
+        self._imported_counts = counts
+        for day in self._counts:
+            if self.tree.exists(day):
+                self.tree.item(day, text=self._row_text(day), tags=("imported",) if counts.get(day) == self._counts[day] else ())
 
     def _click(self, event) -> str | None:
         day = self.tree.identify_row(event.y)

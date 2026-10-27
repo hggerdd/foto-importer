@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from config.settings import Settings
 from core.copy_worker import CopyWorker
@@ -18,6 +18,7 @@ from ui.controllers import CopyJobController, SourceScanController
 from ui.dng_controller import DngController
 from ui.dng_update_controller import DngUpdateController
 from ui.layout import MainLayout
+from ui.collection_controller import CollectionController
 
 
 class MainWindow:
@@ -83,6 +84,14 @@ class MainWindow:
         self.status_label = self.layout.status_label
         self.scan_progress = self.layout.scan_progress
         self.progress_manager = self.layout.progress_manager
+        self.collection_controller = CollectionController(
+            self.root, self.settings, lambda: self.target_folder,
+            self._on_import_status,
+        )
+        ttk.Button(
+            self.layout, text="Sammlung · Index",
+            command=self.collection_controller.open_window,
+        ).grid(row=3, column=0, sticky="w", pady=(6, 0))
 
         # Controllers for background tasks
         self.selection_controller = SelectionController(self.root, self.task_scheduler)
@@ -156,6 +165,8 @@ class MainWindow:
         self.target_folder = folder_path
         self.settings.last_target_folder = str(folder_path)
         self._update_execute_button_state()
+        self.collection_controller.offer_index()
+        self._check_source_imports()
 
     def _on_date_source_changed(self) -> None:
         """Handle preferred date source changes."""
@@ -213,6 +224,20 @@ class MainWindow:
         )
         self.layout.preview_details.config(text="Links einen Aufnahmetag auswählen")
         self._update_execute_button_state()
+        self._check_source_imports()
+
+    def _check_source_imports(self) -> None:
+        if not self.target_folder:
+            return
+        revision = self._source_revision
+        target = self.target_folder
+        files = [path for paths in self.file_manager.files_by_date.values() for path in paths]
+        if files:
+            self.collection_controller.inspect_import(
+                target, files,
+                lambda statuses: self._on_import_status(statuses)
+                if revision == self._source_revision and target == self.target_folder else None,
+            )
 
     def _on_scan_error(self, error_msg: str) -> None:
         """Handle scan failure."""
@@ -412,8 +437,11 @@ class MainWindow:
                 "Dateien werden ergänzt; vorhandene Dateien bleiben erhalten.\nFortfahren?",
             ):
                 return
-            self._start_copy(
-                custom_name, pending_groups, target_folder, converter, files
+            self.collection_controller.check_import(
+                target_folder, files,
+                lambda filtered: self._start_copy(
+                    custom_name, pending_groups, target_folder, converter, filtered
+                ) if revision == self._source_revision else None,
             )
 
         self.import_preflight.check(target_path, converter, pending_groups, checked)
@@ -428,6 +456,7 @@ class MainWindow:
     ) -> None:
         """Start the captured import after background validation."""
         if not all_files:
+            self._set_status("Alle ausgewählten Dateien bereits importiert.")
             return
         target_path = target_folder / custom_name
         selected_dates = set(pending_groups)
@@ -479,10 +508,12 @@ class MainWindow:
     ) -> None:
         """Commit copy success before starting the optional conversion phase."""
         self._on_job_completed(job_name)
+        self.collection_controller.after_copy(folder.parent, folder)
         if converter is not None:
             self.progress_manager.remove_progress_bar(job_name)
             self.dng_controller.start_job(
-                job_name, folder, converter, self._on_dng_status
+                job_name, folder, converter, self._on_dng_status,
+                on_complete=lambda: self.collection_controller.after_copy(folder.parent, folder),
             )
             self.progress_manager.set_target(f"DNG: {job_name}", folder)
 
@@ -529,6 +560,15 @@ class MainWindow:
         """Update the status bar text."""
         self.status_label.config(text=message)
 
+    def _on_import_status(self, statuses) -> None:
+        """Annotate each source day and dim fully imported days."""
+        imported = {item.card_path for item in statuses if item.status in ("imported", "imported_likely")}
+        counts = {
+            day: sum(path in imported for path in paths)
+            for day, paths in self.file_manager.files_by_date.items()
+        }
+        self.date_list.set_imported_counts(counts)
+
     def _on_closing(self) -> None:
         """Handle window closing event."""
         # Save window geometry
@@ -542,4 +582,5 @@ class MainWindow:
         self.job_controller.close()
         self.dng_controller.close()
         self.dng_update_controller.close()
+        self.collection_controller.close()
         self.root.destroy()

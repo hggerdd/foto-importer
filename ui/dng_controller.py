@@ -37,6 +37,7 @@ class DngController:
         folder: Path,
         converter: Path,
         on_status: Callable[[str], None],
+        on_complete: Callable[[], None] | None = None,
     ) -> None:
         """Start converting a copied folder and queue all UI updates."""
         if self.is_active(name):
@@ -70,6 +71,7 @@ class DngController:
                 state,
                 message,
                 on_status,
+                on_complete,
             ),
         )
         self._jobs[name] = job
@@ -83,11 +85,14 @@ class DngController:
         state: JobState,
         message: str,
         on_status: Callable[[str], None],
+        on_complete: Callable[[], None] | None = None,
     ) -> None:
         self._jobs.pop(name, None)
         result = f"{state.value}: {message}"
         self._progress.finish_progress(row, result)
         on_status(f"DNG {name}: {result}")
+        if on_complete:
+            on_complete()
 
     def close(self) -> None:
         """Cancel child processes asynchronously and stop UI delivery."""
