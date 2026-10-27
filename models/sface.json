@@ -1,0 +1,11 @@
+{
+  "id": "sface", "name": "SFace (OpenCV)", "kind": "embedder", "version": "2021dec",
+  "runtime": "opencv_sface", "file": "weights/face_recognition_sface_2021dec.onnx",
+  "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+  "size": 38696353, "dim": 128, "metric": "cosine",
+  "input": {"size": [112,112], "color": "BGR", "mean": 0, "std": 1, "align": "arcface_5pt"},
+  "thresholds": {"auto": 0.6, "suggest": 0.363, "duplicate": 0.92},
+  "license": "Apache-2.0 (model directory license)",
+  "source_url": "https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface",
+  "download_url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+}

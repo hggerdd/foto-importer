@@ -17,6 +17,21 @@ METADATA_PAGE_SIZE = 200
 METADATA_SEARCH_DELAY_MS = 250
 METADATA_PREVIEW_SIZE = (480, 285)
 METADATA_PREVIEW_TIMEOUT_SECONDS = 10
+FACE_MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
+FACE_MAX_EDGE = 1600
+FACE_BATCH_SIZE = 32
+FACE_MIN_QUALITY = 0.5
+FACE_DEFAULTS = {
+    "active_detector": "yunet",
+    "active_embedder": "sface",
+    "min_score": 0.8,
+    "min_quality": FACE_MIN_QUALITY,
+    "reference_limit": 100,
+    "validation_fraction": 0.2,
+    "seed": 42,
+    "auto_import": False,
+    "nightly": False,
+}
 DNG_CONVERTER_PATH = r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe"
 DNG_DOWNLOAD_URL = "https://adobe.com/go/dng_converter_win/"
 DNG_UPDATE_TIMEOUT_SECONDS = 5
