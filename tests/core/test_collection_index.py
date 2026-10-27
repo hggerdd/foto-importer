@@ -228,11 +228,12 @@ def test_pending_likely_and_identity_collision(tmp_path, monkeypatch):
     root = tmp_path / "collection"
     root.mkdir()
     photo(root, "DSC_0001.nef", b"1")
-    card = photo(tmp_path, "card/DSC_0001.nef", b"2")
+    card = photo(tmp_path, "card/DSC_0001.nef", b"1")
     with CollectionIndex.open(root) as index:
         index.quick_scan()
         assert index.check_import([card])[0].status == "imported_likely"
         index.enrich_metadata()
+        card.write_bytes(b"2")
         assert index.check_import([card])[0].status == "new"
 
 

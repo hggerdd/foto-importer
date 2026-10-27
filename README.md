@@ -234,3 +234,10 @@ Die DNG-Tests verwenden echte, unabhängige Testprozesse anstelle von Adobe
 und prüfen Parallelität, Abbruch, Fehlerausgaben, vorhandene DNGs sowie
 Kopieren → Konvertieren mit echten Tkinter-Widgets. Eine Konvertierung
 echter NEF-Aufnahmen mit Adobe muss zusätzlich manuell geprüft werden.
+
+## Sammlungsindex
+
+Unter **Sammlung · Index** lässt sich der Zielordner erfassen, mit Kamera-Metadaten
+anreichern und auf Verschiebungen sowie Prüfsummenfehler prüfen. Bekannte Fotos
+werden beim Import standardmäßig übersprungen. Metadaten und Import-Prüfung
+benötigen ExifTool. Details: [Bedienung und Betriebshinweise](docs/collection-index.md).

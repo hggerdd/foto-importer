@@ -21,7 +21,7 @@ modified. `main.py` is unchanged.
 - **Fehlende bereinigen …** requires confirmation and removes missing file/EXIF
   records. Photo anchors, merge redirects, change history, and future user tables
   remain intact. Photo IDs use AUTOINCREMENT and are never reused.
-- **Optionen …** edits collection JSON: extensions, exclusion globs (relative
+- **Optionen …** edits collection preferences: extensions, exclusion globs (relative
   paths, case insensitive), independent export folders, extension folders used
   for RAW/JPEG pairing, and the ExifTool executable path.
 - Nightly metadata runs at local 03:00 when enabled and the application is running.
@@ -39,7 +39,9 @@ marking them. Missing records are retained until explicitly purged.
 When the collection has an index, source days show imported counts and fully
 imported days are dimmed. Import checks prefer camera identity over filename and
 size; known missing photos are eligible for reimport. Pending metadata can yield
-`imported_likely`, which is skipped by default alongside `imported`. Disable
+`imported_likely`, which is skipped by default alongside `imported`.
+Filename/size candidates are additionally checked against a quick content hash;
+different content is never skipped on that heuristic alone. Disable
 **Bereits importierte … überspringen** in the index window to copy those again.
 If ExifTool cannot run, import checking reports an error; configure it or choose a
 destination without an index. A completed import automatically scans only its
@@ -86,3 +88,14 @@ Run `uv run python benchmarks/collection_index.py --files 100000` for first/repe
 scan rates including photo pairing, change logging, indexes, and backup time.
 Dummy creation and cleanup are outside the scan timings. SSD, USB, and SMB targets
 must be measured independently; local results do not establish NAS throughput.
+
+On this Windows workspace, the generated 100,000-file collection completed the
+initial inventory in 6.02 s (16,624 files/s), and the unchanged scan in 4.05 s
+(24,673 files/s), including backup. The first-scan SSD target of 20,000 files/s
+has not been reached here; USB/NAS rates and the 50-files/s metadata target have
+not been validated. Windows IDs use batched
+[directory information queries](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_both_dir_info),
+with a temporary mapping for one directory, avoiding an extra file-open per
+entry. Unsupported filesystems fall back to `DirEntry.inode()`.
+
+![Collection index window](screenshots/collection-index.png)

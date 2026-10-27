@@ -9,6 +9,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import posixpath
 import socket
 import sqlite3
 import time
@@ -24,6 +25,7 @@ from pathlib import Path, PurePosixPath
 from blake3 import blake3
 
 from core.collection_metadata import identity_key, metadata_values, read_metadata
+from core.windows_file_ids import directory_file_ids
 
 
 EXTENSIONS = "nef nrw dng jpg jpeg heic tif tiff png mov mp4".split()
@@ -211,12 +213,22 @@ class CollectionIndex:
             )
 
     def _scope(self, scope: str) -> str:
-        scope = normalized(scope).strip("/")
-        if ".." in PurePosixPath(scope).parts or ":" in scope:
+        scope = normalized(scope)
+        if (
+            PurePosixPath(scope).is_absolute()
+            or ".." in PurePosixPath(scope).parts
+            or ":" in scope
+        ):
             raise ValueError("Scope muss relativ zur Sammlung sein")
-        resolved = (self.root / scope).resolve(strict=True)
+        scope = scope.strip("/")
+        if scope == ".":
+            scope = ""
+        actual = self._path(scope)
+        resolved = actual.resolve(strict=True)
         if not resolved.is_relative_to(self.root) or not resolved.is_dir():
             raise ValueError("Scope liegt außerhalb der Sammlung")
+        if actual.is_symlink():
+            raise ValueError("Symlinks werden nicht gescannt")
         return scope
 
     def _path(self, relpath: str) -> Path:
@@ -283,18 +295,27 @@ class CollectionIndex:
             THEN 'present' ELSE 'missing' END""")
 
     def _walk(self, scope: str, result: ScanResult, cancel):
-        stack = [self.root / scope]
+        actual = self._path(scope)
+        stack = [(actual, actual.relative_to(self.root).as_posix() if scope else "")]
+        extensions = {*self.settings["extensions"], "xmp"}
         while stack and not stopped(cancel):
-            folder = stack.pop()
+            folder, folder_rel = stack.pop()
             try:
                 device = folder.stat().st_dev
+                file_ids = None
+                if os.name == "nt":
+                    try:
+                        file_ids = directory_file_ids(folder)
+                    except OSError:
+                        pass
                 with os.scandir(folder) as entries:
                     for entry in entries:
                         if stopped(cancel):
                             return
-                        rel = normalized(
-                            Path(entry.path).relative_to(self.root).as_posix()
+                        raw_rel = (
+                            f"{folder_rel}/{entry.name}" if folder_rel else entry.name
                         )
+                        rel = normalized(raw_rel)
                         if entry.name.startswith(".myfotomanager") or any(
                             fnmatch.fnmatchcase(rel.casefold(), pattern.casefold())
                             for pattern in self.settings["exclusions"]
@@ -311,16 +332,20 @@ class CollectionIndex:
                                     or getattr(stat, "st_file_attributes", 0) & 6
                                 ):
                                     continue
-                                stack.append(Path(entry.path))
-                            elif entry.is_file(follow_symlinks=False) and Path(
-                                entry.name
-                            ).suffix[1:].lower() in {
-                                *self.settings["extensions"],
-                                "xmp",
-                            }:
+                                stack.append((Path(entry.path), raw_rel))
+                            elif (
+                                entry.is_file(follow_symlinks=False)
+                                and os.path.splitext(entry.name)[1][1:].lower()
+                                in extensions
+                            ):
                                 stat = entry.stat(follow_symlinks=False)
-                                self._physical[rel] = Path(entry.path)
-                                file_id = stat.st_ino or entry.inode()
+                                if raw_rel != rel:
+                                    self._physical[rel] = Path(entry.path)
+                                file_id = stat.st_ino or (
+                                    file_ids.get(entry.name, 0)
+                                    if file_ids is not None
+                                    else entry.inode()
+                                )
                                 yield (
                                     rel,
                                     stat,
@@ -364,7 +389,7 @@ class CollectionIndex:
         folded = defaultdict(list)
         for row in old.values():
             folded[row["relpath_fold"]].append(row)
-        seen, additions, updates = set(), [], []
+        seen, additions, updates, touches = set(), [], [], []
         try:
             for rel, stat, inode in self._walk(scope, result, cancel):
                 stats["count"] += 1
@@ -390,22 +415,31 @@ class CollectionIndex:
                     if modified:
                         self._change(result.scan_id, "modified", row, new=rel)
                         stats["modified"] += 1
-                    parts = self._parts(rel)
-                    updates.append(
-                        (
-                            *parts,
-                            stat.st_size,
-                            stat.st_mtime_ns,
-                            inode,
-                            result.scan_id,
-                            int(modified),
-                            int(modified),
-                            int(modified),
-                            row["id"],
+                    if (
+                        not modified
+                        and row["relpath"] == rel
+                        and row["status"] == "present"
+                    ):
+                        touches.append(
+                            (result.scan_id, stat.st_mtime_ns, inode, row["id"])
                         )
-                    )
-                    if len(updates) >= 2000:
-                        self._flush(updates)
+                    else:
+                        parts = self._parts(rel)
+                        updates.append(
+                            (
+                                *parts,
+                                stat.st_size,
+                                stat.st_mtime_ns,
+                                inode,
+                                result.scan_id,
+                                int(modified),
+                                int(modified),
+                                int(modified),
+                                row["id"],
+                            )
+                        )
+                    if len(updates) + len(touches) >= 2000:
+                        self._flush(updates, touches)
                 if progress and stats["count"] % 2000 == 0:
                     progress(
                         dict(
@@ -415,11 +449,12 @@ class CollectionIndex:
                             remaining=None,
                         )
                     )
-            self._flush(updates)
+            self._flush(updates, touches)
             if stopped(cancel):
                 # Discovered files are retained, but unseen files are untouched.
                 self._insert_additions(additions, result)
-                self._pair(result.scan_id)
+                if additions:
+                    self._pair(result.scan_id)
                 return self._finish(result, "cancelled")
             if stats["count"] == 0:
                 result.errors.append(
@@ -433,7 +468,8 @@ class CollectionIndex:
             ]
             additions, missing = self._moves(additions, missing, result, cancel)
             self._insert_additions(additions, result)
-            self._pair(result.scan_id)
+            if additions:
+                self._pair(result.scan_id)
             present_missing = [row for row in missing if row["status"] == "present"]
             total = sum(
                 row["status"] == "present" and in_scope(row["relpath"], scope)
@@ -468,17 +504,25 @@ class CollectionIndex:
 
     @staticmethod
     def _parts(rel: str) -> tuple:
-        path = PurePosixPath(rel)
+        directory, _, name = rel.rpartition("/")
+        stem, extension = posixpath.splitext(name)
         return (
             rel,
             rel.casefold(),
-            str(path.parent) if str(path.parent) != "." else "",
-            path.name,
-            path.stem,
-            path.suffix[1:].lower(),
+            directory,
+            name,
+            stem,
+            extension[1:].lower(),
         )
 
-    def _flush(self, updates: list) -> None:
+    def _flush(self, updates: list, touches: list | None = None) -> None:
+        if touches:
+            self.db.executemany(
+                "UPDATE files SET last_seen_scan=?,mtime_ns=?,inode=? WHERE id=?",
+                touches,
+            )
+            self.db.commit()
+            touches.clear()
         if updates:
             self.db.executemany(
                 """UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,
@@ -514,6 +558,10 @@ class CollectionIndex:
         path = self._path(relpath)
         if path.is_symlink() or not path.resolve().is_relative_to(self.root):
             raise ValueError("Dateipfad verlässt die Sammlung")
+        return self._content_hash(path, full, cancel)
+
+    @staticmethod
+    def _content_hash(path: Path, full: bool = False, cancel=None) -> str:
         before = path.stat()
         digest = blake3()
         with path.open("rb") as stream:
@@ -533,6 +581,8 @@ class CollectionIndex:
         return digest.hexdigest()
 
     def _moves(self, additions, missing, result, cancel):
+        if not additions or not missing:
+            return additions, missing
         remaining = {row["id"]: row for row in missing}
         new = {item[0]: item for item in additions}
 
@@ -633,9 +683,7 @@ class CollectionIndex:
 
     def _export(self, relpath: str) -> bool:
         folders = {part.casefold() for part in self.settings["export_folders"]}
-        return any(
-            part.casefold() in folders for part in PurePosixPath(relpath).parts[:-1]
-        )
+        return any(part.casefold() in folders for part in relpath.split("/")[:-1])
 
     def _pair(self, scan_id: int) -> None:
         rows = [
@@ -643,18 +691,27 @@ class CollectionIndex:
             for row in self.db.execute("SELECT * FROM files WHERE status='present'")
         ]
         groups = defaultdict(list)
+        by_directory_name = defaultdict(list)
+        for row in rows:
+            if row["ext"] != "xmp":
+                by_directory_name[(row["dir"], row["name"].casefold())].append(row)
         extensions = {value.casefold() for value in self.settings["extension_folders"]}
         for row in rows:
-            directory = PurePosixPath(row["dir"])
+            directory = row["dir"]
             family = (
-                str(directory.parent)
-                if directory.name.casefold() in extensions
-                else str(directory)
+                directory.rpartition("/")[0]
+                if directory.rpartition("/")[2].casefold() in extensions
+                else directory
             )
             key = (family, row["stem"].casefold())
             if self._export(row["relpath"]):
                 key = (row["relpath"], row["stem"])
             groups[key].append(row)
+        sequence = self.db.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name='photos'"
+        ).fetchone()
+        next_photo = (sequence[0] if sequence else 0) + 1
+        new_photos, assignments, sidecars = [], [], []
         for group in groups.values():
             media = [row for row in group if row["ext"] != "xmp"]
             for row in media:
@@ -669,34 +726,25 @@ class CollectionIndex:
                 ]
                 photo = min((other["photo_id"] for other in peers), default=None)
                 if photo is None:
-                    photo = self.db.execute(
-                        "INSERT INTO photos(status,created_scan) VALUES('present',?)",
-                        (scan_id,),
-                    ).lastrowid
+                    photo = next_photo
+                    next_photo += 1
+                    new_photos.append((photo, scan_id))
                 row["photo_id"] = photo
-                self.db.execute(
-                    "UPDATE files SET photo_id=? WHERE id=?", (photo, row["id"])
-                )
+                assignments.append((photo, row["id"]))
             for row in group:
                 if row["ext"] == "xmp":
-                    # Both IMG.xmp and IMG.NEF.xmp conventions are recognized.
-                    matches = [
-                        other
-                        for other in rows
-                        if other["dir"] == row["dir"]
-                        and other["ext"] != "xmp"
-                        and other["name"].casefold() == row["stem"].casefold()
-                    ]
-                    target = (
-                        matches[0]
-                        if len(matches) == 1
-                        else (media[0] if media else None)
-                    )
-                    if target:
-                        self.db.execute(
-                            "UPDATE files SET photo_id=? WHERE id=?",
-                            (target["photo_id"], row["id"]),
-                        )
+                    sidecars.append((row, media))
+        for row, media in sidecars:
+            # Resolve after all media groups, independent of directory order.
+            matches = by_directory_name.get((row["dir"], row["stem"].casefold()), [])
+            target = matches[0] if len(matches) == 1 else (media[0] if media else None)
+            if target:
+                assignments.append((target["photo_id"], row["id"]))
+        self.db.executemany(
+            "INSERT INTO photos(id,status,created_scan) VALUES(?,'present',?)",
+            new_photos,
+        )
+        self.db.executemany("UPDATE files SET photo_id=? WHERE id=?", assignments)
         self.db.execute(
             """INSERT INTO changes(scan_id,kind,file_id,photo_id,new_relpath,at)
             SELECT ?, 'added', id, photo_id, relpath, ? FROM files WHERE first_seen_scan=?""",
@@ -895,6 +943,8 @@ class CollectionIndex:
         results = []
         for path in card_files:
             raw = metadata.get(os.path.normcase(str(path.resolve())), {})
+            if not raw or raw.get("Error") or raw.get("ExifTool:Error"):
+                raise ValueError(f"Metadaten der Kartendatei nicht lesbar: {path}")
             key = identity_key(metadata_values(raw))
             photo = (
                 self.db.execute(
@@ -920,12 +970,25 @@ class CollectionIndex:
                 )
                 continue
             # A known, different identity overrides filename collisions.
-            candidate = self.db.execute(
+            candidates = self.db.execute(
                 """SELECT f.* FROM files f JOIN photos p ON p.id=f.photo_id
                 WHERE f.name=? AND f.size=? AND f.status='present' AND f.meta_state IN ('pending','stale','error')
-                AND (? IS NULL OR p.identity_key IS NULL) ORDER BY f.id LIMIT 1""",
+                AND (? IS NULL OR p.identity_key IS NULL) ORDER BY f.id""",
                 (normalized(path.name), path.stat().st_size, key),
-            ).fetchone()
+            ).fetchall()
+            candidate = None
+            if candidates:
+                card_hash = self._content_hash(path)
+                for item in candidates:
+                    collection_hash = self._hash(item["relpath"])
+                    if not self.readonly:
+                        self.db.execute(
+                            "UPDATE files SET quick_hash=? WHERE id=?",
+                            (collection_hash, item["id"]),
+                        )
+                    if collection_hash == card_hash:
+                        candidate = item
+                        break
             results.append(
                 ImportStatus(
                     path,
@@ -934,6 +997,8 @@ class CollectionIndex:
                     candidate["relpath"] if candidate else None,
                 )
             )
+        if not self.readonly:
+            self.db.commit()
         return results
 
     def changes_since(self, scan_id: int) -> Iterator[dict]:

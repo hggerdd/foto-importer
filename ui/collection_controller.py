@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -38,7 +37,12 @@ class CollectionController:
     def offer_index(self) -> None:
         """Offer an initial index when selecting an existing collection."""
         root = self.target()
-        if root and root not in self._offered and root.is_dir() and not (root / ".myfotomanager").exists():
+        if (
+            root
+            and root not in self._offered
+            and root.is_dir()
+            and not (root / ".myfotomanager").exists()
+        ):
             self._offered.add(root)
             self.run("quick_scan", root=root)
 
@@ -146,9 +150,16 @@ class CollectionController:
     def _done(self, result, status, callback) -> None:
         self.busy = False
         if self.window and self.window.winfo_exists():
+            last_scan = (
+                datetime.fromisoformat(status["last_scan"])
+                .astimezone()
+                .strftime("%d.%m.%Y %H:%M")
+                if status["last_scan"]
+                else "–"
+            )
             self.status_var.set(
                 f"{status['files']} Dateien · {status['photos']} Fotos · {status['missing']} fehlend · "
-                f"Metadaten {status['metadata']}/{status['files']} · letzter Schnellscan: {status['last_scan'] or '–'}"
+                f"Metadaten {status['metadata']}/{status['files']} · letzter Schnellscan: {last_scan}"
                 + (" · NUR LESBAR (gesperrt)" if status["readonly"] else "")
             )
         if callback:
@@ -231,10 +242,35 @@ class CollectionController:
                 "returned": "Wieder aufgetaucht",
                 "merged": "Fotos zusammengeführt",
             }
+            state = {
+                "done": "Abgeschlossen",
+                "cancelled": "Abgebrochen",
+                "error": "Fehler",
+                "needs_confirmation": "Bestätigung erforderlich",
+            }.get(result.status, result.status)
             lines = [
-                f"Scan {result.scan_id}: {result.status}",
-                json.dumps(result.stats, ensure_ascii=False, indent=2),
+                state,
+                f"{result.stats.get('count', result.stats.get('processed', 0))} Dateien geprüft",
             ]
+            for item in result.stats.get("renamed_folders", []):
+                lines.append(f"Ordner umbenannt: {item['old']} → {item['new']}")
+            for item in result.stats.get("ambiguous", []):
+                lines.append(
+                    f"Mehrdeutig: {item['new']} ← {', '.join(item['candidates'])}"
+                )
+            for name in result.stats.get("mismatches", []):
+                lines.append(f"Prüfsumme abweichend (möglicher Datenfehler): {name}")
+            for name in result.stats.get("changed_since_scan", []):
+                lines.append(f"Seit Schnellscan geändert, bitte erneut scannen: {name}")
+            if result.stats.get("uncertain"):
+                lines.append(
+                    f"{result.stats['uncertain']} kürzlich geänderte Dateien: beim nächsten Scan erneut prüfen"
+                )
+            if result.stats.get("missing_skipped"):
+                lines.append(
+                    f"{result.stats['missing_skipped']} fehlende Einträge aus Sicherheitsgründen beibehalten"
+                )
+            lines.extend(result.errors)
             for key, label in labels.items():
                 items = [change for change in changes if change["kind"] == key]
                 lines.append(f"\n{label}: {len(items)}")
@@ -243,6 +279,8 @@ class CollectionController:
                     for item in items
                 )
             self._show("\n".join(lines))
+            if self.window and self.window.winfo_exists():
+                self.progress_var.set(state)
             if result.status == "needs_confirmation" and messagebox.askyesno(
                 "Viele fehlende Dateien",
                 f"{result.stats['missing_skipped']} Dateien fehlen (über 20 %).\nLaufwerk angeschlossen? Erneut prüfen und fehlend markieren?",
@@ -286,33 +324,57 @@ class CollectionController:
             return
 
         def edit(settings):
-            text = simpledialog.askstring(
-                "Index-Optionen",
-                "JSON: Endungen, Ausschlüsse (glob), Export-/Endungsordner, ExifTool-Pfad",
-                initialvalue=json.dumps(settings, ensure_ascii=False),
-                parent=self.root,
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Index-Optionen")
+            pane = ttk.Frame(dialog, padding=16)
+            pane.pack(fill="both", expand=True)
+            ttk.Label(pane, text="Mehrere Werte mit ; trennen").grid(
+                row=0, columnspan=2, sticky="w"
             )
-            if text:
-                try:
-                    values = json.loads(text)
-                    for key in (
-                        "extensions",
-                        "exclusions",
-                        "export_folders",
-                        "extension_folders",
-                    ):
-                        if not isinstance(values[key], list) or not all(
-                            isinstance(value, str) for value in values[key]
-                        ):
-                            raise ValueError(
-                                f"{key}: Liste von Textwerten erforderlich"
-                            )
-                    if not isinstance(values["exiftool"], str):
-                        raise ValueError("exiftool: Pfad erforderlich")
-                except (ValueError, KeyError, TypeError) as exc:
-                    self._error(str(exc))
+            fields = {}
+            for number, (key, label) in enumerate(
+                (
+                    ("extensions", "Dateiendungen"),
+                    ("exclusions", "Ausschlüsse (z. B. Privat/*)"),
+                    ("export_folders", "Eigenständige Export-Ordner"),
+                    ("extension_folders", "Endungsordner für RAW/JPG-Paare"),
+                    ("exiftool", "ExifTool-Programm / Pfad"),
+                ),
+                1,
+            ):
+                value = settings[key]
+                fields[key] = tk.StringVar(
+                    value="; ".join(value) if isinstance(value, list) else value
+                )
+                ttk.Label(pane, text=label).grid(
+                    row=number, column=0, sticky="w", padx=(0, 12), pady=6
+                )
+                ttk.Entry(pane, textvariable=fields[key], width=65).grid(
+                    row=number, column=1, sticky="ew"
+                )
+
+            def save():
+                if self.busy:
                     return
+                values = {
+                    key: variable.get().strip()
+                    if key == "exiftool"
+                    else [
+                        part.strip()
+                        for part in variable.get().split(";")
+                        if part.strip()
+                    ]
+                    for key, variable in fields.items()
+                }
+                values["extensions"] = [
+                    part.lstrip(".").lower() for part in values["extensions"]
+                ]
+                dialog.destroy()
                 self._worker(root, lambda index: index.configure(**values))
+
+            ttk.Button(pane, text="Speichern", command=save).grid(
+                row=6, column=1, sticky="e", pady=12
+            )
 
         self._worker(root, lambda index: index.settings, edit)
 
