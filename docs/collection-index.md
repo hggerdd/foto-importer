@@ -58,9 +58,12 @@ dictionaries; import results and scan results are dataclasses. Callers can pass 
 Quick-scan progress has throughput; metadata progress has a total. A quick scan
 cannot estimate remaining time before directory enumeration finishes.
 
-The database uses schema version 1, UUID collection identity, WAL, and a consistent
-`.myfotomanager.bak` SQLite backup after operations. Additional modules may add
-prefixed tables and their own schema settings. Photo merges keep the oldest ID,
+The inventory was introduced with schema version 1. The current database migrates
+to version 3: version 2 adds face data and version 3 adds model-specific reference
+exclusions. It retains UUID collection identity, WAL, and a consistent
+`.myfotomanager.bak` SQLite backup after index operations. Extensions use versioned
+migrations in the same database; see [ADR-0008](../ADR/0008-lokale-sqlite-sammlung.md).
+Photo merges keep the oldest ID,
 retain the losing anchor, record `merged` changes, and store
 `photo.redirect.<old_id>` in settings. Consumers should follow these redirects.
 

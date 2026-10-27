@@ -4,6 +4,11 @@ Tkinter-Anwendung zum Gruppieren von Kamera-Dateien nach Datum, mit
 Bildvorschau und Kopieren in Unterordner je Dateiendung. Als Datumsquelle
 stehen Dateisystem-Zeitstempel und Foto-Metadaten zur Verfügung.
 
+Die [Architekturentscheidungen unter ADR/](ADR/README.md) erklären die bestehende
+Architektur und ihre Grenzen. Bei der Weiterentwicklung sind die betroffenen
+akzeptierten ADRs zu berücksichtigen; neue wesentliche Entscheidungen werden
+jeweils als eigener ADR dokumentiert.
+
 Die Sammlung unterstützt außerdem lokale Gesichtserkennung, Personen, Vorschläge,
 Referenzdatensätze und Familienbeziehungen unter **Gesichter & Personen**.
 Unter **Benennen** einen Namen direkt neben der Gesichtergruppe eingeben und
