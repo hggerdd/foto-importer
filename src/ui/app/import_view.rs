@@ -202,6 +202,22 @@ impl PhotoApp {
                 );
             }
             ui.separator();
+            if ui
+                .checkbox(
+                    &mut self.settings.skip_imported,
+                    "Bereits importierte Aufnahmen überspringen",
+                )
+                .changed()
+            {
+                self.save();
+            }
+            ui.label(
+                RichText::new(
+                    "Bei vorhandenem Zielindex wird vor dem Kopieren mit ExifTool geprüft.",
+                )
+                .small()
+                .weak(),
+            );
             let bytes = selected_files.iter().map(|f| f.size).sum();
             ui.label(
                 RichText::new(format!(
@@ -230,13 +246,17 @@ impl PhotoApp {
                     .dng
                     .then(|| PathBuf::from(&self.settings.converter));
                 let files = selected_files.to_vec();
+                let skip = self.settings.skip_imported;
+                let exiftool = self.settings.exiftool.clone();
                 self.save();
                 self.launch("Fotos sicher kopieren", true, "copy", move |control| {
-                    Ok(Outcome::Imported(files::import(
+                    Ok(Outcome::Imported(crate::core::import_service::execute(
                         &files,
                         &target,
                         &name,
                         converter.as_deref(),
+                        skip,
+                        &exiftool,
                         &control,
                     )?))
                 });

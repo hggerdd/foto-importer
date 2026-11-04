@@ -98,7 +98,10 @@ impl PhotoApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{} Aufnahmen", self.page.total)).strong());
             if ui
-                .add_enabled(self.filters.page > 0, egui::Button::new("←"))
+                .add_enabled(
+                    self.filters.page > 0 && !self.tasks.iter().any(|t| t.kind == "search"),
+                    egui::Button::new("←"),
+                )
                 .clicked()
             {
                 self.filters.page -= 1;
@@ -106,12 +109,13 @@ impl PhotoApp {
             }
             ui.label(format!(
                 "Seite {} / {}",
-                self.filters.page + 1,
+                self.applied.page + 1,
                 self.page.total.div_ceil(config::PAGE_SIZE).max(1)
             ));
             if ui
                 .add_enabled(
-                    (self.filters.page + 1) * config::PAGE_SIZE < self.page.total,
+                    (self.filters.page + 1) * config::PAGE_SIZE < self.page.total
+                        && !self.tasks.iter().any(|t| t.kind == "search"),
                     egui::Button::new("→"),
                 )
                 .clicked()
@@ -316,6 +320,39 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
                             .unwrap_or_else(|| "Unbekannt".into());
                         if ui.button(format!("{name} · #{}", face.id)).clicked() {
                             self.open_naming(face.clone());
+                        }
+                        if face.assignment.as_deref() == Some("user") {
+                            ui.menu_button("Referenz", |ui| {
+                                for (action, label) in [
+                                    ("pin", "Fixieren"),
+                                    ("unpin", "Fixierung entfernen"),
+                                    ("exclude", "Als Referenz ausschließen"),
+                                ] {
+                                    if ui
+                                        .add_enabled(!self.busy(), egui::Button::new(label))
+                                        .clicked()
+                                    {
+                                        let root = self.settings.collection.clone();
+                                        let id = face.id;
+                                        self.undo.clear();
+                                        self.launch(
+                                            "Referenzentscheidung speichern",
+                                            true,
+                                            "mutation",
+                                            move |_| {
+                                                let c = Collection::open(Path::new(&root), true)?;
+                                                crate::core::maintenance::reference_action(
+                                                    &c, id, action,
+                                                )?;
+                                                Ok(Outcome::Done(
+                                                    "Referenzentscheidung gespeichert".into(),
+                                                ))
+                                            },
+                                        );
+                                        ui.close();
+                                    }
+                                }
+                            });
                         }
                         if ui
                             .add_enabled(!self.busy(), egui::Button::new("Löschen"))

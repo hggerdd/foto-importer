@@ -59,3 +59,27 @@ fn all_empty_workspaces_render_without_external_tools() {
         assert!(!output.shapes.is_empty());
     }
 }
+#[test]
+fn late_naming_result_from_another_collection_cannot_enter_undo() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = "old collection".into();
+    app.launch("Late result", false, "naming", |_| {
+        Ok(Outcome::Named(Undo {
+            before: Vec::new(),
+            after: Vec::new(),
+            created: None,
+        }))
+    });
+    app.settings.collection = "new collection".into();
+    for _ in 0..1000 {
+        app.poll(&context);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.tasks.is_empty());
+    assert!(app.undo.is_empty());
+}

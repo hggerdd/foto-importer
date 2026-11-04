@@ -47,7 +47,7 @@ enum Pick {
 }
 enum Outcome {
     Scan(u64, Scan),
-    Search(u64, CollectionStatus, SearchPage),
+    Search(u64, CollectionStatus, SearchPage, Search),
     Faces(u64, FacePage),
     Detail(u64, String, Vec<Face>),
     Done(String),
@@ -123,6 +123,8 @@ pub struct PhotoApp {
     dng_status: String,
     closing: bool,
     maintenance_paused: bool,
+    auto_analysis_pending: bool,
+    last_night: String,
     capture_started: std::time::Instant,
     capture_requested: bool,
     #[cfg(test)]
@@ -186,6 +188,8 @@ impl PhotoApp {
             dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
+            auto_analysis_pending: false,
+            last_night: String::new(),
             capture_started: std::time::Instant::now(),
             capture_requested: false,
             #[cfg(test)]
@@ -295,7 +299,9 @@ impl PhotoApp {
                 date: today,
                 ..Default::default()
             };
-            self.save();
+            if !self.save() {
+                return;
+            }
         }
         let converter = self.settings.converter.clone();
         self.launch(
@@ -357,7 +363,6 @@ impl PhotoApp {
         let revision = self.query_revision;
         let root = PathBuf::from(&self.settings.collection);
         let filters = self.filters.clone();
-        self.applied = filters.clone();
         self.launch("Sammlung durchsuchen", false, "search", move |_| {
             let c = Collection::open(&root, false)?;
             let detector = faces::setting(&c, "rust.detector_key")?.unwrap_or_default();
@@ -365,6 +370,7 @@ impl PhotoApp {
                 revision,
                 c.status()?,
                 metadata::search(&c, &filters, &detector)?,
+                filters,
             ))
         });
     }
@@ -399,6 +405,7 @@ impl PhotoApp {
             "verify" => "Dateien mit BLAKE3 prüfen",
             "analyze" => "Fotos lokal analysieren",
             "knowledge" => "Erkennungswissen anwenden",
+            "automatic" | "nightly" => "Automatische Sammlungsanalyse",
             "export" => "Referenzausschnitte exportieren",
             "calibrate" => "Referenzen validieren",
             "resume" => "Erkennungsabgleich fortsetzen",
@@ -410,6 +417,24 @@ impl PhotoApp {
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
                 "metadata" => metadata::enrich(&mut c, &settings.exiftool, &control)?,
+                "automatic" | "nightly" => {
+                    if settings.auto_metadata {
+                        metadata::enrich(&mut c, &settings.exiftool, &control)?;
+                    }
+                    if action == "automatic" || faces::status(&c)?.nightly {
+                        faces::analyze(
+                            &mut c,
+                            Path::new(&settings.model_dir),
+                            Path::new(&settings.onnx_runtime),
+                            &detector,
+                            &embedder,
+                            &settings.exiftool,
+                            &control,
+                        )?
+                    } else {
+                        "Nächtliche Metadatenanreicherung abgeschlossen".into()
+                    }
+                }
                 "verify" => c.verify(&control)?,
                 "export" => crate::core::maintenance::export(&c, &settings.exiftool, &control)?,
                 "delete_biometrics" => crate::core::maintenance::delete_biometrics(&c)?,
@@ -524,12 +549,22 @@ impl PhotoApp {
                     );
                     self.scan = scan;
                 }
-                Ok(Outcome::Search(revision, status, page)) if revision == self.query_revision => {
+                Ok(Outcome::Search(revision, status, page, filters))
+                    if revision == self.query_revision =>
+                {
                     self.status = status;
                     self.page = page;
+                    self.applied = filters;
                     self.thumbnails.clear();
                 }
                 Ok(Outcome::Faces(revision, page)) if revision == self.face_revision => {
+                    if self.view != View::Settings
+                        || page.status.detector_id != self.face_page.status.detector_id
+                        || page.status.embedder_id != self.face_page.status.embedder_id
+                    {
+                        self.detector = page.status.detector_id.clone();
+                        self.embedder = page.status.embedder_id.clone();
+                    }
                     self.face_page = page;
                 }
                 Ok(Outcome::Detail(revision, detail, faces))
@@ -590,15 +625,29 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Imported(report)) => {
+                    if !report.cancelled
+                        && !report.copied.is_empty()
+                        && self.face_page.status.auto_import
+                        && self
+                            .settings
+                            .target
+                            .trim_start_matches(r"\\?\")
+                            .eq_ignore_ascii_case(
+                                self.settings.collection.trim_start_matches(r"\\?\"),
+                            )
+                    {
+                        self.auto_analysis_pending = true;
+                    }
                     self.message(
                         format!(
-                            "{} · {} Dateien kopiert · {} DNGs · {} Fehler{}",
+                            "{} · {} Dateien kopiert · {} übersprungen · {} DNGs · {} Fehler{}",
                             if report.cancelled {
                                 "Import abgebrochen"
                             } else {
                                 "Import beendet"
                             },
                             report.copied.len(),
+                            report.skipped.len(),
                             report.converted,
                             report.errors.len(),
                             if report.errors.is_empty() {
@@ -609,6 +658,8 @@ impl PhotoApp {
                         ),
                         !report.errors.is_empty(),
                     );
+                    self.refresh_collection();
+                    self.refresh_faces();
                 }
                 Ok(Outcome::Suggestions(revision, id, suggestions))
                     if revision == self.detail_revision
@@ -664,6 +715,22 @@ impl PhotoApp {
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+        if !self.closing && !self.busy() && self.auto_analysis_pending {
+            self.auto_analysis_pending = false;
+            self.collection_action("automatic");
+        }
+        let now = chrono::Local::now();
+        if !self.closing
+            && !self.busy()
+            && !self.settings.collection.is_empty()
+            && (self.face_page.status.nightly || self.settings.auto_metadata)
+            && chrono::Timelike::hour(&now) == 3
+            && self.last_night != now.date_naive().to_string()
+        {
+            self.last_night = now.date_naive().to_string();
+            self.collection_action("nightly");
+        }
+        ctx.request_repaint_after(Duration::from_secs(30));
         if !self.closing
             && !self.maintenance_paused
             && !self.busy()

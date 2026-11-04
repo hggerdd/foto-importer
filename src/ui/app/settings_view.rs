@@ -28,7 +28,16 @@ impl PhotoApp {
             });
             ui.add_space(16.0);
             if ui.checkbox(&mut self.settings.dark,"Dunkle Oberfläche").changed(){theme::apply(ui.ctx(),self.settings.dark);}
-            if theme::primary(ui,"Einstellungen speichern",true)&&self.save(){match crate::core::inference::manifests(Path::new(&self.settings.model_dir)){Ok(models)=>{self.models=models;self.message("Einstellungen gespeichert".into(),false);},Err(error)=>self.message(format!("Einstellungen gespeichert; Modellordner: {error}"),true)}}
+            if theme::primary(ui,"Einstellungen speichern",true)&&self.save(){
+                match crate::core::inference::manifests(Path::new(&self.settings.model_dir)){
+                    Ok(models)=>{
+                        self.models=models;
+                        if self.settings.collection.is_empty(){self.message("Einstellungen gespeichert".into(),false);}
+                        else{let root=self.settings.collection.clone();let folder=self.settings.model_dir.clone();let detector=self.detector.clone();let embedder=self.embedder.clone();self.launch("Sammlungsmodelle speichern",true,"mutation",move |_|{let mut c=Collection::open(Path::new(&root),true)?;faces::configure_models(&mut c,Path::new(&folder),&detector,&embedder)?;Ok(Outcome::Done("Einstellungen und Sammlungsmodelle gespeichert".into()))});}
+                    },
+                    Err(error)=>self.message(format!("Einstellungen gespeichert; Modellordner: {error}"),true),
+                }
+            }
         });
         if let Some(pick) = chosen {
             self.pick(pick);

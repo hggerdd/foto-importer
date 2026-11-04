@@ -42,6 +42,10 @@ pub struct Status {
     pub applied: String,
     pub detector: String,
     pub embedder: String,
+    pub auto_import: bool,
+    pub nightly: bool,
+    pub detector_id: String,
+    pub embedder_id: String,
 }
 #[derive(Default)]
 pub struct FacePage {
@@ -70,10 +74,65 @@ pub fn people(collection: &Collection) -> Result<Vec<Person>> {
     Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),(SELECT count(*) FROM faces f WHERE f.person_id=p.id AND f.assignment='user' AND f.retained=0),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='gender'),''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='note'),'') FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
         .query_map([],|r|Ok(Person{id:r.get(0)?,name:r.get(1)?,birth:r.get(2)?,count:r.get(3)?,gender:r.get(4)?,note:r.get(5)?}))?.collect::<rusqlite::Result<_>>()?)
 }
+pub fn configure_automatic(
+    collection: &mut Collection,
+    auto_import: bool,
+    nightly: bool,
+) -> Result<()> {
+    collection.writable()?;
+    let tx = collection.db.transaction()?;
+    for (key, value) in [("auto_import", auto_import), ("nightly", nightly)] {
+        tx.execute(
+            "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
+            params![key, value.to_string()],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+pub fn configure_models(
+    collection: &mut Collection,
+    folder: &Path,
+    detector: &str,
+    embedder: &str,
+) -> Result<()> {
+    collection.writable()?;
+    let manifests = inference::manifests(folder)?;
+    if !manifests
+        .iter()
+        .any(|m| m.id == detector && m.kind == "detector")
+        || !manifests
+            .iter()
+            .any(|m| m.id == embedder && m.kind == "embedder")
+    {
+        bail!("Modellauswahl ist im gewählten Modellordner nicht verfügbar");
+    }
+    let tx = collection.db.transaction()?;
+    save_setting(&tx, "active_detector", detector)?;
+    save_setting(&tx, "active_embedder", embedder)?;
+    tx.commit()?;
+    Ok(())
+}
 pub fn status(collection: &Collection) -> Result<Status> {
     let mut status=collection.db.query_row("SELECT count(*),coalesce(sum(assignment='user'),0),coalesce(sum(person_id IS NULL AND ignored=0),0),coalesce(sum(assignment IN ('auto','suggested') AND ignored=0),0),coalesce(sum(ignored=1),0) FROM faces WHERE retained=0",[],|r|Ok(Status{total:r.get(0)?,confirmed:r.get(1)?,unknown:r.get(2)?,review:r.get(3)?,ignored:r.get(4)?,..Default::default()}))?;
     status.detector = setting(collection, "rust.detector_key")?.unwrap_or_default();
     status.embedder = setting(collection, "rust.embedder_key")?.unwrap_or_default();
+    status.detector_id = setting(collection, "active_detector")?.unwrap_or_else(|| "yunet".into());
+    status.embedder_id = setting(collection, "active_embedder")?.unwrap_or_else(|| "sface".into());
+    for (key, target) in [
+        ("auto_import", &mut status.auto_import),
+        ("nightly", &mut status.nightly),
+    ] {
+        let raw: Option<String> = collection
+            .db
+            .query_row("SELECT value FROM face_settings WHERE key=?", [key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        *target = raw
+            .and_then(|v| serde_json::from_str::<bool>(&v).ok())
+            .unwrap_or(false);
+    }
     status.references = collection.db.query_row(
         "SELECT count(*) FROM training_set WHERE embedder_id=? AND split='ref'",
         [&status.embedder],
@@ -192,6 +251,8 @@ pub fn analyze(
     }
     save_setting(&collection.db, "rust.detector_key", &detector_key)?;
     save_setting(&collection.db, "rust.embedder_key", &embedder_key)?;
+    save_setting(&collection.db, "active_detector", detector)?;
+    save_setting(&collection.db, "active_embedder", embedder)?;
     let total: usize = collection
         .db
         .query_row("SELECT count(*) FROM face_sources", [], |r| r.get(0))?;

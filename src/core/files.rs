@@ -86,6 +86,44 @@ pub fn parse_date(value: &str) -> Option<String> {
     }
     None
 }
+pub fn iptc_day(path: &Path) -> Option<String> {
+    let mut file = BufReader::new(File::open(path).ok()?);
+    let mut header = [0u8; 2];
+    file.read_exact(&mut header).ok()?;
+    if header != [0xff, 0xd8] {
+        return None;
+    }
+    for _ in 0..256 {
+        file.read_exact(&mut header).ok()?;
+        if header[0] != 0xff || header[1] == 0xda || header[1] == 0xd9 {
+            return None;
+        }
+        let marker = header[1];
+        file.read_exact(&mut header).ok()?;
+        let length = u16::from_be_bytes(header) as usize;
+        if length < 2 {
+            return None;
+        }
+        let mut data = vec![0; length - 2];
+        file.read_exact(&mut data).ok()?;
+        if marker == 0xed
+            && data.starts_with(b"Photoshop 3.0\0")
+            && data.windows(4).any(|w| w == b"8BIM")
+        {
+            for (index, record) in data.windows(5).enumerate() {
+                if record == [0x1c, 2, 55, 0, 8]
+                    && let Some(date) = data
+                        .get(index + 5..index + 13)
+                        .and_then(|v| std::str::from_utf8(v).ok())
+                        .and_then(parse_date)
+                {
+                    return Some(date);
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Walk without following symlinks; discovery errors remain visible to callers.
 pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
@@ -93,13 +131,14 @@ pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>();
-    scan_filtered(root, metadata, &extensions, &[], control)
+    scan_filtered(root, metadata, &extensions, &[], false, control)
 }
 pub fn scan_filtered(
     root: &Path,
     metadata: bool,
     extensions: &[String],
     exclusions: &[String],
+    skip_system: bool,
     control: &Control,
 ) -> Result<Scan> {
     let root = root
@@ -137,8 +176,10 @@ pub fn scan_filtered(
                 }
                 if kind.is_dir() {
                     let name = entry.file_name().to_string_lossy().to_lowercase();
-                    if !name.starts_with('.')
-                        && !["$recycle.bin", "system volume information"].contains(&name.as_str())
+                    if !skip_system
+                        || !name.starts_with('.')
+                            && !["$recycle.bin", "system volume information", "@eadir"]
+                                .contains(&name.as_str())
                     {
                         dirs.push(path);
                     }
@@ -152,7 +193,9 @@ pub fn scan_filtered(
                         .format("%Y-%m-%d")
                         .to_string();
                     let day = if metadata {
-                        exif_day(&path).unwrap_or(filesystem)
+                        exif_day(&path)
+                            .or_else(|| iptc_day(&path))
+                            .unwrap_or(filesystem)
                     } else {
                         filesystem
                     };
@@ -267,6 +310,7 @@ pub struct ImportReport {
     pub errors: Vec<String>,
     pub converted: usize,
     pub cancelled: bool,
+    pub skipped: Vec<PathBuf>,
 }
 pub fn import(
     files: &[SourceFile],

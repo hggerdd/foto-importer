@@ -91,6 +91,31 @@ fn integrity_mismatch_preserves_original_baseline() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
+fn known_hash_preserves_identity_when_file_id_changes() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let old = temp.path().join("old.jpg");
+    let new = temp.path().join("new.jpg");
+    fs::write(&old, b"unique camera bytes")?;
+    let mut c = Collection::open(temp.path(), true)?;
+    c.quick_scan(false, &Control::default())?;
+    c.verify(&Control::default())?;
+    let id: i64 =
+        c.db.query_row("SELECT photo_id FROM files", [], |r| r.get(0))?;
+    fs::copy(&old, &new)?;
+    fs::remove_file(old)?;
+    c.quick_scan(false, &Control::default())?;
+    assert_eq!(
+        c.db.query_row(
+            "SELECT photo_id FROM files WHERE relpath='new.jpg'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        id
+    );
+    assert_eq!(c.status()?.files, 1);
+    Ok(())
+}
+#[test]
 fn ignored_faces_count_for_strict_search_and_unanalysed_is_not_empty() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;

@@ -90,6 +90,7 @@ impl PhotoApp {
                 .open(&mut open)
                 .default_width(600.0)
                 .show(ctx, |ui| {
+                    let mut submit = false;
                     ui.label("Bestehende Person wählen oder neuen Namen eingeben.");
                     ui.label(
                         RichText::new("Ähnlichkeitsvorschläge · keine Wahrscheinlichkeiten")
@@ -101,17 +102,28 @@ impl PhotoApp {
                             if let Some((person, name, score)) =
                                 self.name_suggestions.get(index).cloned()
                             {
-                                if ui.button(format!("{name} · {score:.3}")).clicked() {
+                                if ui
+                                    .add_enabled(
+                                        !self.busy(),
+                                        egui::Button::new(format!("{name} · {score:.3}")),
+                                    )
+                                    .clicked()
+                                {
                                     self.name_person = Some(person);
                                     self.name_input = name;
+                                    submit = true;
                                 }
                             } else {
                                 ui.add_enabled(false, egui::Button::new("Keine Referenz"));
                             }
                         }
                     });
-                    if ui.text_edit_singleline(&mut self.name_input).changed() {
+                    let input = ui.text_edit_singleline(&mut self.name_input);
+                    if input.changed() {
                         self.name_person = None;
+                    }
+                    if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        submit = true;
                     }
                     for person in self
                         .face_page
@@ -137,7 +149,8 @@ impl PhotoApp {
                         ui,
                         "Übernehmen",
                         !self.busy() && !self.name_input.trim().is_empty(),
-                    ) {
+                    ) || submit && !self.busy()
+                    {
                         let root = self.settings.collection.clone();
                         let name = self.name_input.clone();
                         let person = self.name_person;

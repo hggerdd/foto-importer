@@ -1,6 +1,6 @@
 # ADR-0037: Schema 6 als Kompatibilitätsgrenze
 
-- **Status:** Akzeptiert
+- **Status:** Abgelöst durch [ADR-0042](0042-native-bestandsmigrationen.md)
 - **Erfasst am / Entscheidungsdatum:** 2026-11-04
 - **Art:** Neue Entscheidung
 - **Bezieht sich auf:** [0008](0008-lokale-sqlite-sammlung.md), [0009](0009-stabile-foto-identitaeten.md), [0022](0022-indizierte-sammlungsprojektionen.md), [0029](0029-schneller-gesichtsstart-und-schema-reparatur.md), [0030](0030-gemeinsame-sammlungs-schreibwarteschlange.md)
@@ -39,3 +39,4 @@ Keine unverträglichen Statuswerte in bestehende Tabellen einführen.
 
 [Schema](../src/core/schema.sql), [DB-Service](../src/core/collection.rs),
 [DB-Tests](../tests/collection.rs), [Funktionsmatrix](../docs/paritaet.md).
+

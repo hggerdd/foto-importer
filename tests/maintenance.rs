@@ -62,3 +62,17 @@ fn derived_family_relations_follow_parent_edges() -> anyhow::Result<()> {
     assert_eq!(r["onkel_tanten"], vec![3]);
     Ok(())
 }
+#[test]
+fn automation_flags_are_collection_local_and_opt_in() -> anyhow::Result<()> {
+    let a = tempfile::tempdir()?;
+    let b = tempfile::tempdir()?;
+    let mut first = Collection::open(a.path(), true)?;
+    let second = Collection::open(b.path(), true)?;
+    assert!(!faces::status(&first)?.auto_import);
+    assert!(!faces::status(&first)?.nightly);
+    faces::configure_automatic(&mut first, true, true)?;
+    assert!(faces::status(&first)?.auto_import);
+    assert!(faces::status(&first)?.nightly);
+    assert!(!faces::status(&second)?.auto_import);
+    Ok(())
+}

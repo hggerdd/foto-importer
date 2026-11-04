@@ -96,6 +96,10 @@ impl PhotoApp {
         });
         ui.separator();
         egui::CollapsingHeader::new("Erkennungswissen verwalten").show(ui,|ui|{
+            let mut auto_import=self.face_page.status.auto_import;let mut nightly=self.face_page.status.nightly;
+            let changed=ui.add_enabled(!self.busy(),egui::Checkbox::new(&mut auto_import,"Nach Import automatisch analysieren")).changed()|ui.add_enabled(!self.busy(),egui::Checkbox::new(&mut nightly,"Um 03:00 Uhr analysieren, solange die App läuft")).changed();
+            if changed{let root=self.settings.collection.clone();self.launch("Automatik speichern",true,"mutation",move |_|{let mut c=Collection::open(Path::new(&root),true)?;faces::configure_automatic(&mut c,auto_import,nightly)?;Ok(Outcome::Done("Sammlungsautomatik gespeichert".into()))});}
+            if ui.checkbox(&mut self.settings.auto_metadata,"Metadaten beim automatischen Ablauf vorab anreichern").changed(){self.save();}
             ui.horizontal_wrapped(|ui|{for(action,label)in [("resume","Offenen Abgleich fortsetzen"),("export","Referenzen exportieren"),("calibrate","Validierung auswerten")]{if ui.add_enabled(!self.busy(),egui::Button::new(label)).clicked(){self.collection_action(action);}}});
             ui.label("Biometrie entfernen löscht Gesichter, Personen und bekannte Biometrie-Sicherungen. Foto-Dateien und Inventar bleiben erhalten.");
             ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.delete_phrase).hint_text("Zum Löschen BIOMETRIE eingeben"));if ui.add_enabled(!self.busy()&&self.delete_phrase=="BIOMETRIE",egui::Button::new("Biometrie dauerhaft entfernen")).clicked(){self.undo.clear();self.delete_phrase.clear();self.collection_action("delete_biometrics");}});

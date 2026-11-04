@@ -14,6 +14,21 @@ fn reject_windows_names_and_traversal() {
     assert!(files::validate_folder("2026-11 Herbst & Familie").is_ok());
 }
 #[test]
+fn iptc_date_is_read_from_photoshop_app13() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("iptc.jpg");
+    let mut segment = b"Photoshop 3.0\0xxxx8BIMxxxx".to_vec();
+    segment.extend_from_slice(&[0x1c, 2, 55, 0, 8]);
+    segment.extend_from_slice(b"20261104");
+    let mut jpeg = vec![0xff, 0xd8, 0xff, 0xed];
+    jpeg.extend_from_slice(&((segment.len() + 2) as u16).to_be_bytes());
+    jpeg.extend(segment);
+    jpeg.extend([0xff, 0xd9]);
+    fs::write(&path, jpeg)?;
+    assert_eq!(files::iptc_day(&path).as_deref(), Some("2026-11-04"));
+    Ok(())
+}
+#[test]
 fn parse_capture_dates_without_timezone_conversion() {
     assert_eq!(
         files::parse_date("2026:11:04 23:59:00+09:00").as_deref(),

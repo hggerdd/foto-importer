@@ -6,7 +6,7 @@ use super::{
     previews::{self, PreviewRequest},
 };
 use anyhow::{Context, Result, bail};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
@@ -241,6 +241,7 @@ pub fn delete_biometrics(collection: &Collection) -> Result<String> {
         if name == ".myfotomanager.backup"
             || name == ".myfotomanager.bak"
             || name.starts_with(".myfotomanager.before-detector-") && name.ends_with(".bak")
+            || name.starts_with(".myfotomanager.before-rust-") && name.ends_with(".bak")
         {
             backups.push(path);
         }
@@ -312,6 +313,56 @@ pub fn set_person(
     } else {
         collection.db.execute_batch("ROLLBACK")?;
     }
+    result
+}
+pub fn reference_action(collection: &Collection, face: i64, action: &str) -> Result<()> {
+    collection.writable()?;
+    let key =
+        faces::setting(collection, "rust.embedder_key")?.context("Kein aktiver Modellraum")?;
+    let person:Option<i64>=collection.db.query_row("SELECT person_id FROM faces WHERE id=? AND assignment='user' AND ignored=0 AND quality>=0.5",[face],|r|r.get(0)).optional()?.flatten();
+    let person = person.context("Nur geeignete bestätigte Gesichter können Referenzen sein")?;
+    collection.db.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<()> {
+        match action {
+            "pin" => {
+                let count:usize=collection.db.query_row("SELECT count(*) FROM training_set WHERE person_id=? AND embedder_id=? AND pinned=1 AND face_id!=?",params![person,key,face],|r|r.get(0))?;
+                if count >= 100 {
+                    bail!("Referenzlimit erreicht");
+                }
+                collection.db.execute(
+                    "DELETE FROM training_exclusions WHERE face_id=? AND embedder_id=?",
+                    params![face, key],
+                )?;
+                collection.db.execute("INSERT OR REPLACE INTO training_set VALUES(?,?,?,'ref',datetime('now'),'manual_pin',1)",params![person,face,key])?;
+            }
+            "unpin" => {
+                collection.db.execute(
+                    "UPDATE training_set SET pinned=0 WHERE face_id=? AND embedder_id=?",
+                    params![face, key],
+                )?;
+            }
+            "exclude" => {
+                collection.db.execute(
+                    "INSERT OR IGNORE INTO training_exclusions VALUES(?,?)",
+                    params![face, key],
+                )?;
+                collection.db.execute(
+                    "DELETE FROM training_set WHERE face_id=? AND embedder_id=?",
+                    params![face, key],
+                )?;
+            }
+            _ => bail!("Unbekannte Referenzaktion"),
+        }
+        collection.db.execute(
+            "INSERT OR IGNORE INTO face_reference_dirty VALUES(?,?)",
+            params![key, person],
+        )?;
+        collection.db.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
+        Ok(())
+    })();
+    collection
+        .db
+        .execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
     result
 }
 

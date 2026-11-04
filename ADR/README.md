@@ -108,3 +108,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0039](0039-rust-onnx-adapter.md) | Lokale Rust-ORT-Adapter mit getrennten Schlüsseln | Akzeptiert (experimentell) |
 | [0040](0040-reproduzierbarer-rust-validierungssplit.md) | Reproduzierbarer Split im eigenen Modellraum | Akzeptiert |
 | [0041](0041-native-adobe-versionspruefung.md) | Native tägliche Adobe-Versionsprüfung | Akzeptiert |
+| [0042](0042-native-bestandsmigrationen.md) | Native Bestandsmigrationen; löst 0037 ab | Akzeptiert |

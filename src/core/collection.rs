@@ -11,7 +11,13 @@ use std::{
 pub struct Collection {
     pub db: Connection,
     pub root: PathBuf,
-    lock: Option<PathBuf>,
+    lock: Option<WriterLock>,
+}
+struct WriterLock(PathBuf);
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 impl Collection {
     pub fn open(root: &Path, write: bool) -> Result<Self> {
@@ -52,6 +58,10 @@ impl Collection {
             db.execute_batch("PRAGMA cache_size=-16384; PRAGMA temp_store=FILE;")?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
             if version == 0 && write {
+                let tables:i64=db.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r|r.get(0))?;
+                if tables > 0 {
+                    bail!("Unversionierte Bestandsdatenbank wird nicht automatisch verändert");
+                }
                 db.execute_batch("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE;")?;
                 db.execute_batch(include_str!("schema.sql"))?;
                 db.execute(
@@ -60,10 +70,15 @@ impl Collection {
                 )?;
                 db.execute("INSERT INTO projection_revision VALUES(0)", [])?;
                 db.execute_batch("INSERT INTO relation_types VALUES(1,'elternteil_von',2,0),(2,'kind_von',1,0),(3,'partner_von',3,1),(4,'geschwister_von',4,1); COMMIT;")?;
-            } else if version != 6 {
+            } else if write && (1..=5).contains(&version) {
+                super::migrations::upgrade(&db, &root, version)?;
+            } else if version != 6 && !(!write && (4..=5).contains(&version)) {
                 bail!(
-                    "Schema {version} wird nicht verändert. Bitte zuerst mit der Python-Anwendung auf Schema 6 aktualisieren."
+                    "Schema {version} benötigt ein unterstütztes Upgrade. Sammlung über Bestand aktualisieren öffnen."
                 );
+            }
+            if write {
+                db.execute_batch("PRAGMA journal_mode=WAL;")?;
             }
             let flags = rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
                 | rusqlite::functions::FunctionFlags::SQLITE_UTF8;
@@ -77,7 +92,11 @@ impl Collection {
             Ok(db)
         })();
         match opened {
-            Ok(db) => Ok(Self { db, root, lock }),
+            Ok(db) => Ok(Self {
+                db,
+                root,
+                lock: lock.map(WriterLock),
+            }),
             Err(e) => {
                 if let Some(lock) = lock {
                     let _ = fs::remove_file(lock);
@@ -174,7 +193,8 @@ impl Collection {
         let exclusions = self.list_option("exclusions", &[])?;
         let extension_folders = self.list_option("extension_folders", crate::config::SUPPORTED)?;
         let export_folders = self.list_option("export_folders", &["Export"])?;
-        let scan = files::scan_filtered(&self.root, false, &extensions, &exclusions, control)?;
+        let scan =
+            files::scan_filtered(&self.root, false, &extensions, &exclusions, true, control)?;
         if scan.files.is_empty() {
             bail!("Keine unterstützten Dateien gefunden; vorhandener Bestand bleibt unverändert.");
         }
@@ -234,6 +254,22 @@ impl Collection {
                     old = Some((candidate.0, candidate.1, candidate.2));
                     moved += 1;
                     tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))", params![scan_id,candidate.0,candidate.3,rel])?;
+                }
+            }
+            if old.is_none() {
+                let candidates=tx.prepare("SELECT id,size,mtime_ns,relpath,full_hash FROM files WHERE size=? AND full_hash IS NOT NULL")?.query_map([source.size as i64],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                let candidates: Vec<_> = candidates
+                    .into_iter()
+                    .filter(|r| !self.root.join(&r.3).exists())
+                    .collect();
+                if !candidates.is_empty() {
+                    let hash = content_hash(&source.path, control)?;
+                    let matches: Vec<_> = candidates.into_iter().filter(|r| r.4 == hash).collect();
+                    if let [candidate] = matches.as_slice() {
+                        old = Some((candidate.0, candidate.1, candidate.2));
+                        moved += 1;
+                        tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))",params![scan_id,candidate.0,candidate.3,rel])?;
+                    }
                 }
             }
             if let Some((id, size, time)) = old {
@@ -365,13 +401,6 @@ fn family_directory(directory: &str, extensions: &[String]) -> String {
             .to_string()
     } else {
         directory.to_string()
-    }
-}
-impl Drop for Collection {
-    fn drop(&mut self) {
-        if let Some(path) = &self.lock {
-            let _ = fs::remove_file(path);
-        }
     }
 }
 
