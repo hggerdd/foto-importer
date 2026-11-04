@@ -40,3 +40,5 @@ Konsistenzbildern, korrekter Eingabe und nachvollziehbarer Gewichtslizenz prüfe
 [Registrierung](https://github.com/hggerdd/foto-importer/blob/32fbe4761b47f637a79505d783c94a2969ebc599/scripts/register_face_embedder.py), [Modelldokumentation](https://github.com/hggerdd/foto-importer/blob/32fbe4761b47f637a79505d783c94a2969ebc599/models/README.md),
 [Konsistenztests](https://github.com/hggerdd/foto-importer/blob/32fbe4761b47f637a79505d783c94a2969ebc599/tests/core/test_face_model_consistency.py).
 
+
+> Rust-Port: OpenCV-Laufzeitwahl abgelöst durch [ADR-0039](0039-rust-onnx-adapter.md). Datenschutz und Modelltrennung gelten weiter.

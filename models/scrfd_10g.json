@@ -1,0 +1,11 @@
+{
+  "id": "scrfd_10g", "name": "SCRFD 10G (InsightFace)", "kind": "detector", "version": "buffalo_l-v0.7",
+  "runtime": "onnxruntime", "file": "weights/det_10g.onnx",
+  "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+  "size": 16923827,
+  "input": {"size": [640,640], "color": "RGB", "mean": 127.5, "std": 128, "align": "arcface_5pt"},
+  "license": "InsightFace pretrained weights: non-commercial research only",
+  "source_url": "https://github.com/deepinsight/insightface/tree/master/python-package",
+  "download_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+  "archive_member": "det_10g.onnx"
+}

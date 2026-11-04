@@ -105,3 +105,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0036](0036-vollstaendige-kopien.md) | Vollständige Kopien; ersetzt Veröffentlichung aus 0005 | Akzeptiert |
 | [0037](0037-sammlungskompatibilitaet.md) | Schema-6-Kompatibilitätsgrenze | Akzeptiert |
 | [0038](0038-gemeinsamer-arbeitsbereich.md) | Gemeinsamer Arbeitsbereich nach Konzeptkritik | Akzeptiert |
+| [0039](0039-rust-onnx-adapter.md) | Lokale Rust-ORT-Adapter mit getrennten Schlüsseln | Akzeptiert (experimentell) |
