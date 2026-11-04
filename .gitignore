@@ -1,0 +1,7 @@
+/target/
+/tmp/
+/models/weights/
+/runtime/
+*.log
+*.myfotomanager*
+
