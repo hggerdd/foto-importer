@@ -1,4 +1,5 @@
 pub mod collection;
+pub mod dng_updates;
 pub mod faces;
 pub mod files;
 pub mod inference;

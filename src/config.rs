@@ -23,6 +23,7 @@ pub struct Settings {
     pub model_dir: String,
     pub onnx_runtime: String,
     pub dark: bool,
+    pub dng_update: crate::core::dng_updates::UpdateCache,
 }
 
 impl Default for Settings {
@@ -34,6 +35,7 @@ impl Default for Settings {
             metadata_date: false,
             dng: false,
             dark: true,
+            dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
             model_dir: "models".into(),

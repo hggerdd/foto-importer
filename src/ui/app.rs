@@ -54,6 +54,11 @@ enum Outcome {
     Imported(files::ImportReport),
     Suggestions(u64, i64, Vec<(i64, String, f32)>),
     Report(String),
+    DngUpdate(
+        String,
+        Option<String>,
+        crate::core::dng_updates::UpdateCache,
+    ),
     Named(Undo),
     Pick(Pick, Option<PathBuf>),
 }
@@ -61,7 +66,7 @@ struct Running {
     task: Task<Outcome>,
     write: bool,
     kind: &'static str,
-    collection:String,
+    collection: String,
 }
 #[derive(Default)]
 struct Draft {
@@ -115,6 +120,7 @@ pub struct PhotoApp {
     person_edit: Option<faces::Person>,
     report: Option<String>,
     delete_phrase: String,
+    dng_status: String,
     closing: bool,
     maintenance_paused: bool,
     capture_started: std::time::Instant,
@@ -124,7 +130,9 @@ pub struct PhotoApp {
 }
 impl PhotoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        Self::with_settings(cc, Settings::load())
+        let mut app = Self::with_settings(cc, Settings::load());
+        app.check_dng();
+        app
     }
     fn with_settings(cc: &eframe::CreationContext<'_>, settings: Settings) -> Self {
         theme::apply(&cc.egui_ctx, settings.dark);
@@ -175,6 +183,7 @@ impl PhotoApp {
             person_edit: None,
             report: None,
             delete_phrase: String::new(),
+            dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
             capture_started: std::time::Instant::now(),
@@ -220,7 +229,7 @@ impl PhotoApp {
                 }
             }
         }
-        let writer_root=self.settings.collection.clone();
+        let writer_root = self.settings.collection.clone();
         self.tasks.push(Running {
             task: Task::start_control(
                 label,
@@ -230,14 +239,17 @@ impl PhotoApp {
                 },
                 move |control| {
                     let _slot = if write && kind != "copy" {
-                        let resolved=Path::new(&writer_root).canonicalize()?;
-                        Some(control.lane(&format!("writer:{}",files::fold(&files::normalize(&resolved))))?)
+                        let resolved = Path::new(&writer_root).canonicalize()?;
+                        Some(control.lane(&format!(
+                            "writer:{}",
+                            files::fold(&files::normalize(&resolved))
+                        ))?)
                     } else if !write && kind != "picker" {
                         Some(control.lane(kind)?)
                     } else {
                         None
                     };
-                    let _foreground = if !write && kind != "picker" {
+                    let _foreground = if !write && kind != "picker" && kind != "dngupdates" {
                         Some(crate::core::jobs::foreground())
                     } else {
                         None
@@ -248,7 +260,7 @@ impl PhotoApp {
             ),
             write,
             kind,
-            collection:self.settings.collection.clone(),
+            collection: self.settings.collection.clone(),
         });
     }
     fn message(&mut self, text: String, error: bool) {
@@ -262,13 +274,43 @@ impl PhotoApp {
             self.history.remove(0);
         }
     }
-    fn save(&mut self) {
+    fn save(&mut self) -> bool {
         if let Err(e) = self.settings.save() {
             self.message(
                 format!("Einstellungen konnten nicht gespeichert werden: {e}"),
                 true,
             );
+            return false;
         }
+        true
+    }
+    fn check_dng(&mut self) {
+        if self.tasks.iter().any(|t| t.kind == "dngupdates") {
+            return;
+        }
+        let cache = self.settings.dng_update.clone();
+        let today = chrono::Local::now().date_naive().to_string();
+        if cache.date != today {
+            self.settings.dng_update = crate::core::dng_updates::UpdateCache {
+                date: today,
+                ..Default::default()
+            };
+            self.save();
+        }
+        let converter = self.settings.converter.clone();
+        self.launch(
+            "DNG-Converter-Version prüfen",
+            false,
+            "dngupdates",
+            move |_| {
+                let installed = crate::core::dng_updates::installed(Path::new(&converter));
+                Ok(Outcome::DngUpdate(
+                    converter,
+                    installed,
+                    crate::core::dng_updates::check(cache),
+                ))
+            },
+        );
     }
     fn pick(&mut self, pick: Pick) {
         if self.tasks.iter().any(|t| t.kind == "picker") {
@@ -497,17 +539,19 @@ impl PhotoApp {
                     self.detail_faces = faces;
                 }
                 Ok(Outcome::Done(message)) => {
-                    if running.kind == "undo" && running.collection==self.settings.collection {
+                    if running.kind == "undo" && running.collection == self.settings.collection {
                         self.undo.pop();
                     }
                     self.message(message, false);
-                    if running.write && running.collection==self.settings.collection {
+                    if running.write && running.collection == self.settings.collection {
                         self.refresh_collection();
                         self.refresh_faces();
-                        if let Some(photo)=self.selected_photo.clone(){self.choose_photo(photo);}
+                        if let Some(photo) = self.selected_photo.clone() {
+                            self.choose_photo(photo);
+                        }
                     }
                 }
-                Ok(Outcome::Named(undo)) if running.collection==self.settings.collection => {
+                Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
                     self.naming = None;
                     self.undo.push(undo);
                     if self.undo.len() > 20 {
@@ -520,6 +564,31 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Report(text)) => self.report = Some(text),
+                Ok(Outcome::DngUpdate(converter, installed, cache)) => {
+                    self.settings.dng_update = cache.clone();
+                    self.save();
+                    if converter == self.settings.converter {
+                        let newer = installed
+                            .as_deref()
+                            .zip(cache.latest.as_deref())
+                            .and_then(|(a, b)| {
+                                Some(
+                                    crate::core::dng_updates::version(b).ok()?
+                                        > crate::core::dng_updates::version(a).ok()?,
+                                )
+                            })
+                            .unwrap_or(false);
+                        self.dng_status = format!(
+                            "Installiert: {} · Adobe: {}{}",
+                            installed
+                                .unwrap_or_else(|| "nicht gefunden / Version unbekannt".into()),
+                            cache.latest.unwrap_or_else(|| {
+                                "Prüfung nicht verfügbar; nächster Versuch morgen".into()
+                            }),
+                            if newer { " · Update verfügbar" } else { "" }
+                        );
+                    }
+                }
                 Ok(Outcome::Imported(report)) => {
                     self.message(
                         format!(
