@@ -252,6 +252,7 @@ pub struct Search {
     pub oldest: bool,
     pub page: usize,
     pub folder: Option<String>,
+    pub folder_page: usize,
 }
 pub const FIELDS: &[(&str, &str)] = &[
     ("camera", "Kamera"),
@@ -519,6 +520,7 @@ pub struct SearchPage {
     pub total: usize,
     pub folders: Vec<String>,
     pub cameras: Vec<(String, usize)>,
+    pub folders_more: bool,
 }
 pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Result<SearchPage> {
     let (sql, args) = predicate(filters, detector)?;
@@ -561,11 +563,22 @@ pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Resu
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        let prefix_length = filters
+            .folder
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.chars().count() + 1)
+            .unwrap_or(0);
+        let start = prefix_length + 1;
+        let mut folders=collection.db.prepare(&format!("SELECT DISTINCT substr(p.relpath,{start},instr(substr(p.relpath,{start}),'/')-1) {from} AND instr(substr(p.relpath,{start}),'/')>0 ORDER BY 1 LIMIT 201 OFFSET {}",filters.folder_page.saturating_mul(200)))?.query_map(rusqlite::params_from_iter(&args),|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let folders_more = folders.len() > 200;
+        folders.truncate(200);
         Ok(SearchPage {
             photos,
             total,
-            folders: Vec::new(),
+            folders,
             cameras,
+            folders_more,
         })
     })();
     collection.db.execute_batch("ROLLBACK")?;

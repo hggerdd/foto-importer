@@ -25,8 +25,8 @@ pub struct Thumbnails {
 }
 impl Thumbnails {
     pub fn new(ctx: egui::Context) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<(String, PreviewRequest, String)>(48);
-        let (out, input) = mpsc::sync_channel(48);
+        let (tx, rx) = mpsc::sync_channel::<(String, PreviewRequest, String)>(1);
+        let (out, input) = mpsc::sync_channel(2);
         let generation = Arc::new(AtomicU64::new(0));
         let worker_generation = generation.clone();
         std::thread::spawn(move || {
@@ -34,6 +34,7 @@ impl Thumbnails {
                 if request.generation != worker_generation.load(Ordering::Relaxed) {
                     continue;
                 }
+                let _foreground = crate::core::jobs::foreground();
                 let result = previews::preview(request, &exiftool, &Control::default());
                 if out.send((key, result)).is_err() {
                     break;
@@ -111,7 +112,7 @@ impl Thumbnails {
             request.crop,
             request.edge
         );
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
         if ui.is_rect_visible(rect) {
             ui.painter()
                 .rect_filled(rect, 8, egui::Color32::from_rgb(13, 18, 24));
@@ -121,6 +122,7 @@ impl Thumbnails {
                     let fit = texture.size_vec2();
                     let scale = (rect.width() / fit.x).min(rect.height() / fit.y);
                     let dest = egui::Rect::from_center_size(rect.center(), fit * scale);
+                    response.rect = dest;
                     ui.painter().image(
                         texture.id(),
                         dest,

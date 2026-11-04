@@ -139,11 +139,42 @@ impl Collection {
             )?,
         })
     }
+    pub fn list_option(&self, key: &str, default: &[&str]) -> Result<Vec<String>> {
+        let raw: Option<String> = self
+            .db
+            .query_row("SELECT value FROM settings WHERE key=?", [key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(raw
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_else(|| default.iter().map(|v| v.to_string()).collect()))
+    }
+    pub fn configure(&self, key: &str, value: serde_json::Value) -> Result<()> {
+        self.writable()?;
+        self.db.execute(
+            "INSERT OR REPLACE INTO settings VALUES(?,?)",
+            params![key, value.to_string()],
+        )?;
+        Ok(())
+    }
 
     /// An incomplete scan never marks unvisited files as missing.
     pub fn quick_scan(&mut self, allow_missing: bool, control: &Control) -> Result<String> {
         self.writable()?;
-        let scan = files::scan(&self.root, false, control)?;
+        let mut extensions = self.list_option(
+            "extensions",
+            &[
+                "nef", "nrw", "dng", "jpg", "jpeg", "heic", "tif", "tiff", "png", "mov", "mp4",
+            ],
+        )?;
+        if !extensions.iter().any(|e| e == "xmp") {
+            extensions.push("xmp".into());
+        }
+        let exclusions = self.list_option("exclusions", &[])?;
+        let extension_folders = self.list_option("extension_folders", crate::config::SUPPORTED)?;
+        let export_folders = self.list_option("export_folders", &["Export"])?;
+        let scan = files::scan_filtered(&self.root, false, &extensions, &exclusions, control)?;
         if scan.files.is_empty() {
             bail!("Keine unterstützten Dateien gefunden; vorhandener Bestand bleibt unverändert.");
         }
@@ -210,17 +241,22 @@ impl Collection {
                 tx.execute("UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,size=?,mtime_ns=?,inode=?,last_seen_scan=?,status='present',meta_state=CASE WHEN ? THEN 'stale' ELSE meta_state END,quick_hash=CASE WHEN ? THEN NULL ELSE quick_hash END WHERE id=?", params![rel,files::fold(&rel),dir,name,stem,ext,source.size as i64,mtime,inode,scan_id,changed,changed,id])?;
             } else {
                 // Pair variants only in the same family, never in Export folders.
-                let family =
-                    if crate::config::SUPPORTED.contains(&dir.rsplit('/').next().unwrap_or("")) {
-                        dir.rsplit_once('/').map(|v| v.0).unwrap_or("")
-                    } else {
-                        dir
-                    };
-                let photo: Option<i64> = if dir.split('/').any(|v| v.eq_ignore_ascii_case("export"))
-                {
+                let family = family_directory(dir, &extension_folders);
+                let photo: Option<i64> = if dir.split('/').any(|v| {
+                    export_folders
+                        .iter()
+                        .any(|f| files::fold(f) == files::fold(v))
+                }) {
                     None
                 } else {
-                    tx.query_row("SELECT photo_id FROM files WHERE stem=? COLLATE NOCASE AND photo_id IS NOT NULL AND (dir=? OR dir LIKE ?) ORDER BY id LIMIT 1", params![stem,family,format!("{family}/%")], |r|r.get(0)).optional()?
+                    let candidates=tx.prepare("SELECT photo_id,dir FROM files WHERE casefold(stem)=? AND photo_id IS NOT NULL ORDER BY id")?.query_map([files::fold(&stem)],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    candidates
+                        .into_iter()
+                        .find(|(_, directory)| {
+                            files::fold(&family_directory(directory, &extension_folders))
+                                == files::fold(&family)
+                        })
+                        .map(|r| r.0)
                 };
                 let photo = match photo {
                     Some(p) => p,
@@ -314,6 +350,21 @@ impl Collection {
             "{} Dateien mit BLAKE3 geprüft; keine Abweichung",
             rows.len()
         ))
+    }
+}
+fn family_directory(directory: &str, extensions: &[String]) -> String {
+    let leaf = directory.rsplit('/').next().unwrap_or("");
+    if extensions
+        .iter()
+        .any(|e| files::fold(e) == files::fold(leaf))
+    {
+        directory
+            .rsplit_once('/')
+            .map(|v| v.0)
+            .unwrap_or("")
+            .to_string()
+    } else {
+        directory.to_string()
     }
 }
 impl Drop for Collection {

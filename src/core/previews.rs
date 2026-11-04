@@ -12,6 +12,7 @@ use std::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreviewRequest {
+    pub root: Option<PathBuf>,
     pub path: PathBuf,
     pub orientation: u32,
     pub crop: Option<[f32; 4]>,
@@ -103,6 +104,14 @@ pub fn orient(image: DynamicImage, orientation: u32) -> DynamicImage {
 }
 
 pub fn preview(request: PreviewRequest, exiftool: &str, control: &Control) -> Result<Preview> {
+    if let Some(root) = &request.root {
+        let root = root.canonicalize()?;
+        let resolved = request.path.canonicalize()?;
+        if !resolved.starts_with(root) || request.path.symlink_metadata()?.file_type().is_symlink()
+        {
+            bail!("Vorschau liegt außerhalb des gewählten Ordners");
+        }
+    }
     let mut image = load(
         &request.path,
         exiftool,

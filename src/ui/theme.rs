@@ -3,7 +3,11 @@ pub const ACCENT: Color32 = Color32::from_rgb(67, 211, 190);
 pub const WARM: Color32 = Color32::from_rgb(239, 188, 111);
 pub fn apply(ctx: &egui::Context, dark: bool) {
     let mut style = egui::Style {
-        visuals: if dark { egui::Visuals::dark() } else { egui::Visuals::light() },
+        visuals: if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        },
         ..Default::default()
     };
     if dark {

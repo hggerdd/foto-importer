@@ -89,6 +89,19 @@ pub fn parse_date(value: &str) -> Option<String> {
 
 /// Walk without following symlinks; discovery errors remain visible to callers.
 pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
+    let extensions = crate::config::SUPPORTED
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>();
+    scan_filtered(root, metadata, &extensions, &[], control)
+}
+pub fn scan_filtered(
+    root: &Path,
+    metadata: bool,
+    extensions: &[String],
+    exclusions: &[String],
+    control: &Control,
+) -> Result<Scan> {
     let root = root
         .canonicalize()
         .context("Quellordner ist nicht erreichbar")?;
@@ -96,7 +109,7 @@ pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
         bail!("Quelle ist kein Ordner");
     }
     let mut scan = Scan::default();
-    let mut dirs = vec![root];
+    let mut dirs = vec![root.clone()];
     while let Some(dir) = dirs.pop() {
         control.checkpoint()?;
         let entries = match fs::read_dir(&dir) {
@@ -115,6 +128,13 @@ pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
                     return Ok(());
                 }
                 let path = entry.path();
+                let relative = normalize(path.strip_prefix(&root)?);
+                if exclusions
+                    .iter()
+                    .any(|pattern| wildcard(&fold(pattern), &fold(&relative)))
+                {
+                    return Ok(());
+                }
                 if kind.is_dir() {
                     let name = entry.file_name().to_string_lossy().to_lowercase();
                     if !name.starts_with('.')
@@ -122,9 +142,7 @@ pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
                     {
                         dirs.push(path);
                     }
-                } else if kind.is_file()
-                    && crate::config::SUPPORTED.contains(&extension(&path).as_str())
-                {
+                } else if kind.is_file() && extensions.contains(&extension(&path)) {
                     let stat = entry.metadata()?;
                     #[cfg(windows)]
                     let timestamp = stat.created().or_else(|_| stat.modified())?;
@@ -157,6 +175,34 @@ pub fn scan(root: &Path, metadata: bool, control: &Control) -> Result<Scan> {
     Ok(scan)
 }
 
+fn wildcard(pattern: &str, text: &str) -> bool {
+    let (pattern, text) = (
+        pattern.chars().collect::<Vec<_>>(),
+        text.chars().collect::<Vec<_>>(),
+    );
+    let (mut p, mut t, mut star, mut checkpoint) = (0, 0, None, 0);
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            p += 1;
+            checkpoint = t;
+        } else if let Some(index) = star {
+            p = index + 1;
+            checkpoint += 1;
+            t = checkpoint;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
 pub fn counts(files: &[SourceFile]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for file in files {
@@ -180,6 +226,13 @@ pub fn copy_one(source: &Path, folder: &Path, control: &Control) -> Result<PathB
             break;
         }
         temporary.write_all(&buffer[..n])?;
+    }
+    let after = input.metadata()?;
+    if stat.len() != after.len()
+        || stat.modified()? != after.modified()?
+        || temporary.as_file().metadata()?.len() != stat.len()
+    {
+        bail!("Quelldatei wurde während des Kopierens verändert");
     }
     temporary
         .as_file()
@@ -213,6 +266,7 @@ pub struct ImportReport {
     pub copied: Vec<PathBuf>,
     pub errors: Vec<String>,
     pub converted: usize,
+    pub cancelled: bool,
 }
 pub fn import(
     files: &[SourceFile],
@@ -221,6 +275,7 @@ pub fn import(
     converter: Option<&Path>,
     control: &Control,
 ) -> Result<ImportReport> {
+    let slot = control.lane("copy")?;
     validate_folder(name)?;
     let target = target
         .canonicalize()
@@ -229,24 +284,41 @@ pub fn import(
         bail!("Ziel ist kein Ordner");
     }
     let destination = target.join(name);
+    fs::create_dir_all(&destination)?;
+    if !destination.canonicalize()?.starts_with(&target) {
+        bail!("Zielordner verweist außerhalb des gewählten Ziels");
+    }
     let mut report = ImportReport::default();
     for (index, file) in files.iter().enumerate() {
-        control.checkpoint()?;
+        if control.checkpoint().is_err() {
+            report.cancelled = true;
+            break;
+        }
         let ext = extension(&file.path);
-        match copy_one(
-            &file.path,
-            &destination.join(if ext.is_empty() { "no_extension" } else { &ext }),
-            control,
-        ) {
+        let folder = destination.join(if ext.is_empty() { "no_extension" } else { &ext });
+        fs::create_dir_all(&folder)?;
+        if !folder.canonicalize()?.starts_with(&target) {
+            report.errors.push(format!(
+                "{}: Zielordner verlässt das gewählte Ziel",
+                file.path.display()
+            ));
+            continue;
+        }
+        match copy_one(&file.path, &folder, control) {
             Ok(path) => report.copied.push(path),
             Err(e) => report.errors.push(format!("{}: {e}", file.path.display())),
         }
         control.progress(index + 1, files.len());
     }
-    if let Some(converter) = converter {
+    drop(slot);
+    if let Some(converter) = converter.filter(|_| !report.cancelled) {
+        let _dng_slot = control.lane("dng")?;
         for path in &report.copied {
             if extension(path) == "nef" {
-                control.checkpoint()?;
+                if control.checkpoint().is_err() {
+                    report.cancelled = true;
+                    break;
+                }
                 match convert_dng(path, &destination, converter, control) {
                     Ok(_) => report.converted += 1,
                     Err(e) => report.errors.push(format!("DNG {}: {e}", path.display())),

@@ -3,5 +3,8 @@ pub mod faces;
 pub mod files;
 pub mod inference;
 pub mod jobs;
+pub mod maintenance;
+pub mod matching;
 pub mod metadata;
 pub mod previews;
+pub mod recognition;

@@ -1,16 +1,14 @@
+pub use super::recognition::{apply_knowledge, rematch, suggestions};
 use super::{
     collection::Collection,
     inference::{self, Models},
     jobs::Control,
     previews,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::{collections::BTreeSet, path::Path};
 
 #[derive(Clone, Debug)]
 pub struct Person {
@@ -18,6 +16,8 @@ pub struct Person {
     pub name: String,
     pub birth: String,
     pub count: usize,
+    pub gender: String,
+    pub note: String,
 }
 #[derive(Clone, Debug)]
 pub struct Face {
@@ -59,7 +59,7 @@ pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
         .optional()?;
     Ok(raw.and_then(|v| serde_json::from_str::<String>(&v).ok()))
 }
-fn save_setting(db: &rusqlite::Connection, key: &str, value: &str) -> Result<()> {
+pub(crate) fn save_setting(db: &rusqlite::Connection, key: &str, value: &str) -> Result<()> {
     db.execute(
         "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
         params![key, serde_json::to_string(value)?],
@@ -67,8 +67,8 @@ fn save_setting(db: &rusqlite::Connection, key: &str, value: &str) -> Result<()>
     Ok(())
 }
 pub fn people(collection: &Collection) -> Result<Vec<Person>> {
-    Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),(SELECT count(*) FROM faces f WHERE f.person_id=p.id AND f.assignment='user' AND f.retained=0) FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
-        .query_map([],|r|Ok(Person{id:r.get(0)?,name:r.get(1)?,birth:r.get(2)?,count:r.get(3)?}))?.collect::<rusqlite::Result<_>>()?)
+    Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),(SELECT count(*) FROM faces f WHERE f.person_id=p.id AND f.assignment='user' AND f.retained=0),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='gender'),''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='note'),'') FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
+        .query_map([],|r|Ok(Person{id:r.get(0)?,name:r.get(1)?,birth:r.get(2)?,count:r.get(3)?,gender:r.get(4)?,note:r.get(5)?}))?.collect::<rusqlite::Result<_>>()?)
 }
 pub fn status(collection: &Collection) -> Result<Status> {
     let mut status=collection.db.query_row("SELECT count(*),coalesce(sum(assignment='user'),0),coalesce(sum(person_id IS NULL AND ignored=0),0),coalesce(sum(assignment IN ('auto','suggested') AND ignored=0),0),coalesce(sum(ignored=1),0) FROM faces WHERE retained=0",[],|r|Ok(Status{total:r.get(0)?,confirmed:r.get(1)?,unknown:r.get(2)?,review:r.get(3)?,ignored:r.get(4)?,..Default::default()}))?;
@@ -164,6 +164,32 @@ pub fn analyze(
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
     let detector_key = models.detector.key();
     let embedder_key = models.embedder.key();
+    if setting(collection, "rust.detector_key")?.is_some_and(|key| key != detector_key) {
+        collection.db.backup(
+            "main",
+            collection.root.join(format!(
+                ".myfotomanager.before-detector-{}.bak",
+                uuid::Uuid::new_v4()
+            )),
+            None,
+        )?;
+    }
+    for (key, value) in [
+        ("rust.auto", models.embedder.thresholds.auto),
+        ("rust.suggest", models.embedder.thresholds.suggest),
+        ("rust.duplicate", models.embedder.thresholds.duplicate),
+    ] {
+        collection.db.execute(
+            "INSERT OR IGNORE INTO face_settings VALUES(?,?)",
+            params![
+                format!(
+                    "rust.thresholds.{embedder_key}.{}",
+                    key.strip_prefix("rust.").unwrap_or(key)
+                ),
+                value.to_string()
+            ],
+        )?;
+    }
     save_setting(&collection.db, "rust.detector_key", &detector_key)?;
     save_setting(&collection.db, "rust.embedder_key", &embedder_key)?;
     let total: usize = collection
@@ -196,7 +222,7 @@ pub fn analyze(
                         control.checkpoint()?;
                         embedded.push(models.embed(&image, detection)?);
                     }
-                    let old = photo_faces(collection, photo)?;
+                    let old=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? ORDER BY f.assignment='user' DESC,f.retained,f.id"))?.query_map([photo],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
                     let tx = collection.db.transaction()?;
                     let mut used = BTreeSet::new();
                     for (detection, vector) in detections.iter().zip(&embedded) {
@@ -274,7 +300,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         bail!("Ungültige Vektorlänge");
     }
     let vector: Vec<_> = bytes
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     inference::normalize(&vector)
@@ -445,10 +473,7 @@ pub fn name_group(
                 params![id, person],
             )?;
         }
-        tx.execute(
-            "DELETE FROM training_set WHERE face_id=? AND pinned=0",
-            [id],
-        )?;
+        tx.execute("DELETE FROM training_set WHERE face_id=?", [id])?;
     }
     let after = ids
         .iter()
@@ -470,6 +495,7 @@ pub fn undo(collection: &mut Collection, undo: &Undo) -> Result<()> {
             || current.assignment != expected.assignment
             || current.ignored != expected.ignored
             || current.rejections != expected.rejections
+            || current.pins != expected.pins
         {
             bail!("Spätere Nutzeränderung verhindert Rücknahme");
         }
@@ -537,163 +563,6 @@ pub fn delete_face(collection: &mut Collection, photo: i64, id: i64) -> Result<(
     tx.execute("INSERT OR IGNORE INTO face_reference_dirty SELECT e.embedder_id,f.person_id FROM face_embeddings e JOIN faces f ON f.id=e.face_id WHERE f.id=? AND f.person_id IS NOT NULL",[id])?;
     tx.execute("INSERT INTO face_maintenance SELECT embedder_id,0,1 FROM face_embeddings WHERE face_id=? ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[id])?;
     delete_face_rows(&tx, id)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Stream model-specific references; own face and rejected/occupied people are excluded.
-pub fn suggestions(
-    collection: &Collection,
-    face: i64,
-    key: &str,
-) -> Result<Vec<(i64, String, f32)>> {
-    let bytes: Option<Vec<u8>> = collection
-        .db
-        .query_row(
-            "SELECT vec FROM face_embeddings WHERE face_id=? AND embedder_id=?",
-            params![face, key],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let Some(bytes) = bytes else {
-        return Ok(Vec::new());
-    };
-    let query = decode(&bytes)?;
-    let photo: i64 =
-        collection
-            .db
-            .query_row("SELECT photo_id FROM faces WHERE id=?", [face], |r| {
-                r.get(0)
-            })?;
-    let mut statement=collection.db.prepare("SELECT t.person_id,e.vec,coalesce(a.value,'Unbenannt') FROM training_set t JOIN face_embeddings e ON e.face_id=t.face_id AND e.embedder_id=t.embedder_id JOIN faces f ON f.id=t.face_id LEFT JOIN person_attrs a ON a.person_id=t.person_id AND a.key='name' WHERE t.embedder_id=? AND t.split='ref' AND t.face_id!=? AND f.assignment='user' AND f.ignored=0 AND f.retained=0 AND f.quality>=0.5 AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=t.embedder_id) AND NOT EXISTS(SELECT 1 FROM face_review v WHERE v.face_id=f.id AND v.embedder_id=t.embedder_id) AND NOT EXISTS(SELECT 1 FROM face_rejections r WHERE r.face_id=? AND r.person_id=t.person_id) AND NOT EXISTS(SELECT 1 FROM faces o WHERE o.photo_id=? AND o.assignment='user' AND o.person_id=t.person_id AND o.id!=? AND o.retained=0) ORDER BY t.person_id,t.face_id")?;
-    let mut rows = statement.query(params![key, face, face, photo, face])?;
-    let mut scores: BTreeMap<i64, (String, Vec<f32>)> = BTreeMap::new();
-    while let Some(row) = rows.next()? {
-        let vector = decode(&row.get::<_, Vec<u8>>(1)?)?;
-        if let Some(score) = inference::cosine(&query, &vector) {
-            let entry = scores
-                .entry(row.get(0)?)
-                .or_insert_with(|| (row.get(2).unwrap_or_default(), Vec::new()));
-            entry.1.push(score);
-            entry.1.sort_by(|a, b| b.total_cmp(a));
-            entry.1.truncate(3);
-        }
-    }
-    let mut result: Vec<_> = scores
-        .into_iter()
-        .map(|(id, (name, scores))| (id, name, scores.iter().sum::<f32>() / scores.len() as f32))
-        .collect();
-    result.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
-    result.truncate(6);
-    Ok(result)
-}
-
-pub fn apply_knowledge(collection: &mut Collection, control: &Control) -> Result<String> {
-    collection.writable()?;
-    let key = setting(collection, "rust.embedder_key")?
-        .context("Zuerst Fotos mit einem lokalen Modell analysieren")?;
-    collection.db.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
-    let people = people(collection)?;
-    for person in people {
-        control.checkpoint()?;
-        let candidates=collection.db.prepare("SELECT f.id,e.vec,coalesce(f.captured_at,'') FROM faces f JOIN face_embeddings e ON e.face_id=f.id WHERE e.embedder_id=? AND f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.retained=0 AND f.quality>=0.5 AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=?) ORDER BY f.quality DESC,f.id LIMIT 2048")?.query_map(params![key,person.id,key],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let tx = collection.db.transaction()?;
-        tx.execute(
-            "DELETE FROM training_set WHERE person_id=? AND embedder_id=? AND pinned=0",
-            params![person.id, key],
-        )?;
-        let mut selected: Vec<Vec<f32>> = Vec::new();
-        for (id, bytes, _) in candidates {
-            let vector = decode(&bytes)?;
-            if selected.len() >= 100 {
-                break;
-            }
-            if selected
-                .iter()
-                .any(|v| inference::cosine(v, &vector).is_some_and(|s| s > 0.92))
-            {
-                continue;
-            }
-            let split = if selected.len() % 5 == 4 {
-                "val"
-            } else {
-                "ref"
-            };
-            tx.execute("INSERT OR IGNORE INTO training_set VALUES(?,?,?,?,datetime('now'),'rust-quality-diversity',0)",params![person.id,id,key,split])?;
-            selected.push(vector);
-        }
-        tx.execute(
-            "DELETE FROM face_reference_dirty WHERE embedder_id=? AND person_id=?",
-            params![key, person.id],
-        )?;
-        tx.commit()?;
-    }
-    rematch(collection, &key, control)?;
-    while prepare_groups(collection, &key, control)? > 0 {}
-    Ok("Referenzen ausgewählt und Namen vorgeschlagen".into())
-}
-
-pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
-    let mut cursor: i64 = collection
-        .db
-        .query_row(
-            "SELECT after_photo FROM face_maintenance WHERE embedder_id=?",
-            [key],
-            |r| r.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
-    loop {
-        control.checkpoint()?;
-        let photos=collection.db.prepare("SELECT DISTINCT photo_id FROM faces WHERE photo_id>? AND retained=0 ORDER BY photo_id LIMIT 32")?.query_map([cursor],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        if photos.is_empty() {
-            break;
-        }
-        for photo in photos {
-            control.checkpoint()?;
-            let faces = photo_faces(collection, photo)?;
-            let mut choices = Vec::new();
-            for face in faces
-                .iter()
-                .filter(|f| !f.ignored && f.assignment.as_deref() != Some("user"))
-            {
-                for (person, _, score) in suggestions(collection, face.id, key)? {
-                    if score >= 0.363 {
-                        choices.push((score, face.id, person));
-                    }
-                }
-            }
-            choices.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-            let mut used_faces = BTreeSet::new();
-            let mut used_people: BTreeSet<_> = faces
-                .iter()
-                .filter(|f| f.assignment.as_deref() == Some("user"))
-                .filter_map(|f| f.person)
-                .collect();
-            let tx = collection.db.transaction()?;
-            tx.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE photo_id=? AND assignment IS NOT 'user' AND retained=0",[photo])?;
-            for (score, face, person) in choices {
-                if !used_faces.contains(&face) && !used_people.contains(&person) {
-                    tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=? WHERE id=? AND assignment IS NOT 'user'",params![person,if score>=0.6{"auto"}else{"suggested"},score,face])?;
-                    used_faces.insert(face);
-                    used_people.insert(person);
-                }
-            }
-            tx.execute(
-                "UPDATE face_maintenance SET after_photo=? WHERE embedder_id=?",
-                params![photo, key],
-            )?;
-            tx.commit()?;
-            cursor = photo;
-        }
-    }
-    let tx = collection.db.transaction()?;
-    tx.execute("DELETE FROM face_maintenance WHERE embedder_id=?", [key])?;
-    save_setting(
-        &tx,
-        "rust.recognition_applied",
-        &chrono::Utc::now().to_rfc3339(),
-    )?;
     tx.commit()?;
     Ok(())
 }
