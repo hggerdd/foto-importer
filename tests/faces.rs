@@ -111,3 +111,51 @@ fn vector_spaces_and_invalid_values_are_rejected() {
     assert!(faces::decode(&[1, 2, 3]).is_err());
     assert!(inference::normalize(&[f32::NAN]).is_err());
 }
+#[test]
+fn review_groups_are_size_sorted_globally_and_do_not_mix_people() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    seed(&c, 35)?;
+    c.db.execute_batch("INSERT INTO persons(id) VALUES(1),(2),(3); UPDATE faces SET person_id=CASE WHEN id<=1 THEN 1 WHEN id<=21 THEN 2 ELSE 3 END,assignment='suggested';")?;
+    let page = faces::page(&c, "review", 0)?;
+    assert_eq!(
+        page.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![14, 14, 6, 1]
+    );
+    for group in &page.groups {
+        assert!(group.iter().all(|f| f.person == group[0].person));
+    }
+    Ok(())
+}
+#[test]
+fn ignore_undo_restores_reference_pins_and_guards_later_pin_changes() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    seed(&c, 1)?;
+    c.db.execute(
+        "INSERT INTO face_settings VALUES('rust.embedder_key','\"test\"')",
+        [],
+    )?;
+    let first = faces::name_group(&mut c, &[1], &BTreeSet::from([1]), None, "Alex", false)?;
+    foto_importer::core::maintenance::reference_action(&c, 1, "pin")?;
+    assert!(faces::undo(&mut c, &first).is_err());
+    let ignored = faces::name_group(&mut c, &[1], &BTreeSet::new(), None, "", true)?;
+    assert_eq!(
+        c.db.query_row(
+            "SELECT count(*) FROM training_set WHERE pinned=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    faces::undo(&mut c, &ignored)?;
+    assert_eq!(
+        c.db.query_row(
+            "SELECT count(*) FROM training_set WHERE pinned=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}

@@ -1,6 +1,6 @@
 # ADR-0032: Metadaten im Ordnerbaum mit quellbezogenen Gesichtsrahmen
 
-- **Status:** Akzeptiert
+- **Status:** Akzeptiert für Python; Darstellung in Rust teilweise abgelöst durch [ADR-0038](0038-gemeinsamer-arbeitsbereich.md)
 - **Erfasst am / Entscheidungsdatum:** 2026-10-30
 - **Art:** Neue Entscheidung
 - **Bezieht sich auf:** [0012](0012-lesende-metadatenansicht.md),

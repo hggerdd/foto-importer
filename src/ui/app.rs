@@ -74,6 +74,17 @@ struct Draft {
     person: Option<i64>,
     excluded: BTreeSet<i64>,
 }
+#[derive(Default)]
+struct ImportCache {
+    revision: u64,
+    selected: BTreeSet<String>,
+    focused: String,
+    selection: std::sync::Arc<Vec<SourceFile>>,
+    focus_files: std::sync::Arc<Vec<SourceFile>>,
+    counts: BTreeMap<String, usize>,
+    bytes: u64,
+    days: BTreeMap<String, usize>,
+}
 
 pub struct PhotoApp {
     settings: Settings,
@@ -83,6 +94,7 @@ pub struct PhotoApp {
     notice: String,
     error: bool,
     scan: Scan,
+    import_cache: ImportCache,
     scan_revision: u64,
     selected: BTreeSet<String>,
     focused: String,
@@ -100,7 +112,9 @@ pub struct PhotoApp {
     undo: Vec<Undo>,
     thumbnails: Thumbnails,
     selected_photo: Option<Photo>,
+    source_preview: Option<PathBuf>,
     detail: String,
+    detail_rows: Vec<(String, String)>,
     detail_faces: Vec<Face>,
     detail_revision: u64,
     large: bool,
@@ -120,6 +134,10 @@ pub struct PhotoApp {
     person_edit: Option<faces::Person>,
     report: Option<String>,
     delete_phrase: String,
+    move_old: String,
+    move_new: String,
+    purge_scans: u32,
+    purge_confirm: bool,
     dng_status: String,
     closing: bool,
     maintenance_paused: bool,
@@ -148,6 +166,7 @@ impl PhotoApp {
             notice: "Bereit für deine nächsten Erinnerungen".into(),
             error: false,
             scan: Scan::default(),
+            import_cache: ImportCache::default(),
             scan_revision: 0,
             selected: BTreeSet::new(),
             focused: String::new(),
@@ -165,7 +184,9 @@ impl PhotoApp {
             undo: Vec::new(),
             thumbnails: Thumbnails::new(cc.egui_ctx.clone()),
             selected_photo: None,
+            source_preview: None,
             detail: String::new(),
+            detail_rows: Vec::new(),
             detail_faces: Vec::new(),
             detail_revision: 0,
             large: false,
@@ -185,6 +206,10 @@ impl PhotoApp {
             person_edit: None,
             report: None,
             delete_phrase: String::new(),
+            move_old: String::new(),
+            move_new: String::new(),
+            purge_scans: 0,
+            purge_confirm: false,
             dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
@@ -363,8 +388,9 @@ impl PhotoApp {
         let revision = self.query_revision;
         let root = PathBuf::from(&self.settings.collection);
         let filters = self.filters.clone();
-        self.launch("Sammlung durchsuchen", false, "search", move |_| {
+        self.launch("Sammlung durchsuchen", false, "search", move |control| {
             let c = Collection::open(&root, false)?;
+            c.cancel_with(&control);
             let detector = faces::setting(&c, "rust.detector_key")?.unwrap_or_default();
             Ok(Outcome::Search(
                 revision,
@@ -383,10 +409,16 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.collection);
         let mode = self.face_mode.clone();
         let page = self.face_index;
-        self.launch("Personen und Gesichter lesen", false, "faces", move |_| {
-            let c = Collection::open(&root, false)?;
-            Ok(Outcome::Faces(revision, faces::page(&c, &mode, page)?))
-        });
+        self.launch(
+            "Personen und Gesichter lesen",
+            false,
+            "faces",
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                Ok(Outcome::Faces(revision, faces::page(&c, &mode, page)?))
+            },
+        );
     }
     fn collection_action(&mut self, action: &str) {
         if action == "resume" {
@@ -395,12 +427,30 @@ impl PhotoApp {
         if self.busy() || self.settings.collection.is_empty() {
             return;
         }
+        if [
+            "scan",
+            "metadata",
+            "analyze",
+            "confirm_missing",
+            "purge",
+            "resolve",
+        ]
+        .contains(&action)
+        {
+            self.undo.clear();
+        }
         let settings = self.settings.clone();
         let action = action.to_string();
         let detector = self.detector.clone();
         let embedder = self.embedder.clone();
+        let old = self.move_old.clone();
+        let new = self.move_new.clone();
+        let age = self.purge_scans;
         let label = match action.as_str() {
             "scan" => "Sammlung indizieren",
+            "confirm_missing" => "Fehlende nach Prüfung markieren",
+            "purge" => "Fehlende Indexeinträge entfernen",
+            "resolve" => "Verschiebung zuordnen",
             "metadata" => "Metadaten lesen",
             "verify" => "Dateien mit BLAKE3 prüfen",
             "analyze" => "Fotos lokal analysieren",
@@ -416,6 +466,9 @@ impl PhotoApp {
             let mut c = Collection::open(Path::new(&settings.collection), true)?;
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
+                "confirm_missing" => c.quick_scan(true, &control)?,
+                "purge" => c.purge_missing(age as i64)?,
+                "resolve" => c.resolve_move(&old, &new, &control)?,
                 "metadata" => metadata::enrich(&mut c, &settings.exiftool, &control)?,
                 "automatic" | "nightly" => {
                     if settings.auto_metadata {
@@ -465,9 +518,11 @@ impl PhotoApp {
         });
     }
     fn choose_photo(&mut self, photo: Photo) {
+        self.source_preview = None;
         self.detail_revision += 1;
         let revision = self.detail_revision;
         self.detail.clear();
+        self.detail_rows.clear();
         self.detail_faces.clear();
         let root = PathBuf::from(&self.settings.collection);
         let id = photo.id;
@@ -571,6 +626,31 @@ impl PhotoApp {
                     if revision == self.detail_revision =>
                 {
                     self.detail = detail;
+                    self.detail_rows.clear();
+                    if let Ok(serde_json::Value::Array(files)) = serde_json::from_str(&self.detail)
+                    {
+                        for file in files {
+                            if let Some(path) = file.get("Datei").and_then(|v| v.as_str()) {
+                                self.detail_rows.push(("Datei".into(), path.into()));
+                            }
+                            if let Some(tags) = file.get("Metadaten").and_then(|v| v.as_object()) {
+                                for (key, value) in tags {
+                                    self.detail_rows.push((
+                                        key.clone(),
+                                        value
+                                            .as_str()
+                                            .map(str::to_string)
+                                            .unwrap_or_else(|| value.to_string()),
+                                    ));
+                                }
+                            } else {
+                                self.detail_rows.push((
+                                    "Status".into(),
+                                    "Metadaten noch nicht angereichert".into(),
+                                ));
+                            }
+                        }
+                    }
                     self.detail_faces = faces;
                 }
                 Ok(Outcome::Done(message)) => {
@@ -763,6 +843,7 @@ impl PhotoApp {
             )
             .show(ctx, |ui| {
                 ui.add_space(12.0);
+                theme::dark_panel(ui);
                 ui.label(
                     RichText::new("F / I")
                         .size(28.0)
@@ -774,7 +855,11 @@ impl PhotoApp {
                 ui.add_space(40.0);
                 theme::eyebrow(ui, "ARBEITSBEREICH");
                 for (view, title, hint) in [
-                    (View::Import, "01  Importieren", "Karte → Sammlung"),
+                    (
+                        View::Import,
+                        "01  Importieren",
+                        "Von der Karte in die Sammlung",
+                    ),
                     (View::Collection, "02  Sammlung", "Fotos finden & verstehen"),
                     (View::People, "03  Personen", "Namen & Beziehungen"),
                     (View::Tasks, "04  Aufgaben", "Fortschritt & Verlauf"),
@@ -826,6 +911,7 @@ impl PhotoApp {
                     .inner_margin(egui::Margin::symmetric(22, 12)),
             )
             .show(ctx, |ui| {
+                theme::dark_panel(ui);
                 if let Some(running) = self
                     .tasks
                     .iter()
@@ -857,7 +943,7 @@ impl PhotoApp {
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(if self.error { "Hinweis" } else { "● Bereit" }).color(
+                            RichText::new(if self.error { "Hinweis" } else { "Bereit" }).color(
                                 if self.error {
                                     theme::WARM
                                 } else {
@@ -880,7 +966,18 @@ impl PhotoApp {
     fn empty(&self, ui: &mut egui::Ui, title: &str, text: &str) {
         ui.add_space(50.0);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("▧").size(64.0).color(theme::ACCENT));
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 54.0), egui::Sense::hover());
+            ui.painter().rect_stroke(
+                rect.shrink(4.0),
+                8,
+                egui::Stroke::new(2.0_f32, theme::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().circle_stroke(
+                rect.center(),
+                14.0,
+                egui::Stroke::new(2.0_f32, theme::ACCENT),
+            );
             ui.add_space(16.0);
             ui.label(RichText::new(title).size(24.0).strong());
             ui.add_space(10.0);
@@ -890,6 +987,12 @@ impl PhotoApp {
 }
 impl eframe::App for PhotoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
+            let size = rect.size();
+            if size.x >= 980.0 && size.y >= 680.0 {
+                self.settings.window_size = [size.x, size.y];
+            }
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.tasks.is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.closing = true;
@@ -919,7 +1022,9 @@ impl eframe::App for PhotoApp {
         self.windows(ctx);
         if let Ok(path) = std::env::var("FOTO_IMPORTER_CAPTURE") {
             ctx.request_repaint_after(Duration::from_millis(100));
-            if self.capture_started.elapsed() > Duration::from_secs(5) && !self.capture_requested {
+            if self.capture_started.elapsed() > Duration::from_secs(5) && !self.capture_requested
+                || ctx.input(|i| i.key_pressed(egui::Key::F12))
+            {
                 self.capture_requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             }

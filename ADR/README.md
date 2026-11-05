@@ -93,7 +93,7 @@ Veröffentlichung seiner Zieldatei. Die jeweiligen ADRs benennen diese Grenzen.
 Nummern werden nicht wiederverwendet. Neue technische Erkenntnisse können durch
 ergänzende Notizen mit Datum festgehalten werden; eine umgekehrte Entscheidung
 erfordert einen neuen ADR. Die verbindlichen Agentenregeln stehen in
-[AGENTS.md](../AGENTS.md) und [CLAUDE.md](../CLAUDE.md).
+[AGENTS.md](../AGENTS.md) und die [CLAUDE.md der Python-Referenz](https://github.com/hggerdd/foto-importer/blob/32fbe4761b47f637a79505d783c94a2969ebc599/CLAUDE.md).
 
 ## Rust-Port ab 2026-11-04
 
@@ -103,9 +103,10 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | --- | --- | --- |
 | [0035](0035-rust-desktop.md) | Rust / egui; löst Technologie aus 0002/0003 ab | Akzeptiert |
 | [0036](0036-vollstaendige-kopien.md) | Vollständige Kopien; ersetzt Veröffentlichung aus 0005 | Akzeptiert |
-| [0037](0037-sammlungskompatibilitaet.md) | Schema-6-Kompatibilitätsgrenze | Akzeptiert |
+| [0037](0037-sammlungskompatibilitaet.md) | Schema-6-Kompatibilitätsgrenze | Abgelöst durch 0042 |
 | [0038](0038-gemeinsamer-arbeitsbereich.md) | Gemeinsamer Arbeitsbereich nach Konzeptkritik | Akzeptiert |
 | [0039](0039-rust-onnx-adapter.md) | Lokale Rust-ORT-Adapter mit getrennten Schlüsseln | Akzeptiert (experimentell) |
 | [0040](0040-reproduzierbarer-rust-validierungssplit.md) | Reproduzierbarer Split im eigenen Modellraum | Akzeptiert |
 | [0041](0041-native-adobe-versionspruefung.md) | Native tägliche Adobe-Versionsprüfung | Akzeptiert |
 | [0042](0042-native-bestandsmigrationen.md) | Native Bestandsmigrationen; löst 0037 ab | Akzeptiert |
+| [0043](0043-portables-release-paket.md) | Portables Windows-Release-Paket | Akzeptiert |

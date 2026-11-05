@@ -42,6 +42,10 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 pub fn eyebrow(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(11.0).strong().color(ACCENT));
 }
+pub fn dark_panel(ui: &mut egui::Ui) {
+    ui.style_mut().visuals = egui::Visuals::dark();
+    ui.visuals_mut().selection.bg_fill = Color32::from_rgb(24, 92, 85);
+}
 pub fn primary(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
     ui.add_enabled(
         enabled,
@@ -55,9 +59,13 @@ pub fn primary(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
     )
     .clicked()
 }
-pub fn card() -> egui::Frame {
+pub fn card(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()
-        .fill(Color32::from_rgb(26, 34, 44))
+        .fill(if ui.visuals().dark_mode {
+            Color32::from_rgb(26, 34, 44)
+        } else {
+            Color32::WHITE
+        })
         .corner_radius(12)
         .inner_margin(16)
 }

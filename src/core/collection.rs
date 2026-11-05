@@ -111,6 +111,13 @@ impl Collection {
         }
         Ok(())
     }
+    pub fn cancel_with(&self, control: &Control) {
+        let cancel = control.cancel.clone();
+        self.db.progress_handler(
+            1000,
+            Some(move || cancel.load(std::sync::atomic::Ordering::Relaxed)),
+        );
+    }
     pub fn safe_path(&self, relative: &str) -> Result<PathBuf> {
         let path = Path::new(relative);
         if path
@@ -273,8 +280,13 @@ impl Collection {
                 }
             }
             if let Some((id, size, time)) = old {
+                let previous: String =
+                    tx.query_row("SELECT relpath FROM files WHERE id=?", [id], |r| r.get(0))?;
                 let changed = size != source.size as i64 || time != mtime;
                 tx.execute("UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,size=?,mtime_ns=?,inode=?,last_seen_scan=?,status='present',meta_state=CASE WHEN ? THEN 'stale' ELSE meta_state END,quick_hash=CASE WHEN ? THEN NULL ELSE quick_hash END WHERE id=?", params![rel,files::fold(&rel),dir,name,stem,ext,source.size as i64,mtime,inode,scan_id,changed,changed,id])?;
+                if previous != rel {
+                    tx.execute("UPDATE faces SET source_relpath=? WHERE source_file_id=? AND source_relpath=?",params![rel,id,previous])?;
+                }
             } else {
                 // Pair variants only in the same family, never in Export folders.
                 let family = family_directory(dir, &extension_folders);
@@ -386,6 +398,99 @@ impl Collection {
             "{} Dateien mit BLAKE3 geprüft; keine Abweichung",
             rows.len()
         ))
+    }
+    pub fn purge_missing(&mut self, age: i64) -> Result<String> {
+        self.writable()?;
+        if age < 0 {
+            bail!("Scanabstand darf nicht negativ sein");
+        }
+        let tx = self.db.transaction()?;
+        let threshold: i64 =
+            tx.query_row("SELECT coalesce(max(id),0)-? FROM scans", [age], |r| {
+                r.get(0)
+            })?;
+        tx.execute("DELETE FROM meta WHERE file_id IN (SELECT id FROM files WHERE status='missing' AND last_seen_scan<=?)",[threshold])?;
+        let count = tx.execute(
+            "DELETE FROM files WHERE status='missing' AND last_seen_scan<=?",
+            [threshold],
+        )?;
+        tx.commit()?;
+        self.backup()?;
+        Ok(format!(
+            "{count} fehlende Dateieinträge entfernt; Foto-Identitäten bleiben erhalten"
+        ))
+    }
+    pub fn inventory_report(&self) -> Result<String> {
+        let missing = self
+            .db
+            .prepare("SELECT relpath FROM files WHERE status='missing' ORDER BY relpath LIMIT 200")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let changes=self.db.prepare("SELECT kind,coalesce(old_relpath,''),coalesce(new_relpath,'') FROM changes ORDER BY id DESC LIMIT 200")?.query_map([],|r|Ok(format!("{}: {} → {}",r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(format!(
+            "Fehlende Dateien (höchstens 200):\n{}\n\nLetzte Änderungen (höchstens 200):\n{}",
+            missing.join("\n"),
+            changes.join("\n")
+        ))
+    }
+    pub fn resolve_move(&mut self, old: &str, new: &str, control: &Control) -> Result<String> {
+        self.writable()?;
+        let old = files::normalize(Path::new(old));
+        let new = files::normalize(Path::new(new));
+        let old_row: (i64, i64, Option<String>, Option<String>) = self.db.query_row(
+            "SELECT id,size,quick_hash,full_hash FROM files WHERE relpath=?",
+            [&old],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        let new_row: (i64, i64, i64, Option<String>) = self.db.query_row(
+            "SELECT id,size,mtime_ns,inode FROM files WHERE relpath=? AND status='present'",
+            [&new],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        if old_row.0 == new_row.0 || self.root.join(&old).exists() || old_row.1 != new_row.1 {
+            bail!("Alter Pfad muss fehlen; neuer Pfad und Größe müssen passen");
+        }
+        let path = self.safe_path(&new)?;
+        let verified = if let Some(hash) = old_row.2 {
+            hash == super::import_service::quick_hash(&path, control)?
+        } else if let Some(hash) = old_row.3 {
+            hash == content_hash(&path, control)?
+        } else {
+            false
+        };
+        if !verified {
+            bail!("Kein passender früher gespeicherter Inhaltsfingerabdruck");
+        }
+        let directory = new.rsplit_once('/').map(|v| v.0).unwrap_or("");
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let tx = self.db.transaction()?;
+        tx.execute("INSERT INTO scans(kind,scope,started_at,status) VALUES('quick','',datetime('now'),'running')",[])?;
+        let scan = tx.last_insert_rowid();
+        tx.execute("DELETE FROM meta WHERE file_id=?", [new_row.0])?;
+        tx.execute("DELETE FROM files WHERE id=?", [new_row.0])?;
+        tx.execute("UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,size=?,mtime_ns=?,inode=?,last_seen_scan=?,status='present' WHERE id=?",params![new,files::fold(&new),directory,name,stem,files::extension(&path),new_row.1,new_row.2,new_row.3,scan,old_row.0])?;
+        tx.execute(
+            "UPDATE faces SET source_relpath=? WHERE source_file_id=? AND source_relpath=?",
+            params![new, old_row.0, old],
+        )?;
+        tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))",params![scan,old_row.0,old,new])?;
+        tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END",[])?;
+        tx.execute(
+            "UPDATE scans SET status='done',finished_at=datetime('now') WHERE id=?",
+            [scan],
+        )?;
+        tx.commit()?;
+        self.backup()?;
+        Ok("Verschiebung mit bestehender Foto-Identität zugeordnet".into())
     }
 }
 fn family_directory(directory: &str, extensions: &[String]) -> String {

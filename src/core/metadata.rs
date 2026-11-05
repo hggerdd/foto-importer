@@ -535,13 +535,28 @@ pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Resu
         )?;
         let cameras=collection.db.prepare(&format!("SELECT coalesce(p.camera,'Unbekannt'),count(*) {from} GROUP BY p.camera ORDER BY count(*) DESC LIMIT 8"))?.query_map(rusqlite::params_from_iter(&args),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut page_args = args.clone();
+        let has_sources: bool = collection.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_sources')",
+            [],
+            |r| r.get(0),
+        )?;
+        let source = if has_sources {
+            "coalesce((SELECT sf.relpath FROM face_sources s JOIN files sf ON sf.id=s.file_id WHERE s.photo_id=p.photo_id),p.relpath)"
+        } else {
+            "p.relpath"
+        };
+        let orientation = if has_sources {
+            "coalesce((SELECT sm.orientation FROM face_sources s JOIN meta sm ON sm.file_id=s.file_id WHERE s.photo_id=p.photo_id),m.orientation,1)"
+        } else {
+            "coalesce(m.orientation,1)"
+        };
         page_args.push((crate::config::PAGE_SIZE as i64).into());
         page_args.push(
             ((filters.page.saturating_mul(crate::config::PAGE_SIZE)).min(i64::MAX as usize) as i64)
                 .into(),
         );
         let query = format!(
-            "SELECT p.photo_id,p.file_id,p.relpath,p.name,coalesce(p.dt_original,''),coalesce(p.camera,''),coalesce(p.lens,''),CAST(p.iso AS REAL),p.size,coalesce((SELECT sf.relpath FROM face_sources s JOIN files sf ON sf.id=s.file_id WHERE s.photo_id=p.photo_id),p.relpath),coalesce(m.orientation,1) {from} ORDER BY p.dt_original {},p.photo_id LIMIT ? OFFSET ?",
+            "SELECT p.photo_id,p.file_id,p.relpath,p.name,coalesce(p.dt_original,''),coalesce(p.camera,''),coalesce(p.lens,''),CAST(p.iso AS REAL),p.size,{source},{orientation} {from} ORDER BY p.dt_original {},p.photo_id LIMIT ? OFFSET ?",
             if filters.oldest { "ASC" } else { "DESC" }
         );
         let photos = collection

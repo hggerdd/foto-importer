@@ -36,7 +36,7 @@ pub fn load(
     control.checkpoint()?;
     let raw = ["nef", "nrw", "dng", "arw", "cr2", "cr3", "orf", "raw"]
         .contains(&extension(path).as_str());
-    let mut decoder = if raw {
+    let decoder = if raw {
         let mut bytes = None;
         for tag in ["-JpgFromRaw", "-PreviewImage", "-ThumbnailImage"] {
             control.checkpoint()?;
@@ -69,12 +69,25 @@ pub fn load(
             .read_to_end(&mut data)?;
         image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?
     };
+    let buffer = decoder.into_inner();
+    let embedded_orientation = exif::Reader::new()
+        .read_from_container(&mut std::io::BufReader::new(std::io::Cursor::new(
+            buffer.get_ref(),
+        )))
+        .ok()
+        .and_then(|e| {
+            e.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                .and_then(|f| f.value.get_uint(0))
+        });
+    let orientation = embedded_orientation
+        .or_else(|| if raw { exif_orientation(path) } else { None })
+        .unwrap_or(orientation);
+    let mut decoder = image::ImageReader::new(buffer).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(384 * 1024 * 1024);
     limits.max_image_width = Some(30000);
     limits.max_image_height = Some(30000);
     decoder.limits(limits);
-    let orientation = exif_orientation(path).unwrap_or(orientation);
     let image = decoder.decode()?;
     control.checkpoint()?;
     let image = orient(image, orientation);
@@ -129,20 +142,19 @@ pub fn preview(request: PreviewRequest, exiftool: &str, control: &Control) -> Re
         }
         let (w, h) = image.dimensions();
         let side = ((bbox[2] - bbox[0]) * w as f32).max((bbox[3] - bbox[1]) * h as f32) * 1.6;
-        let x = (((bbox[0] + bbox[2]) * w as f32 - side) / 2.0)
-            .max(0.0)
-            .min((w - 1) as f32) as u32;
-        let y = (((bbox[1] + bbox[3]) * h as f32 - side) / 2.0)
-            .max(0.0)
-            .min((h - 1) as f32) as u32;
-        image = image
-            .crop_imm(
-                x,
-                y,
-                (side as u32).max(1).min(w - x),
-                (side as u32).max(1).min(h - y),
-            )
-            .thumbnail(request.edge, request.edge);
+        if side > 6400.0 || bbox.iter().any(|v| v.abs() > 8.0) {
+            bail!("Gesichtsausschnitt liegt außerhalb der zulässigen Bildgrenzen");
+        }
+        let x = (((bbox[0] + bbox[2]) * w as f32 - side) / 2.0).round() as i64;
+        let y = (((bbox[1] + bbox[3]) * h as f32 - side) / 2.0).round() as i64;
+        let side = (side.round() as u32).max(1);
+        let mut canvas = DynamicImage::new_rgba8(side, side);
+        image::imageops::overlay(&mut canvas, &image, -x, -y);
+        image = canvas.resize_exact(
+            request.edge,
+            request.edge,
+            image::imageops::FilterType::Lanczos3,
+        );
     }
     let width = image.width() as usize;
     let height = image.height() as usize;

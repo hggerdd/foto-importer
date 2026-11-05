@@ -116,6 +116,81 @@ fn known_hash_preserves_identity_when_file_id_changes() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
+fn explicit_purge_preserves_photo_anchors_and_labels() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    for id in 0..5 {
+        fs::write(temp.path().join(format!("{id}.jpg")), b"photo")?;
+    }
+    let mut c = Collection::open(temp.path(), true)?;
+    c.quick_scan(false, &Control::default())?;
+    let photo: i64 = c.db.query_row(
+        "SELECT photo_id FROM files WHERE relpath='0.jpg'",
+        [],
+        |r| r.get(0),
+    )?;
+    c.db.execute("INSERT INTO persons(id) VALUES(77)", [])?;
+    c.db.execute("INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment) VALUES(?,'0.jpg','legacy',77,'user')",[photo])?;
+    fs::remove_file(temp.path().join("0.jpg"))?;
+    c.quick_scan(false, &Control::default())?;
+    assert_eq!(c.status()?.missing, 1);
+    c.purge_missing(0)?;
+    assert_eq!(
+        c.db.query_row("SELECT count(*) FROM photos WHERE id=?", [photo], |r| r
+            .get::<_, i64>(0))?,
+        1
+    );
+    assert_eq!(
+        c.db.query_row(
+            "SELECT person_id FROM faces WHERE photo_id=?",
+            [photo],
+            |r| r.get::<_, i64>(0)
+        )?,
+        77
+    );
+    Ok(())
+}
+#[test]
+fn explicit_ambiguous_move_retains_the_reviewed_anchor() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    for name in ["a.jpg", "b.jpg"] {
+        fs::write(temp.path().join(name), b"samebits")?;
+    }
+    let mut c = Collection::open(temp.path(), true)?;
+    c.quick_scan(false, &Control::default())?;
+    c.verify(&Control::default())?;
+    let anchor: i64 = c.db.query_row(
+        "SELECT photo_id FROM files WHERE relpath='a.jpg'",
+        [],
+        |r| r.get(0),
+    )?;
+    fs::write(temp.path().join("new.jpg"), b"samebits")?;
+    fs::remove_file(temp.path().join("a.jpg"))?;
+    fs::remove_file(temp.path().join("b.jpg"))?;
+    c.quick_scan(false, &Control::default())?;
+    c.resolve_move("a.jpg", "new.jpg", &Control::default())?;
+    assert_eq!(
+        c.db.query_row(
+            "SELECT photo_id FROM files WHERE relpath='new.jpg'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        anchor
+    );
+    assert_eq!(fs::read(temp.path().join("new.jpg"))?, b"samebits");
+    Ok(())
+}
+#[test]
+fn cancelled_sql_query_is_interrupted_on_the_worker() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let c = Collection::open(root.path(), true)?;
+    let control = Control::default();
+    c.cancel_with(&control);
+    control.stop();
+    let result=c.db.query_row("WITH RECURSIVE numbers(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM numbers WHERE i<1000000000) SELECT sum(i) FROM numbers",[],|r|r.get::<_,i64>(0));
+    assert!(result.is_err());
+    Ok(())
+}
+#[test]
 fn ignored_faces_count_for_strict_search_and_unanalysed_is_not_empty() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;

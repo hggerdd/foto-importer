@@ -2,8 +2,9 @@
 
 Native lokale Fotoverwaltung in `C:\ttt\foto-importer-rust`, portiert aus
 [Python-Referenz 32fbe476](https://github.com/hggerdd/foto-importer/tree/32fbe4761b47f637a79505d783c94a2969ebc599).
-Der aktuelle Stand ist eine **experimentelle Portierung**; vollständige
-Funktionsgleichheit ist noch nicht erreicht. Siehe [Funktionsmatrix](docs/paritaet.md).
+Die zentralen Abläufe sind nativ implementiert und mit Regressionen abgesichert.
+Vollständige Gleichwertigkeit für jede reale Kamera-/Modellkonstellation ist damit
+noch nicht nachgewiesen. Der genaue Stand steht in der [Funktionsmatrix](docs/paritaet.md).
 
 ## Starten
 
@@ -15,6 +16,8 @@ cargo run --locked
 
 Release bauen: `cargo build --release --locked`. Die Anwendung benötigt für
 Import und Standardbildvorschau keine Python-Installation.
+Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
+`powershell -File scripts\build-release.ps1`; alte Pakete bleiben erhalten.
 
 * **Importieren:** Quelle wählen, Datumsmethode einstellen, Tage markieren,
   Ziel und einen gültigen Ordnernamen wählen, Zielplan prüfen, sicher importieren.
@@ -23,24 +26,38 @@ Import und Standardbildvorschau keine Python-Installation.
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.
+  Namen am Bild lassen sich anklicken; Details bieten Löschen und Referenzaktionen.
+  Unter Personen & Beziehungen stehen Bearbeitung, Fotosuche, Zusammenführung
+  und Familienbeziehungen bereit. Erkennungswissen verwalten enthält Export,
+  Validierung, opt-in Automatik und ausdrücklich bestätigte Biometrie-Bereinigung.
 * **Aufgaben:** Fortschritt, Abbruch und sitzungsbezogener Verlauf.
 
 ExifTool für Sammlungsexif und RAW-Vorschauen, Adobe DNG Converter für optionale
 NEF-Konvertierung separat installieren. Werkzeugpfade in Einstellungen wählen.
-ONNX Runtime DLL und Modellgewichte müssen lokal vorliegen. JSON-Manifeste in
-`models/` dokumentieren Hashes und Lizenzen. Keine Gewichtsdownloads beim Start.
+Für Gesichtsanalyse müssen ONNX Runtime DLL und Modellgewichte lokal vorliegen.
+Die [Modellanleitung](models/README.md) erklärt Ablage, Hashes und Lizenzen.
+Keine Gewichtsdownloads beim Start.
 Eine geänderte Runtime-DLL wird erst nach Neustart geladen.
 
 Originale werden ausschließlich gelesen. Vollständige Kopien werden unter freien
 Zielnamen veröffentlicht. Vorhandene Zieldateien bleiben erhalten.
-Schema-6-Sammlungen sind die aktuelle Kompatibilitätsgrenze; ältere Versionen
-zunächst mit der Python-Referenz aktualisieren. Produktive Sammlungskopien erst
-nach Prüfung des [Paritätsberichts](docs/paritaet.md) verwenden.
+Bekannte Schema-Stände 1–5 werden beim ersten Schreibzugriff mit einer vorherigen
+SQLite-Sicherung auf Schema 6 aktualisiert. IDs und Nutzerentscheidungen bleiben
+erhalten. Unvollständige Pflicht-Quelltabellen und unbekannte Versionen werden
+abgewiesen. Schema 4/5 kann zunächst lesend geöffnet werden.
 
 Arbeitsplatzeinstellungen: `%APPDATA%\FotoImporter\settings.json`, atomar
 geschrieben. Für isolierte Tests überschreibt `FOTO_IMPORTER_SETTINGS` den Pfad.
 Sammlung: `.myfotomanager`, Anwendungssperre `.myfotomanager.lock`, letzte
 abgeschlossene Indexsicherung `.myfotomanager.backup`. Fremde Sperren werden nicht entfernt.
+Vor Upgrades und Detektorwechseln entstehen zusätzliche benannte Sicherungen.
+Biometrie-Bereinigung entfernt Gesichtsdaten auch aus diesen bekannten Sicherungen;
+fremde Sicherungskopien außerhalb der Sammlung werden nicht gesucht oder verändert.
+
+Rust-Adapter tragen eigene Modellschlüssel. Bestehende Python-Vektoren bleiben
+erhalten; für neue Rust-Vorschläge ist eine lokale Analyse erforderlich. Fotos und
+Vektoren werden nicht hochgeladen. Die einzige automatische Netzwerkanfrage ist
+die tägliche HEAD-Prüfung des Adobe-DNG-Downloadlinks, auch Fehler werden gecacht.
 
 ## Entwicklung und Dokumentation
 
@@ -53,3 +70,6 @@ cargo test --locked
 [Drei UX-Konzepte und Kritik](docs/ux-konzepte.md) ·
 [Architektur mit Diagrammen](docs/architektur.md) ·
 [ADRs](ADR/README.md) · [Validierung](docs/validierung.md)
+
+Die Rust-Branches besitzen eine eigene Historie im vorhandenen GitHub-Remote.
+Das Python-Arbeitsverzeichnis und dessen Hauptbranch werden nicht ersetzt.

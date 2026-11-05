@@ -1,6 +1,6 @@
 # ADR-0005: Import kopiert Originale und schützt bestehende Zieldateien
 
-- **Status:** Akzeptiert
+- **Status:** Im Rust-Port teilweise abgelöst durch [ADR-0036](0036-vollstaendige-kopien.md); historische Python-Entscheidung erhalten
 - **Erfasst am:** 2026-10-27
 - **Art:** Rückblickende Bestandsentscheidung; ursprüngliches Datum nicht rekonstruiert
 

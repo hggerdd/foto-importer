@@ -172,6 +172,13 @@ pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     let status = status(collection)?;
     let mut groups = Vec::new();
+    if mode == "unknown" && status.embedder.is_empty() {
+        return Ok(FacePage {
+            groups,
+            people: people(collection)?,
+            status,
+        });
+    }
     if mode == "unknown" && !status.embedder.is_empty() {
         let ids=collection.db.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id LIMIT 8 OFFSET ?")?.query_map(params![status.embedder,(page*8) as i64],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for id in ids {
@@ -187,20 +194,12 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             "confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
         };
-        let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.retained=0 AND {predicate} ORDER BY f.person_id,f.id LIMIT 112 OFFSET ?"))?.query_map([(page*112) as i64],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut group = Vec::new();
-        for face in rows {
-            if group.len() == 14
-                || group
-                    .last()
-                    .is_some_and(|last: &Face| last.person != face.person)
-            {
-                groups.push(std::mem::take(&mut group));
+        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/14 part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT 8 OFFSET ?"))?.query_map([(page*8) as i64],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for (person, part) in parts {
+            let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate}) r ON r.id=f.id WHERE r.rn>? AND r.rn<=? ORDER BY r.rn LIMIT 14"))?.query_map(params![person,part*14,(part+1)*14],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if !rows.is_empty() {
+                groups.push(rows);
             }
-            group.push(face);
-        }
-        if !group.is_empty() {
-            groups.push(group);
         }
     }
     Ok(FacePage {
@@ -671,6 +670,33 @@ pub fn add_relation(
     collection.db.execute(
         "INSERT OR IGNORE INTO relations VALUES(?,?,?)",
         params![from, id, to],
+    )?;
+    Ok(())
+}
+pub fn remove_relation(
+    collection: &Collection,
+    source: i64,
+    kind: &str,
+    target: i64,
+) -> Result<()> {
+    collection.writable()?;
+    let (mut source, mut target) = (source, target);
+    let id = match kind {
+        "parent" => 1,
+        "child" => {
+            std::mem::swap(&mut source, &mut target);
+            1
+        }
+        "partner" => 3,
+        "sibling" => 4,
+        _ => bail!("Unbekannter Beziehungstyp"),
+    };
+    if id == 3 || id == 4 {
+        (source, target) = (source.min(target), source.max(target));
+    }
+    collection.db.execute(
+        "DELETE FROM relations WHERE from_person=? AND type_id=? AND to_person=?",
+        params![source, id, target],
     )?;
     Ok(())
 }

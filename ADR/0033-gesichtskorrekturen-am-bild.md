@@ -1,6 +1,6 @@
 # ADR-0033: Einzelne Gesichter direkt am Bild korrigieren
 
-- **Status:** Akzeptiert
+- **Status:** Akzeptiert für Python; Anordnung der Aktionen in Rust teilweise abgelöst durch [ADR-0038](0038-gemeinsamer-arbeitsbereich.md)
 - **Erfasst am / Entscheidungsdatum:** 2026-10-30
 - **Art:** Neue Entscheidung
 - **Bezieht sich auf:** [0012](0012-lesende-metadatenansicht.md),

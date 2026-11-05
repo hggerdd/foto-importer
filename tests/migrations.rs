@@ -157,4 +157,18 @@ fn repair_partial_five_and_scrub_its_migration_backup() -> anyhow::Result<()> {
     }
     Ok(())
 }
-
+#[test]
+fn incomplete_five_is_readable_without_running_a_migration() -> anyhow::Result<()> {
+    let folder = historical(5, true)?;
+    let c = Collection::open(folder.path(), false)?;
+    assert_eq!(c.status()?.photos, 1);
+    assert_eq!(
+        foto_importer::core::metadata::search(&c, &Default::default(), "")?.total,
+        1
+    );
+    assert_eq!(
+        c.db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+        5
+    );
+    Ok(())
+}

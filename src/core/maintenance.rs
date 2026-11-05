@@ -402,8 +402,14 @@ pub fn relations(collection: &Collection, person: i64) -> Result<BTreeMap<String
         .iter()
         .filter(|e| e.1 == 1 && grandparents.contains(&e.0) && !parents.contains(&e.2))
         .map(|e| e.2)
+        .chain(
+            edges
+                .iter()
+                .filter(|e| e.1 == 4 && (parents.contains(&e.0) || parents.contains(&e.2)))
+                .map(|e| if parents.contains(&e.0) { e.2 } else { e.0 }),
+        )
         .collect();
-    Ok(BTreeMap::from([
+    let mut result: BTreeMap<String, Vec<i64>> = BTreeMap::from([
         ("eltern".into(), parents.into_iter().collect()),
         ("kinder".into(), children.iter().copied().collect()),
         ("geschwister".into(), siblings.into_iter().collect()),
@@ -433,7 +439,13 @@ pub fn relations(collection: &Collection, person: i64) -> Result<BTreeMap<String
                 .map(|e| if e.0 == person { e.2 } else { e.0 })
                 .collect(),
         ),
-    ]))
+    ]);
+    for ids in result.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+        ids.retain(|id| *id != person);
+    }
+    Ok(result)
 }
 pub fn merge_people(collection: &mut Collection, source: i64, target: i64) -> Result<()> {
     collection.writable()?;

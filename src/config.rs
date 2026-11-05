@@ -9,6 +9,21 @@ pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
 ];
+fn resource_root() -> PathBuf {
+    let executable = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    if executable.join("models").is_dir() {
+        return executable;
+    }
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if development.join("models").is_dir() {
+        development
+    } else {
+        executable
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,11 +40,13 @@ pub struct Settings {
     pub model_dir: String,
     pub onnx_runtime: String,
     pub dark: bool,
+    pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
 
 impl Default for Settings {
     fn default() -> Self {
+        let resources = resource_root();
         Self {
             source: String::new(),
             target: String::new(),
@@ -39,11 +56,15 @@ impl Default for Settings {
             skip_imported: true,
             auto_metadata: false,
             dark: true,
+            window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
-            model_dir: "models".into(),
-            onnx_runtime: "runtime/onnxruntime.dll".into(),
+            model_dir: resources.join("models").to_string_lossy().into_owned(),
+            onnx_runtime: resources
+                .join("runtime/onnxruntime.dll")
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 }

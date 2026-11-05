@@ -58,6 +58,17 @@ impl Thumbnails {
         self.pending.clear();
         self.bytes = 0;
     }
+    pub fn ready(&self, request: &PreviewRequest) -> bool {
+        let key = format!(
+            "{}:{}:{}:{:?}:{}",
+            self.generation.load(Ordering::Relaxed),
+            request.path.display(),
+            request.orientation,
+            request.crop,
+            request.edge
+        );
+        self.cache.get(&key).is_some_and(|entry| entry.0.is_some())
+    }
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok((key, result)) = self.results.try_recv() {
             self.pending.remove(&key);
@@ -113,6 +124,25 @@ impl Thumbnails {
             request.edge
         );
         let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                format!(
+                    "{} {}",
+                    if request.crop.is_some() {
+                        "Gesichtsausschnitt in"
+                    } else {
+                        "Bild öffnen:"
+                    },
+                    request
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                ),
+            )
+        });
         if ui.is_rect_visible(rect) {
             ui.painter()
                 .rect_filled(rect, 8, egui::Color32::from_rgb(13, 18, 24));

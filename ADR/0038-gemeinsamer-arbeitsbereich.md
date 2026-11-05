@@ -17,6 +17,17 @@ Primäraktion pro Kontext, leere Zustände mit Einstieg, konkrete Fehler statt
 stiller Fallbacks. Importplan vor Start, bestätigte Identitäten getrennt von Vorschlägen.
 Gruppenaktionen beziehen sich auf maximal 14 dargestellte Mitglieder.
 
+Für Rust ersetzt diese Entscheidung die Darstellungsregeln aus
+[ADR-0032](0032-metadaten-ordnerbaum-und-gesichtsrahmen.md) und
+[ADR-0033](0033-gesichtskorrekturen-am-bild.md) teilweise: Galerie und
+Ordnernavigation mit Pfadleiste statt mehrerer ausgeklappter Baumzweige;
+Kamerazahlen im Filterbereich statt Kamera-/ISO-Diagrammen am Baum.
+Die Namensfläche am Bild öffnet den Benennungsdialog; das Löschen steht
+beschriftet beim Vorkommen im Inspektor. Das bietet größeren Bedienelementen
+Platz und hält die Löschaktion vom Klick zur Vergrößerung getrennt.
+Quelldateibezogene Rahmen und die Regeln zum Erhalt von Originalen,
+Fotoidentitäten und Personenstammdaten gelten weiter.
+
 ## Alternativen
 
 Geführter Assistent und reine Fotobibliothek sind in der UX-Dokumentation aus

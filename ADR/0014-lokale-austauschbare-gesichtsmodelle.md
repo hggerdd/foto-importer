@@ -1,6 +1,6 @@
 # ADR-0014: Gesichtsmodelle lokal über geprüfte Manifeste laden
 
-- **Status:** Akzeptiert
+- **Status:** Im Rust-Port teilweise abgelöst durch [ADR-0039](0039-rust-onnx-adapter.md); historische Python-Entscheidung erhalten
 - **Erfasst am:** 2026-10-27
 - **Art:** Rückblickende Bestandsentscheidung; ursprüngliches Datum nicht rekonstruiert
 

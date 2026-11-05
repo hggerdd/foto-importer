@@ -12,7 +12,10 @@ impl PhotoApp {
             if ui.button("Sammlung wählen …").clicked() {
                 self.pick(Pick::Collection);
             }
-            ui.add(egui::Label::new(&self.settings.collection).truncate());
+            ui.add(
+                egui::Label::new(super::import_view::display_path(&self.settings.collection))
+                    .truncate(),
+            );
         });
         if self.settings.collection.is_empty() {
             self.empty(ui,"Ein Zuhause für deine Fotos.","Wähle den Wurzelordner deiner Sammlung. Vorhandene Schema-6-Sammlungen bleiben erhalten.");
@@ -25,7 +28,7 @@ impl PhotoApp {
                 ("Metadaten offen", self.status.pending),
                 ("Fehlend", self.status.missing),
             ] {
-                theme::card().show(ui, |ui| {
+                theme::card(ui).show(ui, |ui| {
                     ui.label(RichText::new(value.to_string()).size(25.0).strong());
                     ui.label(RichText::new(label).small().weak());
                 });
@@ -45,6 +48,15 @@ impl PhotoApp {
             }
         });
         ui.add_space(10.0);
+        egui::CollapsingHeader::new("Bestand prüfen & pflegen").show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                if ui.button("Fehlende & letzte Änderungen anzeigen").clicked(){let root=self.settings.collection.clone();self.launch("Bestandsbericht lesen",false,"report",move |_|{let c=Collection::open(Path::new(&root),false)?;Ok(Outcome::Report(c.inventory_report()?))});}
+                if ui.add_enabled(!self.busy(),egui::Button::new("Fehlende nach erneuter Prüfung markieren")).on_hover_text("Bestätigt auch einen Anteil über 20 %. Bei Lesefehlern werden keine unbesuchten Dateien als fehlend markiert.").clicked(){self.collection_action("confirm_missing");}
+            });
+            ui.label("Geprüfte Verschiebung mit früherem Inhaltsfingerabdruck zuordnen");
+            ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.move_old).hint_text("Alter relativer Pfad").desired_width(240.0));ui.add(egui::TextEdit::singleline(&mut self.move_new).hint_text("Neuer relativer Pfad").desired_width(240.0));if ui.add_enabled(!self.busy()&&!self.move_old.is_empty()&&!self.move_new.is_empty(),egui::Button::new("Zuordnen")).clicked(){self.collection_action("resolve");}});
+            ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.purge_confirm,"Fehlende Dateieinträge aus dem Index entfernen; Foto-IDs und Personen bleiben");ui.add(egui::DragValue::new(&mut self.purge_scans).range(0..=10000).prefix("Scanabstand "));if ui.add_enabled(!self.busy()&&self.purge_confirm,egui::Button::new("Einträge entfernen")).clicked(){self.purge_confirm=false;self.collection_action("purge");}});
+        });
         self.search_builder(ui);
         ui.horizontal_wrapped(|ui| {
             ui.label("Ordner:");
@@ -56,7 +68,7 @@ impl PhotoApp {
             }
             if let Some(folder) = self.filters.folder.clone() {
                 ui.label(&folder);
-                if ui.small_button("↑ Übergeordneter Ordner").clicked() {
+                if ui.small_button("Übergeordneter Ordner").clicked() {
                     self.filters.folder = folder.rsplit_once('/').map(|v| v.0.to_string());
                     self.filters.folder_page = 0;
                     self.filters.page = 0;
@@ -69,7 +81,7 @@ impl PhotoApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for folder in self.page.folders.clone() {
-                        if ui.button(format!("▸ {folder}")).clicked() {
+                        if ui.button(format!("{folder}/")).clicked() {
                             self.filters.folder = Some(
                                 self.filters
                                     .folder
@@ -100,7 +112,7 @@ impl PhotoApp {
             if ui
                 .add_enabled(
                     self.filters.page > 0 && !self.tasks.iter().any(|t| t.kind == "search"),
-                    egui::Button::new("←"),
+                    egui::Button::new("Zurück"),
                 )
                 .clicked()
             {
@@ -116,7 +128,7 @@ impl PhotoApp {
                 .add_enabled(
                     (self.filters.page + 1) * config::PAGE_SIZE < self.page.total
                         && !self.tasks.iter().any(|t| t.kind == "search"),
-                    egui::Button::new("→"),
+                    egui::Button::new("Weiter"),
                 )
                 .clicked()
             {
@@ -289,14 +301,15 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
                     edge: 960,
                     generation: 0,
                 };
+                let image_ready = self.thumbnails.ready(&request);
                 let response = self.thumbnails.image(
                     ui,
                     request,
                     &self.settings.exiftool,
                     egui::vec2(ui.available_width(), 200.0),
                 );
-                self.overlay(ui, response.rect, &photo);
-                if response.clicked() {
+                let face_action = image_ready && self.overlay(ui, response.rect, &photo);
+                if response.clicked() && !face_action {
                     self.large = true;
                 }
                 ui.checkbox(&mut self.show_frames, "Gesichtsrahmen anzeigen");
@@ -377,23 +390,44 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
                 egui::CollapsingHeader::new("Alle gespeicherten Metadaten")
                     .default_open(true)
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(&self.detail).monospace().size(11.0))
-                                .wrap(),
-                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("metadata-values")
+                            .max_height(280.0)
+                            .show_rows(ui, 24.0, self.detail_rows.len(), |ui, range| {
+                                for index in range {
+                                    let (key, value) = &self.detail_rows[index];
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [110.0, 24.0],
+                                            egui::Label::new(RichText::new(key).small().weak())
+                                                .truncate(),
+                                        )
+                                        .on_hover_text(key);
+                                        ui.add_sized(
+                                            [ui.available_width(), 24.0],
+                                            egui::Label::new(value).truncate(),
+                                        )
+                                        .on_hover_text(value);
+                                    });
+                                }
+                            });
                     });
             });
     }
-    pub(super) fn overlay(&self, ui: &egui::Ui, rect: egui::Rect, photo: &Photo) {
+    pub(super) fn overlay(&mut self, ui: &egui::Ui, rect: egui::Rect, photo: &Photo) -> bool {
         if !self.show_frames {
-            return;
+            return false;
         }
+        let mut selected = None;
         for face in self
             .detail_faces
             .iter()
             .filter(|f| f.source == photo.source)
         {
             let b = face.bbox;
+            if b.iter().any(|v| !v.is_finite()) || b[2] <= b[0] || b[3] <= b[1] {
+                continue;
+            }
             let frame = egui::Rect::from_min_max(
                 egui::pos2(
                     rect.left() + b[0] * rect.width(),
@@ -410,6 +444,40 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
                 egui::Stroke::new(1.5_f32, theme::ACCENT),
                 egui::StrokeKind::Inside,
             );
+            let name = face
+                .person
+                .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
+                .map(|p| p.name.as_str())
+                .unwrap_or("Unbekannt");
+            let galley = ui.painter().layout_no_wrap(
+                format!("{name} · #{}", face.id),
+                egui::FontId::proportional(12.0),
+                Color32::WHITE,
+            );
+            let label = egui::Rect::from_min_size(frame.min, galley.size() + egui::vec2(8.0, 4.0))
+                .intersect(rect);
+            if !label.is_positive() {
+                continue;
+            }
+            ui.painter()
+                .rect_filled(label, 2, Color32::from_black_alpha(210));
+            ui.painter()
+                .galley(label.min + egui::vec2(4.0, 2.0), galley, Color32::WHITE);
+            let action = ui
+                .interact(
+                    label,
+                    ui.id().with(("face-label", face.id)),
+                    egui::Sense::click(),
+                )
+                .on_hover_text("Gesicht benennen oder Namen ändern");
+            if action.clicked() || action.secondary_clicked() {
+                selected = Some(face.clone());
+            }
         }
+        let handled = selected.is_some();
+        if let Some(face) = selected {
+            self.open_naming(face);
+        }
+        handled
     }
 }

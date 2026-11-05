@@ -60,7 +60,7 @@ impl PhotoApp {
                 ("Ignoriert", status.ignored),
                 ("Referenzen", status.references),
             ] {
-                theme::card().show(ui, |ui| {
+                theme::card(ui).show(ui, |ui| {
                     ui.label(RichText::new(value.to_string()).size(22.0).strong());
                     ui.label(label);
                 });
@@ -110,7 +110,7 @@ impl PhotoApp {
         }
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.face_index > 0, egui::Button::new("← Zurück"))
+                .add_enabled(self.face_index > 0, egui::Button::new("Zurück"))
                 .clicked()
             {
                 self.face_index -= 1;
@@ -120,7 +120,7 @@ impl PhotoApp {
             if ui
                 .add_enabled(
                     !self.face_page.groups.is_empty(),
-                    egui::Button::new("Weiter →"),
+                    egui::Button::new("Weiter"),
                 )
                 .clicked()
             {
@@ -132,7 +132,11 @@ impl PhotoApp {
             }
         });
         if self.face_page.groups.is_empty() {
-            self.empty(ui,"Hier ist gerade nichts zu benennen.","Fotos analysieren oder eine andere Ansicht wählen. Neue Referenzen entstehen nur aus bestätigten Namen.");
+            if self.face_page.status.embedder.is_empty() {
+                self.empty(ui,"Bereit für die lokale Analyse.","Fotos einmal mit einem Rust-Modellraum analysieren. Vorhandene Personenentscheidungen bleiben erhalten.");
+            } else {
+                self.empty(ui,"Hier ist gerade nichts zu benennen.","Fotos analysieren oder eine andere Ansicht wählen. Neue Referenzen entstehen nur aus bestätigten Namen.");
+            }
             return;
         }
         egui::ScrollArea::vertical()
@@ -166,7 +170,7 @@ impl PhotoApp {
         });
         let mut submit = false;
         let mut ignore = false;
-        theme::card().show(ui, |ui| {
+        theme::card(ui).show(ui, |ui| {
             ui.push_id(&key, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} Gesichter", group.len())).strong());
@@ -279,6 +283,7 @@ impl PhotoApp {
         }
     }
     pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
+        let mut photos = None;
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -355,11 +360,40 @@ impl PhotoApp {
                         if ui.small_button("Bearbeiten").clicked() {
                             self.person_edit = Some(person.clone());
                         }
+                        if ui.small_button("Fotos").clicked() {
+                            photos = Some(person.id);
+                        }
                     });
                 }
             });
         ui.separator();
+        if let Some(person) = photos {
+            self.filters = Search {
+                people_all: vec![person],
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
+        }
         ui.label(RichText::new("Familienbeziehung ergänzen").strong());
+        if ui
+            .add_enabled(
+                !self.busy() && self.relation_from.is_some() && self.relation_to.is_some(),
+                egui::Button::new("Ausgewählte Beziehung entfernen"),
+            )
+            .clicked()
+        {
+            let root = self.settings.collection.clone();
+            let source = self.relation_from.unwrap_or_default();
+            let target = self.relation_to.unwrap_or_default();
+            let kind = self.relation_kind.clone();
+            self.undo.clear();
+            self.launch("Beziehung entfernen", true, "mutation", move |_| {
+                let c = Collection::open(Path::new(&root), true)?;
+                faces::remove_relation(&c, source, &kind, target)?;
+                Ok(Outcome::Done("Beziehung entfernt".into()))
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             for (id, selected) in [
                 ("Von", &mut self.relation_from),
@@ -405,7 +439,8 @@ impl PhotoApp {
                 let from = self.relation_from.unwrap_or_default();
                 let to = self.relation_to.unwrap_or_default();
                 let kind = self.relation_kind.clone();
-                self.launch("Beziehung speichern", true, "undo", move |_| {
+                self.undo.clear();
+                self.launch("Beziehung speichern", true, "mutation", move |_| {
                     let mut c = Collection::open(Path::new(&root), true)?;
                     faces::add_relation(&mut c, from, &kind, to)?;
                     Ok(Outcome::Done("Beziehung gespeichert".into()))

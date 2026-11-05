@@ -1,14 +1,61 @@
 use super::*;
 
+pub(super) fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(network) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{network}").into()
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).into()
+    }
+}
+
 impl PhotoApp {
+    pub(super) fn refresh_import_cache(&mut self) {
+        let cache = &mut self.import_cache;
+        if cache.revision != self.scan_revision
+            || cache.days.is_empty() && !self.scan.files.is_empty()
+        {
+            *cache = ImportCache {
+                revision: self.scan_revision,
+                ..Default::default()
+            };
+            for file in &self.scan.files {
+                *cache.days.entry(file.day.clone()).or_default() += 1;
+            }
+        }
+        if cache.selected != self.selected {
+            cache.selected = self.selected.clone();
+            let files = self
+                .scan
+                .files
+                .iter()
+                .filter(|f| self.selected.contains(&f.day))
+                .cloned()
+                .collect::<Vec<_>>();
+            cache.counts = files::counts(&files);
+            cache.bytes = files.iter().map(|f| f.size).sum();
+            cache.selection = std::sync::Arc::new(files);
+        }
+        if cache.focused != self.focused {
+            cache.focused = self.focused.clone();
+            cache.focus_files = std::sync::Arc::new(
+                self.scan
+                    .files
+                    .iter()
+                    .filter(|f| f.day == self.focused)
+                    .cloned()
+                    .collect(),
+            );
+        }
+    }
     pub(super) fn import_view(&mut self, ui: &mut egui::Ui) {
+        self.refresh_import_cache();
         Self::header(
             ui,
             "DEIN NÄCHSTER IMPORT",
             "Erinnerungen sicher ankommen lassen.",
             "Quelle wählen, Aufnahmetage sichten und das Ziel vor dem Kopieren prüfen.",
         );
-        theme::card().show(ui, |ui| {
+        theme::card(ui).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("01  QUELLE").color(theme::ACCENT).strong());
                 if ui.button("Ordner wählen …").clicked() {
@@ -25,9 +72,9 @@ impl PhotoApp {
                 }
                 ui.add(
                     egui::Label::new(if self.settings.source.is_empty() {
-                        "Speicherkarte oder Fotoordner"
+                        "Speicherkarte oder Fotoordner".into()
                     } else {
-                        &self.settings.source
+                        display_path(&self.settings.source)
                     })
                     .truncate(),
                 );
@@ -50,18 +97,8 @@ impl PhotoApp {
             self.empty(ui,"Deine nächste Geschichte beginnt hier.","Wähle eine Speicherkarte oder einen Ordner. Es werden keine Dateien verschoben oder gelöscht.");
             return;
         }
-        let selected_files: Vec<_> = self
-            .scan
-            .files
-            .iter()
-            .filter(|f| self.selected.contains(&f.day))
-            .cloned()
-            .collect();
-        let days: BTreeMap<String, usize> =
-            self.scan.files.iter().fold(BTreeMap::new(), |mut map, f| {
-                *map.entry(f.day.clone()).or_default() += 1;
-                map
-            });
+        let selected_files = std::sync::Arc::clone(&self.import_cache.selection);
+        let days = self.import_cache.days.clone();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("02  AUFNAHMETAGE").strong());
             if ui.small_button("Alle auswählen").clicked() {
@@ -101,6 +138,9 @@ impl PhotoApp {
                 });
             });
         ui.separator();
+        self.refresh_import_cache();
+        let selected_files = std::sync::Arc::clone(&self.import_cache.selection);
+        let focused_files = std::sync::Arc::clone(&self.import_cache.focus_files);
         let right_width = 280.0;
         let width = (ui.available_width() - right_width - 20.0).max(300.0);
         ui.horizontal_top(|ui| {
@@ -116,25 +156,14 @@ impl PhotoApp {
                                 .text("Bildgröße"),
                         );
                     });
-                    let files = self
-                        .scan
-                        .files
-                        .iter()
-                        .filter(|f| f.day == self.focused)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    self.source_gallery(ui, &files);
+                    self.source_gallery(ui, &focused_files);
                 },
             );
             let plan = ui.allocate_ui_with_layout(
                 egui::vec2(right_width, ui.available_height()),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("import-plan")
-                        .show(ui, |ui| {
-                            self.import_plan(ui, &selected_files);
-                        });
+                    self.import_plan(ui, &selected_files);
                 },
             );
             #[cfg(test)]
@@ -148,120 +177,129 @@ impl PhotoApp {
         });
     }
     fn import_plan(&mut self, ui: &mut egui::Ui, selected_files: &[SourceFile]) {
-        theme::card().show(ui, |ui| {
+        let options_height = (ui.available_height() - 100.0).max(24.0);
+        theme::card(ui).show(ui, |ui| {
             ui.set_max_width(248.0);
-            theme::eyebrow(ui, "03  ZIEL & IMPORT");
-            ui.label(RichText::new("Alles am richtigen Ort").size(20.0).strong());
-            if ui.button("Zielordner wählen …").clicked() {
-                self.pick(Pick::Target);
-            }
-            ui.add(
-                egui::Label::new(if self.settings.target.is_empty() {
-                    "Noch kein Ziel gewählt"
-                } else {
-                    &self.settings.target
-                })
-                .wrap(),
+            egui::ScrollArea::vertical()
+                .id_salt("import-plan")
+                .max_height(options_height)
+                .show(ui, |ui| {
+                    self.import_options(ui);
+                });
+            ui.separator();
+            self.import_action(
+                ui,
+                selected_files,
+                files::validate_folder(&self.folder_name).is_ok(),
             );
-            ui.label("Neuer Ordner");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.folder_name)
-                    .hint_text("z. B. 2026-11 Herbsturlaub")
-                    .desired_width(f32::INFINITY),
-            );
-            let validation = files::validate_folder(&self.folder_name);
-            if let Err(e) = &validation {
-                ui.label(RichText::new(e.to_string()).small().color(theme::WARM));
+        });
+    }
+
+    fn import_options(&mut self, ui: &mut egui::Ui) {
+        theme::eyebrow(ui, "03  ZIEL & IMPORT");
+        if ui.button("Zielordner wählen …").clicked() {
+            self.pick(Pick::Target);
+        }
+        ui.add(
+            egui::Label::new(if self.settings.target.is_empty() {
+                "Noch kein Ziel gewählt".into()
+            } else {
+                display_path(&self.settings.target)
+            })
+            .wrap(),
+        );
+        ui.label("Neuer Ordner");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.folder_name)
+                .hint_text("z. B. 2026-11 Herbsturlaub")
+                .desired_width(f32::INFINITY),
+        );
+        let validation = files::validate_folder(&self.folder_name);
+        if let Err(e) = &validation
+            && !self.folder_name.is_empty()
+        {
+            ui.label(RichText::new(e.to_string()).small().color(theme::WARM));
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("Geplante Ablage").strong());
+        ui.label(format!(
+            "{}/",
+            if self.folder_name.is_empty() {
+                "Ordnername"
+            } else {
+                &self.folder_name
             }
-            ui.add_space(10.0);
-            ui.label(RichText::new("Geplante Ablage").strong());
-            ui.label(format!(
-                "{}/",
-                if self.folder_name.is_empty() {
-                    "Ordnername"
-                } else {
-                    &self.folder_name
-                }
-            ));
-            for (ext, count) in files::counts(selected_files) {
-                ui.label(format!("    {ext}/  ·  {count} Dateien"));
-            }
-            if ui
-                .checkbox(&mut self.settings.dng, "NEF zusätzlich als DNG")
-                .changed()
-            {
-                self.save();
-            }
-            if self.settings.dng {
-                ui.label(
-                    RichText::new(
-                        "DNGs liegen direkt im neuen Ordner. Adobe Converter erforderlich.",
-                    )
+        ));
+        for (ext, count) in &self.import_cache.counts {
+            ui.label(format!("    {ext}/  ·  {count} Dateien"));
+        }
+        if ui
+            .checkbox(&mut self.settings.dng, "NEF zusätzlich als DNG")
+            .changed()
+        {
+            self.save();
+        }
+        if self.settings.dng {
+            ui.label(
+                RichText::new("DNGs liegen direkt im neuen Ordner. Adobe Converter erforderlich.")
                     .small()
                     .weak(),
-                );
-            }
-            ui.separator();
-            if ui
-                .checkbox(
-                    &mut self.settings.skip_imported,
-                    "Bereits importierte Aufnahmen überspringen",
-                )
-                .changed()
-            {
-                self.save();
-            }
-            ui.label(
-                RichText::new(
-                    "Bei vorhandenem Zielindex wird vor dem Kopieren mit ExifTool geprüft.",
-                )
+            );
+        }
+        ui.separator();
+        if ui
+            .checkbox(
+                &mut self.settings.skip_imported,
+                "Bereits importierte Aufnahmen überspringen",
+            )
+            .changed()
+        {
+            self.save();
+        }
+        ui.label(
+            RichText::new("Bei vorhandenem Zielindex wird vor dem Kopieren mit ExifTool geprüft.")
                 .small()
                 .weak(),
-            );
-            let bytes = selected_files.iter().map(|f| f.size).sum();
-            ui.label(
-                RichText::new(format!(
-                    "{} Dateien · {}",
-                    selected_files.len(),
-                    human_size(bytes)
-                ))
-                .strong(),
-            );
-            ui.label(
-                RichText::new(
-                    "Originale bleiben erhalten. Namenskollisionen erhalten einen Nummernsuffix.",
-                )
-                .small()
-                .weak(),
-            );
-            let ready = validation.is_ok()
-                && !selected_files.is_empty()
-                && !self.settings.target.is_empty()
-                && self.tasks.iter().filter(|t| t.kind == "copy").count() < 8;
-            if theme::primary(ui, "Sicher importieren →", ready) {
-                let target = PathBuf::from(&self.settings.target);
-                let name = self.folder_name.clone();
-                let converter = self
-                    .settings
-                    .dng
-                    .then(|| PathBuf::from(&self.settings.converter));
-                let files = selected_files.to_vec();
-                let skip = self.settings.skip_imported;
-                let exiftool = self.settings.exiftool.clone();
-                self.save();
-                self.launch("Fotos sicher kopieren", true, "copy", move |control| {
-                    Ok(Outcome::Imported(crate::core::import_service::execute(
-                        &files,
-                        &target,
-                        &name,
-                        converter.as_deref(),
-                        skip,
-                        &exiftool,
-                        &control,
-                    )?))
-                });
-            }
-        });
+        );
+    }
+
+    fn import_action(&mut self, ui: &mut egui::Ui, selected_files: &[SourceFile], valid: bool) {
+        let bytes = self.import_cache.bytes;
+        ui.label(
+            RichText::new(format!(
+                "{} Dateien · {}",
+                selected_files.len(),
+                human_size(bytes)
+            ))
+            .strong(),
+        );
+        let ready = valid
+            && !selected_files.is_empty()
+            && !self.settings.target.is_empty()
+            && self.tasks.iter().filter(|t| t.kind == "copy").count() < 8;
+        if theme::primary(ui, "Sicher importieren", ready) {
+            let target = PathBuf::from(&self.settings.target);
+            let name = self.folder_name.clone();
+            let converter = self
+                .settings
+                .dng
+                .then(|| PathBuf::from(&self.settings.converter));
+            let files = selected_files.to_vec();
+            let skip = self.settings.skip_imported;
+            let exiftool = self.settings.exiftool.clone();
+            self.save();
+            self.launch("Fotos sicher kopieren", true, "copy", move |control| {
+                Ok(Outcome::Imported(crate::core::import_service::execute(
+                    &files,
+                    &target,
+                    &name,
+                    converter.as_deref(),
+                    skip,
+                    &exiftool,
+                    &control,
+                )?))
+            });
+        }
     }
     pub(super) fn source_gallery(&mut self, ui: &mut egui::Ui, files: &[SourceFile]) {
         let columns = (ui.available_width() / (self.zoom + 12.0)).floor().max(1.0) as usize;
@@ -288,6 +326,10 @@ impl PhotoApp {
                                     &self.settings.exiftool,
                                     egui::vec2(self.zoom, self.zoom * 0.72),
                                 );
+                                if response.clicked() {
+                                    self.source_preview = Some(file.path.clone());
+                                    self.large = true;
+                                }
                                 response.on_hover_text(file.path.display().to_string());
                                 ui.add_sized(
                                     [self.zoom, 25.0],

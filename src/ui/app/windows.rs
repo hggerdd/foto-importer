@@ -62,7 +62,26 @@ impl PhotoApp {
                 .open(&mut open)
                 .default_size([980.0, 720.0])
                 .show(ctx, |ui| {
-                    if let Some(photo) = self.selected_photo.clone() {
+                    if let Some(path) = self.source_preview.clone() {
+                        ui.label(path.file_name().unwrap_or_default().to_string_lossy());
+                        let request = PreviewRequest {
+                            root: Some(PathBuf::from(&self.settings.source)),
+                            path,
+                            orientation: 1,
+                            crop: None,
+                            edge: 1920,
+                            generation: 0,
+                        };
+                        self.thumbnails.image(
+                            ui,
+                            request,
+                            &self.settings.exiftool,
+                            egui::vec2(
+                                ui.available_width(),
+                                (ui.available_height() - 35.0).max(200.0),
+                            ),
+                        );
+                    } else if let Some(photo) = self.selected_photo.clone() {
                         let request = PreviewRequest {
                             root: Some(PathBuf::from(&self.settings.collection)),
                             path: Path::new(&self.settings.collection).join(&photo.source),
@@ -75,10 +94,13 @@ impl PhotoApp {
                             ui.available_width(),
                             (ui.available_height() - 45.0).max(200.0),
                         );
+                        let image_ready = self.thumbnails.ready(&request);
                         let response =
                             self.thumbnails
                                 .image(ui, request, &self.settings.exiftool, size);
-                        self.overlay(ui, response.rect, &photo);
+                        if image_ready {
+                            self.overlay(ui, response.rect, &photo);
+                        }
                         ui.checkbox(&mut self.show_frames, "Gesichtsrahmen anzeigen");
                     }
                 });

@@ -1,6 +1,6 @@
 # ADR-0003: Tk-Zugriffe nur im UI-Thread
 
-- **Status:** Akzeptiert
+- **Status:** Im Rust-Port teilweise abgelöst durch [ADR-0035](0035-rust-desktop.md); historische Python-Entscheidung erhalten
 - **Erfasst am:** 2026-10-27
 - **Art:** Rückblickende Bestandsentscheidung; ursprüngliches Datum nicht rekonstruiert
 - **Bezieht sich auf:** [ADR-0002](0002-modulare-desktop-anwendung.md)

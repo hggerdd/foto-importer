@@ -65,8 +65,8 @@ fn main() -> anyhow::Result<()> {
             .canonicalize()?
             .to_string_lossy()
             .into_owned(),
-        onnx_runtime: Path::new("runtime/onnxruntime.dll")
-            .canonicalize()?
+        onnx_runtime: std::env::current_dir()?
+            .join("runtime/onnxruntime.dll")
             .to_string_lossy()
             .into_owned(),
         ..Default::default()

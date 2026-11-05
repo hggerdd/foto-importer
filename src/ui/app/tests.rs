@@ -83,3 +83,31 @@ fn late_naming_result_from_another_collection_cannot_enter_undo() {
     assert!(app.tasks.is_empty());
     assert!(app.undo.is_empty());
 }
+#[test]
+fn repeated_frames_reuse_large_source_selection() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context);
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.scan.files = (0..100_000)
+        .map(|id| SourceFile {
+            path: PathBuf::from(format!("{id}.jpg")),
+            day: "2026-11-04".into(),
+            size: 5,
+        })
+        .collect();
+    app.focused = "2026-11-04".into();
+    app.selected.insert(app.focused.clone());
+    app.refresh_import_cache();
+    let before = app.import_cache.selection.clone();
+    let focused = app.import_cache.focus_files.clone();
+    for _ in 0..20 {
+        app.refresh_import_cache();
+    }
+    assert!(std::sync::Arc::ptr_eq(&before, &app.import_cache.selection));
+    assert!(std::sync::Arc::ptr_eq(
+        &focused,
+        &app.import_cache.focus_files
+    ));
+    assert_eq!(app.import_cache.bytes, 500_000);
+    assert_eq!(app.import_cache.counts["jpg"], 100_000);
+}
