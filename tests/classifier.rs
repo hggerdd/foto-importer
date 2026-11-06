@@ -113,6 +113,24 @@ fn stored_model_orders_collection_suggestions_with_fallback() -> anyhow::Result<
     assert!(after.by_model);
     assert_eq!(after.items.len(), 3);
     assert_eq!(after.items[0].0, 2);
+    // Jede vorgeschlagene Person bekommt ein eigenes bestätigtes Porträt.
+    for (person, _, _) in &after.items {
+        let portrait = after.portraits.get(person).expect("portrait");
+        assert_eq!(portrait.person, Some(*person));
+    }
+    // Das Medoid ist das zentralste Gesicht: ein Ausreißer wird nie gewählt.
+    c.db.execute("INSERT INTO photos(id,status) VALUES(900,'present')", [])?;
+    c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,person_id,assignment) VALUES(900,900,'o.jpg','det',0,0,1,1,1,3,'user')", [])?;
+    let mut outlier = vec![0.0f32; 16];
+    outlier[15] = 1.0;
+    c.db.execute(
+        "INSERT INTO face_embeddings VALUES(900,'test',16,?)",
+        [faces::encode(&outlier)],
+    )?;
+    assert_ne!(
+        faces::person_portrait(&c, 3, "test")?.map(|f| f.id),
+        Some(900)
+    );
     let group = recognition::group_suggestions(&c, &[face_id], "test")?;
     assert!(group.by_model);
     assert_eq!(group.items[0].0, 2);

@@ -115,6 +115,7 @@ impl PhotoApp {
                     let mut submit = false;
                     ui.label("Bestehende Person wählen oder neuen Namen eingeben.");
                     let by_model = self.name_suggestions_by_model;
+                    let busy = self.busy();
                     ui.label(
                         RichText::new(if by_model {
                             "Die drei passendsten Personen nach dem trainierten Modell · Prozent sind keine Garantie"
@@ -129,17 +130,22 @@ impl PhotoApp {
                             if let Some((person, name, score)) =
                                 self.name_suggestions.get(index).cloned()
                             {
-                                if ui
-                                    .add_enabled(
-                                        !self.busy(),
-                                        egui::Button::new(if by_model {
-                                            format!("{name} · {:.0} %", score * 100.0)
-                                        } else {
-                                            format!("{name} · {score:.3}")
-                                        }),
-                                    )
-                                    .clicked()
-                                {
+                                let detail = if by_model {
+                                    format!("{:.0} %", score * 100.0)
+                                } else {
+                                    format!("{score:.3}")
+                                };
+                                if Self::suggestion_chip(
+                                    &mut self.thumbnails,
+                                    ui,
+                                    &self.settings.collection,
+                                    &self.settings.exiftool,
+                                    person,
+                                    self.name_portraits.get(&person),
+                                    &name,
+                                    &detail,
+                                    !busy,
+                                ) {
                                     self.name_person = Some(person);
                                     self.name_input = name;
                                     submit = true;

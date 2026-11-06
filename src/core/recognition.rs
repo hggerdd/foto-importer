@@ -58,11 +58,22 @@ fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, Str
 pub struct Suggestions {
     pub by_model: bool,
     pub items: Vec<(i64, String, f32)>,
+    /// Repräsentatives Gesicht je vorgeschlagener Person (Medoid).
+    pub portraits: BTreeMap<i64, faces::Face>,
+}
+fn with_portraits(collection: &Collection, mut found: Suggestions, key: &str) -> Suggestions {
+    for (person, _, _) in &found.items {
+        // Ein fehlendes Bild darf den Vorschlag nicht verhindern.
+        if let Ok(Some(face)) = faces::person_portrait(collection, *person, key) {
+            found.portraits.insert(*person, face);
+        }
+    }
+    found
 }
 pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
     let mut all = scored(collection, face, key)?;
     all.items.truncate(if all.by_model { 3 } else { 6 });
-    Ok(all)
+    Ok(with_portraits(collection, all, key))
 }
 /// Gemeinsamer Vorschlag für eine Gruppe: Mittel der Einzelwerte über
 /// höchstens drei Gesichter (begrenzt die Lesezeit je Seite).
@@ -86,7 +97,15 @@ pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> R
         .collect();
     items.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
     items.truncate(3);
-    Ok(Suggestions { by_model, items })
+    Ok(with_portraits(
+        collection,
+        Suggestions {
+            by_model,
+            items,
+            portraits: BTreeMap::new(),
+        },
+        key,
+    ))
 }
 fn scored(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
     let result = ranked(collection, face, key)?;
@@ -112,6 +131,7 @@ fn scored(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> 
                 return Ok(Suggestions {
                     by_model: true,
                     items,
+                    portraits: BTreeMap::new(),
                 });
             }
         }
@@ -119,6 +139,7 @@ fn scored(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> 
     Ok(Suggestions {
         by_model: false,
         items: result,
+        portraits: BTreeMap::new(),
     })
 }
 

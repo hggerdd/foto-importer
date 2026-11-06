@@ -149,6 +149,72 @@ impl PhotoApp {
         });
     }
 
+    /// Kleine Vorschlagskarte: Porträt der Person, darunter Name und Wert.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn suggestion_chip(
+        thumbnails: &mut Thumbnails,
+        ui: &mut egui::Ui,
+        root: &str,
+        exiftool: &str,
+        person: i64,
+        portrait: Option<&Face>,
+        name: &str,
+        detail: &str,
+        enabled: bool,
+    ) -> bool {
+        let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                let size = egui::vec2(34.0, 34.0);
+                match portrait {
+                    Some(face) => {
+                        thumbnails.image(
+                            ui,
+                            PreviewRequest {
+                                root: Some(PathBuf::from(root)),
+                                path: Path::new(root).join(&face.source),
+                                orientation: 1,
+                                crop: Some(face.bbox),
+                                edge: 160,
+                                generation: 0,
+                            },
+                            exiftool,
+                            size,
+                        );
+                    }
+                    None => {
+                        ui.allocate_space(size);
+                    }
+                }
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new(name).small().strong());
+                    ui.label(RichText::new(detail).small().weak());
+                });
+            });
+        });
+        let rect = inner.response.rect;
+        let response = ui.interact(
+            rect,
+            ui.id().with(("suggestion", person)),
+            if enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
+        );
+        if enabled && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            ui.painter().rect_stroke(
+                rect,
+                4.0,
+                egui::Stroke::new(1.5_f32, ui.visuals().selection.bg_fill),
+                egui::StrokeKind::Outside,
+            );
+        }
+        enabled && response.clicked()
+    }
+
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
         let key = group
             .iter()
@@ -242,12 +308,22 @@ impl PhotoApp {
                             .weak(),
                         );
                         for (person, name, score) in &proposals.items {
-                            let label = if proposals.by_model {
-                                format!("{name} · {:.0} %", score * 100.0)
+                            let detail = if proposals.by_model {
+                                format!("{:.0} %", score * 100.0)
                             } else {
-                                format!("{name} · {score:.2}")
+                                format!("{score:.2}")
                             };
-                            if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                            if Self::suggestion_chip(
+                                &mut self.thumbnails,
+                                ui,
+                                &root,
+                                &exiftool,
+                                *person,
+                                proposals.portraits.get(person),
+                                name,
+                                &detail,
+                                !busy,
+                            ) {
                                 draft.person = Some(*person);
                                 draft.name = name.clone();
                                 submit = true;

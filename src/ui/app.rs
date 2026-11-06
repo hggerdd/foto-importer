@@ -168,6 +168,7 @@ pub struct PhotoApp {
     name_person: Option<i64>,
     name_suggestions: Vec<(i64, String, f32)>,
     name_suggestions_by_model: bool,
+    name_portraits: BTreeMap<i64, Face>,
     relation_from: Option<i64>,
     relation_to: Option<i64>,
     relation_kind: String,
@@ -250,6 +251,7 @@ impl PhotoApp {
             name_person: None,
             name_suggestions: Vec::new(),
             name_suggestions_by_model: false,
+            name_portraits: BTreeMap::new(),
             relation_from: None,
             relation_to: None,
             relation_kind: "parent".into(),
@@ -617,6 +619,7 @@ impl PhotoApp {
         self.name_input.clear();
         self.name_person = None;
         self.name_suggestions.clear();
+        self.name_portraits.clear();
         self.launch("Namensvorschläge lesen", false, "suggestions", move |_| {
             let c = Collection::open(Path::new(&root), false)?;
             let key = faces::setting(&c, "rust.embedder_key")?.unwrap_or_default();
@@ -889,6 +892,7 @@ impl PhotoApp {
                         && self.naming.as_ref().is_some_and(|f| f.id == id) =>
                 {
                     self.name_suggestions_by_model = suggestions.by_model;
+                    self.name_portraits = suggestions.portraits;
                     self.name_suggestions = suggestions.items
                 }
                 Ok(Outcome::Pick(pick, Some(path))) => {

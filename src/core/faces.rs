@@ -195,6 +195,50 @@ fn face_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Face> {
     })
 }
 const FACE_COLUMNS: &str = "f.id,f.photo_id,f.source_relpath,f.bbox_x1,f.bbox_y1,f.bbox_x2,f.bbox_y2,f.person_id,f.assignment,f.ignored,f.confidence";
+/// Das „durchschnittlichste“ bestätigte Gesicht einer Person: das Medoid ihrer
+/// hochwertigen Embeddings (höchste mittlere Ähnlichkeit zu den übrigen).
+pub fn person_portrait(
+    collection: &Collection,
+    person: i64,
+    embedder: &str,
+) -> Result<Option<Face>> {
+    let rows: Vec<(i64, Vec<u8>)> = collection
+        .db
+        .prepare(
+            "SELECT f.id,e.vec FROM faces f JOIN face_embeddings e ON e.face_id=f.id
+             WHERE f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.retained=0
+               AND f.quality>=0.5 AND e.embedder_id=?
+             ORDER BY f.quality DESC,f.id LIMIT 100",
+        )?
+        .query_map(params![person, embedder], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let vectors: Vec<(i64, Vec<f32>)> = rows
+        .into_iter()
+        .filter_map(|(id, bytes)| Some((id, inference::normalize(&decode(&bytes).ok()?).ok()?)))
+        .collect();
+    let best = vectors
+        .iter()
+        .map(|(id, v)| {
+            let total: f32 = vectors
+                .iter()
+                .filter(|(other, _)| other != id)
+                .filter_map(|(_, w)| inference::cosine(v, w))
+                .sum();
+            (*id, total)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+    let Some((id, _)) = best else {
+        return Ok(None);
+    };
+    Ok(collection
+        .db
+        .query_row(
+            &format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.id=?"),
+            [id],
+            face_row,
+        )
+        .optional()?)
+}
 pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
     Ok(collection
         .db
