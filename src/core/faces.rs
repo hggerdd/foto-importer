@@ -169,6 +169,16 @@ pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
         .query_map([photo], face_row)?
         .collect::<rusqlite::Result<_>>()?)
 }
+pub fn photo_analysis_done(collection: &Collection, photo: i64) -> Result<bool> {
+    let Some(detector) = setting(collection, "rust.detector_key")? else {
+        return Ok(false);
+    };
+    Ok(collection.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM face_jobs WHERE photo_id=? AND stage='detect' AND model_id=? AND status='done')",
+        params![photo, detector],
+        |row| row.get(0),
+    )?)
+}
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     let status = status(collection)?;
     let mut groups = Vec::new();

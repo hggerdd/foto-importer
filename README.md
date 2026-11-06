@@ -24,6 +24,10 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 * **Sammlung:** Wurzelordner wählen, im Raster suchen und rechts Foto samt
   Metadaten prüfen. **Bestand** enthält Aktualisierung, Metadatenimport und
   Integritätsprüfung. **Filter** öffnet die kombinierten Suchkriterien.
+  Die Suchzeile findet auch bestätigte Personennamen. **Gesichter** und
+  **Personen** in den Bildmetadaten lassen sich als Suchkriterien übernehmen.
+  Unter **Filter** kann man die Anzahl erkannter Gesichter mit Datum,
+  Kamera oder weiteren Kriterien kombinieren.
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.

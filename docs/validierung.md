@@ -47,3 +47,11 @@ Alle 54 Offline-Regressionen bestanden. Die Layoutregression prüft bei
 die Dialoge für Filter und Bestand ihre Position nicht verändern.
 Das [Windows-Bild der Sammlungsansicht](screenshots/sammlung.png) zeigt
 synthetische Fotos und Metadaten im hellen Design.
+
+## Durchsuchbare Gesichtsmetadaten am 06.11.2026
+
+Alle 56 Offline-Regressionen und die strenge Clippy-Prüfung bestanden.
+Der Suchtest kombiniert einen Namen mit der Gesichtsanzahl und unterscheidet
+bestätigte Zuordnungen, Vorschläge und historische Vorkommen. Er prüft
+außerdem, dass null erkannte Gesichter und eine fehlende Analyse
+unterschiedliche Treffer liefern.

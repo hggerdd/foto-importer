@@ -274,7 +274,36 @@ pub const FIELDS: &[(&str, &str)] = &[
     ("gps", "GPS vorhanden"),
     ("metadata", "Metadatenstatus"),
     ("shutter_count", "Auslösungen"),
+    ("face_count", "Anzahl erkannter Gesichter"),
 ];
+const CURRENT_FACES: &str = "f.photo_id=p.photo_id AND f.retained=0";
+const DETECTION_DONE: &str = "EXISTS(SELECT 1 FROM face_jobs j WHERE j.photo_id=p.photo_id AND j.stage='detect' AND j.model_id=? AND j.status='done')";
+
+fn compile_face_count(rule: &Rule, detector: &str) -> Result<(String, Vec<Value>)> {
+    let mut args = vec![detector.to_owned().into()];
+    let comparison = match rule.operator.as_str() {
+        "present" => return Ok((DETECTION_DONE.into(), args)),
+        "empty" => return Ok((format!("NOT {DETECTION_DONE}"), args)),
+        "is" => "=",
+        "not" => "!=",
+        "min" => ">=",
+        "max" => "<=",
+        _ => bail!("Gesichter mit einer Anzahl vergleichen"),
+    };
+    let count = rule
+        .value
+        .trim()
+        .parse::<u32>()
+        .context("Bitte eine ganze, nichtnegative Anzahl eingeben")?;
+    args.push(i64::from(count).into());
+    Ok((
+        format!(
+            "{DETECTION_DONE} AND (SELECT count(*) FROM faces f INDEXED BY ix_faces_photo WHERE {CURRENT_FACES}){comparison}?"
+        ),
+        args,
+    ))
+}
+
 pub fn compile_rule(rule: &Rule) -> Result<(String, Vec<Value>)> {
     let (expression, numeric) = match rule.field.as_str() {
         "camera" => ("p.camera", false),
@@ -374,9 +403,21 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
     }
     let mut clauses=vec!["p.ext IN ('jpg','jpeg','png','gif','bmp','tif','tiff','nef','nrw','dng','heic','arw','cr2','cr3','orf')".to_string()];
     let mut args = Vec::new();
+    let state = if search.suggestions {
+        "f.assignment IN ('user','auto','suggested')"
+    } else {
+        "f.assignment='user'"
+    };
+    let current = CURRENT_FACES;
     if !search.text.trim().is_empty() {
-        clauses.push("(instr(casefold(p.relpath),?)>0 OR instr(casefold(p.camera),?)>0 OR instr(casefold(p.lens),?)>0)".into());
-        args.extend(vec![Value::Text(files::fold(search.text.trim())); 3]);
+        clauses.push(format!(
+            "(instr(casefold(p.relpath),?)>0 OR instr(casefold(p.camera),?)>0 OR instr(casefold(p.lens),?)>0
+              OR EXISTS(SELECT 1 FROM faces f INDEXED BY ix_faces_photo
+                  JOIN persons person ON person.id=f.person_id AND person.merged_into IS NULL
+                  JOIN person_attrs name ON name.person_id=person.id AND name.key='name'
+                  WHERE {current} AND {state} AND instr(casefold(name.value),?)>0))"
+        ));
+        args.extend(vec![Value::Text(files::fold(search.text.trim())); 4]);
     }
     for (text, lower) in [(&search.start, true), (&search.end, false)] {
         if !text.is_empty() {
@@ -437,12 +478,6 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
     if ["none", "unanalysed"].contains(&search.face_state.as_str()) && !included.is_empty() {
         bail!("Personensuche widerspricht Gesichtsfilter");
     }
-    let state = if search.suggestions {
-        "f.assignment IN ('user','auto','suggested')"
-    } else {
-        "f.assignment='user'"
-    };
-    let current = "f.photo_id=p.photo_id AND f.retained=0";
     for person in &search.people_all {
         clauses.push(format!("EXISTS(SELECT 1 FROM faces f INDEXED BY ix_faces_photo WHERE {current} AND {state} AND f.person_id=?)"));
         args.push((*person).into());
@@ -453,7 +488,7 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
             args.extend(people.iter().map(|p| Value::Integer(*p)));
         }
     }
-    let analysed = "EXISTS(SELECT 1 FROM face_jobs j WHERE j.photo_id=p.photo_id AND j.stage='detect' AND j.model_id=? AND j.status='done')";
+    let analysed = DETECTION_DONE;
     if !search.people_none.is_empty()
         || search.only_people
         || ["none", "unknown", "with_faces"].contains(&search.face_state.as_str())
@@ -474,7 +509,11 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
     match search.face_state.as_str(){""|"any"=>{},"none"=>clauses.push(format!("NOT EXISTS(SELECT 1 FROM faces f INDEXED BY ix_faces_photo WHERE {current})")),"with_faces"=>clauses.push(format!("EXISTS(SELECT 1 FROM faces f INDEXED BY ix_faces_photo WHERE {current})")),"unknown"=>clauses.push(format!("EXISTS(SELECT 1 FROM faces f INDEXED BY ix_faces_photo WHERE {current} AND (f.person_id IS NULL OR f.assignment IS NULL OR NOT ({state})))")),"unanalysed"=>{clauses.push(format!("NOT {analysed}"));args.push(detector.to_string().into());},_=>bail!("Unbekannter Gesichtsfilter")}
     let mut rules = Vec::new();
     for rule in &search.rules {
-        let (sql, values) = compile_rule(rule)?;
+        let (sql, values) = if rule.field == "face_count" {
+            compile_face_count(rule, detector)?
+        } else {
+            compile_rule(rule)?
+        };
         rules.push(format!("({sql})"));
         args.extend(values);
     }

@@ -54,7 +54,7 @@ enum Outcome {
     Scan(u64, Scan),
     Search(u64, CollectionStatus, SearchPage, Search),
     Faces(u64, FacePage),
-    Detail(u64, String, Vec<Face>),
+    Detail(u64, String, Vec<Face>, bool),
     Done(String),
     Imported(files::ImportReport),
     Suggestions(u64, i64, Vec<(i64, String, f32)>),
@@ -123,6 +123,7 @@ pub struct PhotoApp {
     detail: String,
     detail_rows: Vec<(String, String)>,
     detail_faces: Vec<Face>,
+    detail_analysis_done: Option<bool>,
     detail_revision: u64,
     large: bool,
     show_frames: bool,
@@ -199,6 +200,7 @@ impl PhotoApp {
             detail: String::new(),
             detail_rows: Vec::new(),
             detail_faces: Vec::new(),
+            detail_analysis_done: None,
             detail_revision: 0,
             large: false,
             show_frames: true,
@@ -543,15 +545,19 @@ impl PhotoApp {
         self.detail.clear();
         self.detail_rows.clear();
         self.detail_faces.clear();
+        self.detail_analysis_done = None;
         let root = PathBuf::from(&self.settings.collection);
         let id = photo.id;
         self.selected_photo = Some(photo);
-        self.launch("Bilddetails lesen", false, "detail", move |_| {
+        self.launch("Bilddetails lesen", false, "detail", move |control| {
             let c = Collection::open(&root, false)?;
+            c.cancel_with(&control);
+            c.db.execute_batch("BEGIN")?;
             Ok(Outcome::Detail(
                 revision,
                 serde_json::to_string_pretty(&metadata::detail(&c, id)?)?,
                 faces::photo_faces(&c, id)?,
+                faces::photo_analysis_done(&c, id)?,
             ))
         });
     }
@@ -652,7 +658,7 @@ impl PhotoApp {
                     }
                     self.face_page = page;
                 }
-                Ok(Outcome::Detail(revision, detail, faces))
+                Ok(Outcome::Detail(revision, detail, faces, analysed))
                     if revision == self.detail_revision =>
                 {
                     self.detail = detail;
@@ -682,6 +688,7 @@ impl PhotoApp {
                         }
                     }
                     self.detail_faces = faces;
+                    self.detail_analysis_done = Some(analysed);
                 }
                 Ok(Outcome::Done(message)) => {
                     if running.kind == "undo" && running.collection == self.settings.collection {

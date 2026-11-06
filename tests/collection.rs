@@ -214,6 +214,52 @@ fn ignored_faces_count_for_strict_search_and_unanalysed_is_not_empty() -> anyhow
     Ok(())
 }
 #[test]
+fn face_names_and_counts_are_searchable_photo_metadata() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    seed(&c)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Jörg Weiß');
+         INSERT INTO faces(photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,
+                           person_id,assignment,retained,ignored) VALUES
+             (1,'album/1.jpg','det',0,0,1,1,1,'user',0,0),
+             (1,'album/1.jpg','det',0,0,1,1,NULL,NULL,0,1),
+             (2,'album/2.jpg','old',0,0,1,1,1,'user',1,0),
+             (3,'album/3.jpg','old',0,0,1,1,1,'suggested',0,0);
+         INSERT INTO face_jobs(photo_id,stage,model_id,status) VALUES
+             (1,'detect','det','done'),(2,'detect','det','done'),(3,'detect','old','done');",
+    )?;
+    let ids = |search: &Search| -> anyhow::Result<BTreeSet<i64>> {
+        Ok(metadata::search(&c, search, "det")?
+            .photos
+            .into_iter()
+            .map(|p| p.id)
+            .collect())
+    };
+    let mut search = Search {
+        text: "WEISS".into(),
+        ..Default::default()
+    };
+    assert_eq!(ids(&search)?, BTreeSet::from([1]));
+    search.suggestions = true;
+    assert_eq!(ids(&search)?, BTreeSet::from([1, 3]));
+    search.suggestions = false;
+    search.rules.push(Rule {
+        field: "face_count".into(),
+        operator: "is".into(),
+        value: "2".into(),
+    });
+    assert_eq!(ids(&search)?, BTreeSet::from([1]));
+    search.text.clear();
+    search.rules[0].value = "0".into();
+    assert_eq!(ids(&search)?, BTreeSet::from([2]));
+    search.rules[0].operator = "empty".into();
+    assert_eq!(ids(&search)?, BTreeSet::from([3]));
+    Ok(())
+}
+
+#[test]
 fn bound_values_cannot_change_query_structure() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;

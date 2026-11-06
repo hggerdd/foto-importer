@@ -102,7 +102,7 @@ impl PhotoApp {
             let search = ui.add_sized(
                 [(ui.available_width() - 345.0).clamp(160.0, 420.0), 30.0],
                 egui::TextEdit::singleline(&mut self.filters.text)
-                    .hint_text("Pfad, Kamera oder Objektiv …"),
+                    .hint_text("Person, Datei, Kamera oder Objektiv …"),
             );
             let submit = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let search_button = egui::Button::new(
@@ -493,6 +493,10 @@ impl PhotoApp {
                             ui.selectable_value(&mut rule.field, (*value).into(), *label);
                         }
                     });
+                let face_count = rule.field == "face_count";
+                if face_count && rule.operator == "contains" {
+                    rule.operator = "is".into();
+                }
                 egui::ComboBox::from_id_salt(("operator", index))
                     .selected_text(operator_label(&rule.operator))
                     .show_ui(ui, |ui| {
@@ -505,10 +509,19 @@ impl PhotoApp {
                             ("present", "vorhanden"),
                             ("empty", "fehlt"),
                         ] {
-                            ui.selectable_value(&mut rule.operator, value.into(), label);
+                            if !face_count || value != "contains" {
+                                let label = match (face_count, value) {
+                                    (true, "present") => "Analyse vorhanden",
+                                    (true, "empty") => "Analyse fehlt",
+                                    _ => label,
+                                };
+                                ui.selectable_value(&mut rule.operator, value.into(), label);
+                            }
                         }
                     });
-                ui.add(egui::TextEdit::singleline(&mut rule.value).desired_width(130.0));
+                if !matches!(rule.operator.as_str(), "present" | "empty") {
+                    ui.add(egui::TextEdit::singleline(&mut rule.value).desired_width(130.0));
+                }
                 if ui.small_button("Entfernen").clicked() {
                     remove = Some(index);
                 }
@@ -690,7 +703,7 @@ impl PhotoApp {
     }
 
     fn photo_metadata(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         scroller: egui::ScrollArea,
         photo: &Photo,
@@ -710,11 +723,17 @@ impl PhotoApp {
             capture[2],
             ("Dateigröße", iso_size.as_str()),
         ];
-        let total = summary.len() + self.detail_rows.len();
+        const FACE_ROWS: usize = 2;
+        let total = FACE_ROWS + summary.len() + self.detail_rows.len();
         scroller
             .show_rows(ui, 23.0, total, |ui, range| {
                 let field_width = (ui.available_width() * 0.34).clamp(92.0, 170.0);
                 for index in range {
+                    if index < FACE_ROWS {
+                        self.face_metadata_row(ui, index, field_width);
+                        continue;
+                    }
+                    let index = index - FACE_ROWS;
                     let (key, value) = if let Some((key, value)) = summary.get(index) {
                         (
                             *key,
@@ -745,12 +764,106 @@ impl PhotoApp {
             .inner_rect
     }
 
+    fn face_metadata_row(&mut self, ui: &mut egui::Ui, row: usize, field_width: f32) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().interact_size.y = 23.0;
+            let label = if row == 0 { "Gesichter" } else { "Personen" };
+            ui.add_sized(
+                [field_width, 23.0],
+                egui::Label::new(RichText::new(label).small().weak()),
+            );
+            if row == 0 {
+                let count = self.detail_faces.len();
+                let text = match (self.detail_analysis_done, count) {
+                    (Some(true), _) => format!("{count} erkannt"),
+                    (Some(false), 0) => "Noch nicht analysiert".into(),
+                    (Some(false), _) => format!("{count} gespeichert · Analyse offen"),
+                    (None, _) => "–".into(),
+                };
+                if self.detail_analysis_done == Some(true) {
+                    if ui
+                        .small_button(text)
+                        .on_hover_text("Anzahl als Suchkriterium übernehmen")
+                        .clicked()
+                    {
+                        let rule = Rule {
+                            field: "face_count".into(),
+                            operator: "is".into(),
+                            value: count.to_string(),
+                        };
+                        if !self.filters.rules.contains(&rule) {
+                            self.filters.rules.push(rule);
+                        }
+                        self.collection_dialog = Some(CollectionDialog::Filters);
+                    }
+                } else {
+                    ui.add(egui::Label::new(text).truncate());
+                }
+                return;
+            }
+            let confirmed: BTreeSet<_> = self
+                .detail_faces
+                .iter()
+                .filter(|face| face.assignment.as_deref() == Some("user"))
+                .filter_map(|face| face.person)
+                .collect();
+            let people: Vec<_> = confirmed
+                .into_iter()
+                .map(|id| {
+                    let name = self
+                        .face_page
+                        .people
+                        .iter()
+                        .find(|person| person.id == id)
+                        .map_or_else(|| format!("#{id}"), |person| person.name.clone());
+                    (id, name)
+                })
+                .collect();
+            if people.is_empty() {
+                ui.label(if self.detail_analysis_done.is_some() {
+                    "Keine bestätigt"
+                } else {
+                    "–"
+                });
+                return;
+            }
+            let names = people
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let caption = if names.chars().count() > 20 {
+                format!("{}…", names.chars().take(19).collect::<String>())
+            } else {
+                names.clone()
+            };
+            ui.menu_button(caption, |ui| {
+                ui.label("Person als Suchkriterium übernehmen");
+                egui::ScrollArea::vertical()
+                    .max_height(230.0)
+                    .show(ui, |ui| {
+                        for (id, name) in people {
+                            if ui.button(format!("{name} · #{id}")).clicked() {
+                                if !self.filters.people_all.contains(&id) {
+                                    self.filters.people_all.push(id);
+                                }
+                                self.collection_dialog = Some(CollectionDialog::Filters);
+                                ui.close();
+                            }
+                        }
+                    });
+            })
+            .response
+            .on_hover_text(names);
+        });
+    }
+
     fn photo_people(&mut self, ui: &mut egui::Ui) {
         if self.detail_faces.is_empty() {
             ui.label("Keine erkannten Gesichter für dieses Foto gespeichert.");
         }
         for face in self.detail_faces.clone() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let name = face
                     .person
                     .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
@@ -759,6 +872,18 @@ impl PhotoApp {
                 if ui.button(format!("{name} · #{}", face.id)).clicked() {
                     self.open_naming(face.clone());
                 }
+                ui.label(
+                    RichText::new(if face.ignored {
+                        "Ignoriert"
+                    } else if face.person.is_none() {
+                        "Unbekannt"
+                    } else if face.assignment.as_deref() == Some("user") {
+                        "Bestätigt"
+                    } else {
+                        "Unbestätigt"
+                    })
+                    .small(),
+                );
                 if face.assignment.as_deref() == Some("user") {
                     ui.menu_button("Referenz", |ui| {
                         for (action, label) in [

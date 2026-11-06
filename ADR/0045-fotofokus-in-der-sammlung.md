@@ -20,6 +20,9 @@ Filter und Bestandspflege erscheinen in Dialogen. Galerie und Bilddetails
 nutzen die verbleibende Höhe. Die Vorschau bleibt beim Scrollen der
 Metadaten sichtbar. Personenaktionen erhalten im selben Detailbereich einen
 eigenen Reiter. Der Detailbereich lässt sich für die Rastersichtung ausblenden.
+Seit [ADR-0047](0047-gesichter-als-suchmetadaten.md) stehen Gesichtsanzahl und
+bestätigte Personen zusätzlich im Metadatenreiter und können von dort als
+Suchkriterien übernommen werden.
 
 Seitennavigation und Ordnerwahl verwenden die angewendeten Kriterien.
 Änderungen am Suchentwurf benötigen weiterhin eine ausdrückliche Anwendung.
