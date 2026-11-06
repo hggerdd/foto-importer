@@ -159,3 +159,23 @@ fn ignore_undo_restores_reference_pins_and_guards_later_pin_changes() -> anyhow:
     );
     Ok(())
 }
+#[test]
+fn analysis_coverage_counts_only_the_current_detector() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    seed(&c, 3)?;
+    c.db.execute(
+        "INSERT INTO face_settings(key,value) VALUES('rust.detector_key','\"yunet\"')",
+        [],
+    )?;
+    let current = faces::active_detector_key(&c)?.ok_or_else(|| anyhow::anyhow!("detector"))?;
+    for (photo, model) in [(1, current.as_str()), (2, "yunet")] {
+        c.db.execute(
+            "INSERT INTO face_jobs(photo_id,stage,model_id,status) VALUES(?,'detect',?,'done')",
+            params![photo, model],
+        )?;
+    }
+    let status = faces::status(&c)?;
+    assert_eq!((status.analysed_photos, status.present_photos), (1, 3));
+    Ok(())
+}

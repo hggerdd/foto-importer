@@ -48,7 +48,10 @@ impl PhotoApp {
                 } else if analysing {
                     "Analyse läuft".into()
                 } else {
-                    format!("{} Fotos analysiert", status.analysed_photos)
+                    format!(
+                        "{} von {} Fotos mit aktueller Erkennung analysiert",
+                        status.analysed_photos, status.present_photos
+                    )
                 });
                 if setup_needed {
                     if ui.button("Einrichten …").clicked() {

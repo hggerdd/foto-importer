@@ -41,6 +41,7 @@ pub struct Status {
     pub reference_people: usize,
     pub dirty_people: usize,
     pub analysed_photos: usize,
+    pub present_photos: usize,
     pub nameable: usize,
     pub pending: usize,
     pub applied: String,
@@ -155,6 +156,11 @@ pub fn status(collection: &Collection) -> Result<Status> {
     status.analysed_photos = collection.db.query_row(
         "SELECT count(*) FROM face_jobs j JOIN photos p ON p.id=j.photo_id WHERE p.status='present' AND j.stage='detect' AND j.model_id=? AND j.status='done'",
         [&status.detector], |r| r.get(0),
+    )?;
+    status.present_photos = collection.db.query_row(
+        "SELECT count(*) FROM photos WHERE status='present'",
+        [],
+        |r| r.get(0),
     )?;
     status.pending = collection.db.query_row(
         "SELECT count(*) FROM face_maintenance WHERE embedder_id=?",
