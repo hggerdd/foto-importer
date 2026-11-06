@@ -39,3 +39,11 @@ Installationsprüfungen verwenden kleine ZIP-Dateien und decken falsche
 Prüfsummen, fehlende Dateien, Abbruch und die Erhaltung früherer Installationen ab.
 Alle 53 Offline-Regressionen bestanden. Ein Lauf über die Windows-Oberfläche
 hat den Download mit leerem DLL-Pfad gestartet und den neuen Pfad gespeichert.
+
+## Sammlungsansicht am 06.11.2026
+
+Alle 54 Offline-Regressionen bestanden. Die Layoutregression prüft bei
+980 × 680 und 1280 × 800, dass Vorschau und Metadaten sichtbar bleiben und
+die Dialoge für Filter und Bestand ihre Position nicht verändern.
+Das [Windows-Bild der Sammlungsansicht](screenshots/sammlung.png) zeigt
+synthetische Fotos und Metadaten im hellen Design.

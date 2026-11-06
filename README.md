@@ -21,8 +21,9 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 
 * **Importieren:** Quelle wählen, Datumsmethode einstellen, Tage markieren,
   Ziel und einen gültigen Ordnernamen wählen, Zielplan prüfen, sicher importieren.
-* **Sammlung:** Wurzelordner wählen, Bestand aktualisieren, optional Metadaten
-  lesen, Suchkriterien anwenden. Ein Foto öffnet den Detailbereich.
+* **Sammlung:** Wurzelordner wählen, im Raster suchen und rechts Foto samt
+  Metadaten prüfen. **Bestand** enthält Aktualisierung, Metadatenimport und
+  Integritätsprüfung. **Filter** öffnet die kombinierten Suchkriterien.
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.

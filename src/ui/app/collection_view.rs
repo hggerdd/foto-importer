@@ -2,38 +2,304 @@ use super::*;
 
 impl PhotoApp {
     pub(super) fn collection_view(&mut self, ui: &mut egui::Ui) {
-        Self::header(
-            ui,
-            "DEINE FOTOBIBLIOTHEK",
-            "Wiederfinden statt durchsuchen.",
-            "Aufnahmen, Metadaten und Personen in einer gemeinsamen Sammlung.",
-        );
+        ui.scope(|ui| {
+            let spacing = ui.spacing_mut();
+            spacing.item_spacing = egui::vec2(8.0, 6.0);
+            spacing.button_padding = egui::vec2(10.0, 5.0);
+            spacing.interact_size.y = 30.0;
+            self.collection_toolbar(ui);
+            if self.settings.collection.is_empty() {
+                self.empty(
+                    ui,
+                    "Ein Zuhause für deine Fotos.",
+                    "Wähle den Wurzelordner deiner Sammlung.",
+                );
+                return;
+            }
+            self.collection_search(ui);
+            ui.separator();
+            let width = ui.available_width();
+            let gap = ui.spacing().item_spacing.x;
+            let detail_width = (width * 0.48).clamp(320.0, 720.0);
+            let inspect = self.inspector && width >= 610.0;
+            if inspect
+                && self.selected_photo.is_none()
+                && let Some(photo) = self.page.photos.first().cloned()
+            {
+                self.choose_photo(photo);
+            }
+            let gallery_width = if inspect {
+                width - detail_width - gap
+            } else {
+                width
+            };
+            let height = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(gallery_width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(gallery_width);
+                        self.collection_pagination(ui);
+                        self.photo_gallery(ui);
+                    },
+                );
+                if inspect {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(detail_width, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(detail_width);
+                            self.inspector(ui);
+                        },
+                    );
+                }
+            });
+        });
+        self.show_collection_dialog(ui.ctx());
+    }
+
+    fn collection_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("Sammlung wählen …").clicked() {
+            ui.label(RichText::new("Sammlung").size(23.0).strong());
+            let root = super::import_view::display_path(&self.settings.collection);
+            let name = Path::new(&self.settings.collection)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(root.as_ref());
+            let label = if name.is_empty() {
+                "Sammlung wählen …"
+            } else {
+                name
+            };
+            if ui
+                .add_sized([160.0, 30.0], egui::Button::new(label).truncate())
+                .on_hover_text(if root.is_empty() {
+                    "Sammlung wählen"
+                } else {
+                    root.as_ref()
+                })
+                .clicked()
+            {
                 self.pick(Pick::Collection);
             }
-            ui.add(
-                egui::Label::new(super::import_view::display_path(&self.settings.collection))
-                    .truncate(),
-            );
-        });
-        if self.settings.collection.is_empty() {
-            self.empty(ui,"Ein Zuhause für deine Fotos.","Wähle den Wurzelordner deiner Sammlung. Vorhandene Schema-6-Sammlungen bleiben erhalten.");
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            for (label, value) in [
-                ("Aufnahmen", self.status.photos),
-                ("Dateien", self.status.files),
-                ("Metadaten offen", self.status.pending),
-                ("Fehlend", self.status.missing),
-            ] {
-                theme::card(ui).show(ui, |ui| {
-                    ui.label(RichText::new(value.to_string()).size(25.0).strong());
-                    ui.label(RichText::new(label).small().weak());
+            if !self.settings.collection.is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Bestand …").clicked() {
+                        self.collection_dialog = Some(CollectionDialog::Inventory);
+                    }
+                    if ui.selectable_label(self.inspector, "Bilddetails").clicked() {
+                        self.inspector = !self.inspector;
+                    }
                 });
             }
+        });
+    }
+
+    fn collection_search(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let search = ui.add_sized(
+                [(ui.available_width() - 345.0).clamp(160.0, 420.0), 30.0],
+                egui::TextEdit::singleline(&mut self.filters.text)
+                    .hint_text("Pfad, Kamera oder Objektiv …"),
+            );
+            let submit = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let search_button = egui::Button::new(
+                RichText::new("Suchen")
+                    .color(Color32::from_rgb(9, 35, 34))
+                    .strong(),
+            )
+            .fill(theme::ACCENT);
+            if ui.add(search_button).clicked() || submit {
+                self.apply_collection_search();
+            }
+            let mut draft = self.filters.clone();
+            draft.page = self.applied.page;
+            draft.folder = self.applied.folder.clone();
+            draft.folder_page = self.applied.folder_page;
+            let filter_label = if draft != self.applied {
+                "Filter · Entwurf"
+            } else if Self::has_advanced_filters(&self.applied) {
+                "Filter · aktiv"
+            } else {
+                "Filter …"
+            };
+            if ui.button(filter_label).clicked() {
+                self.collection_dialog = Some(CollectionDialog::Filters);
+            }
+            self.collection_folders(ui);
+        });
+    }
+
+    fn has_advanced_filters(filters: &Search) -> bool {
+        let mut criteria = filters.clone();
+        criteria.text.clear();
+        criteria.folder = None;
+        criteria.page = 0;
+        criteria.folder_page = 0;
+        if criteria.face_state == "any" {
+            criteria.face_state.clear();
+        }
+        criteria != Search::default()
+    }
+
+    fn apply_collection_search(&mut self) {
+        self.filters.folder = self.applied.folder.clone();
+        self.filters.page = 0;
+        self.filters.folder_page = 0;
+        self.refresh_collection();
+    }
+
+    fn navigate_collection(&mut self, page: usize, folder: Option<String>, folder_page: usize) {
+        let mut filters = self.applied.clone();
+        filters.page = page;
+        filters.folder = folder;
+        filters.folder_page = folder_page;
+        self.query_collection(filters);
+    }
+
+    fn collection_folders(&mut self, ui: &mut egui::Ui) {
+        let active = self.applied.folder.clone();
+        let name = active
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or("Alle");
+        let caption: String = name.chars().take(16).collect();
+        let caption = if name.chars().count() > 16 {
+            format!("{caption}…")
+        } else {
+            caption
+        };
+        let loading = self.tasks.iter().any(|task| task.kind == "search");
+        ui.menu_button(format!("Ordner · {caption}"), |ui| {
+            ui.set_min_width(230.0);
+            ui.label(active.as_deref().unwrap_or("Gesamte Sammlung"));
+            ui.add_enabled_ui(!loading, |ui| {
+                if ui.button("Gesamte Sammlung").clicked() {
+                    self.navigate_collection(0, None, 0);
+                    ui.close();
+                }
+                if let Some(folder) = &active
+                    && ui.button("Übergeordneter Ordner").clicked()
+                {
+                    self.navigate_collection(
+                        0,
+                        folder.rsplit_once('/').map(|(p, _)| p.to_owned()),
+                        0,
+                    );
+                    ui.close();
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for folder in self.page.folders.clone() {
+                            if ui.button(format!("{folder}/")).clicked() {
+                                let path = active
+                                    .as_ref()
+                                    .map_or_else(|| folder.clone(), |p| format!("{p}/{folder}"));
+                                self.navigate_collection(0, Some(path), 0);
+                                ui.close();
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    let page = self.applied.folder_page;
+                    if page > 0 && ui.small_button("Vorherige Ordner").clicked() {
+                        self.navigate_collection(0, active.clone(), page - 1);
+                    }
+                    if self.page.folders_more && ui.small_button("Weitere Ordner").clicked() {
+                        self.navigate_collection(0, active.clone(), page + 1);
+                    }
+                });
+            });
+        })
+        .response
+        .on_hover_text(active.as_deref().unwrap_or("Gesamte Sammlung"));
+    }
+
+    fn collection_pagination(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let page = self.applied.page;
+            let pages = self.page.total.div_ceil(config::PAGE_SIZE).max(1);
+            let loading = self.tasks.iter().any(|task| task.kind == "search");
+            ui.label(RichText::new(format!("{} Fotos", self.page.total)).strong());
+            if pages > 1 {
+                if ui
+                    .add_enabled(page > 0 && !loading, egui::Button::new("Zurück"))
+                    .clicked()
+                {
+                    self.navigate_collection(
+                        page - 1,
+                        self.applied.folder.clone(),
+                        self.applied.folder_page,
+                    );
+                }
+                ui.label(format!("{} / {pages}", page + 1));
+                if ui
+                    .add_enabled(page + 1 < pages && !loading, egui::Button::new("Weiter"))
+                    .clicked()
+                {
+                    self.navigate_collection(
+                        page + 1,
+                        self.applied.folder.clone(),
+                        self.applied.folder_page,
+                    );
+                }
+            }
+        });
+    }
+
+    fn show_collection_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.collection_dialog else {
+            return;
+        };
+        let response = egui::Modal::new(egui::Id::new("collection-dialog")).show(ctx, |ui| {
+            ui.set_width(625.0_f32.min(ctx.content_rect().width() - 64.0));
+            ui.heading(match dialog {
+                CollectionDialog::Filters => "Sammlung filtern",
+                CollectionDialog::Inventory => "Sammlungsbestand",
+            });
+            egui::ScrollArea::vertical()
+                .id_salt(match dialog {
+                    CollectionDialog::Filters => "filters",
+                    CollectionDialog::Inventory => "inventory",
+                })
+                .max_height((ctx.content_rect().height() - 190.0).clamp(100.0, 550.0))
+                .show(ui, |ui| match dialog {
+                    CollectionDialog::Filters => self.search_builder(ui),
+                    CollectionDialog::Inventory => self.inventory_controls(ui),
+                });
             ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if dialog == CollectionDialog::Filters {
+                    if theme::primary(ui, "Filter anwenden", true) {
+                        self.apply_collection_search();
+                        self.collection_dialog = None;
+                    }
+                    if ui.button("Filter zurücksetzen").clicked() {
+                        self.filters = Search::default();
+                        self.apply_collection_search();
+                        self.collection_dialog = None;
+                    }
+                }
+                if ui.button("Schließen").clicked() {
+                    self.collection_dialog = None;
+                }
+            });
+        });
+        if response.should_close() {
+            self.collection_dialog = None;
+        }
+    }
+
+    fn inventory_controls(&mut self, ui: &mut egui::Ui) {
+        ui.label(super::import_view::display_path(&self.settings.collection));
+        ui.label(format!(
+            "{} Aufnahmen · {} Dateien · {} Metadaten offen · {} fehlend",
+            self.status.photos, self.status.files, self.status.pending, self.status.missing
+        ));
+        ui.horizontal_wrapped(|ui| {
             for (action, label) in [
                 ("scan", "Bestand aktualisieren"),
                 ("metadata", "Metadaten lesen"),
@@ -43,164 +309,229 @@ impl PhotoApp {
                     .add_enabled(!self.busy(), egui::Button::new(label))
                     .clicked()
                 {
+                    self.collection_dialog = None;
                     self.collection_action(action);
                 }
             }
         });
-        ui.add_space(10.0);
-        egui::CollapsingHeader::new("Bestand prüfen & pflegen").show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                if ui.button("Fehlende & letzte Änderungen anzeigen").clicked(){let root=self.settings.collection.clone();self.launch("Bestandsbericht lesen",false,"report",move |_|{let c=Collection::open(Path::new(&root),false)?;Ok(Outcome::Report(c.inventory_report()?))});}
-                if ui.add_enabled(!self.busy(),egui::Button::new("Fehlende nach erneuter Prüfung markieren")).on_hover_text("Bestätigt auch einen Anteil über 20 %. Bei Lesefehlern werden keine unbesuchten Dateien als fehlend markiert.").clicked(){self.collection_action("confirm_missing");}
-            });
-            ui.label("Geprüfte Verschiebung mit früherem Inhaltsfingerabdruck zuordnen");
-            ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.move_old).hint_text("Alter relativer Pfad").desired_width(240.0));ui.add(egui::TextEdit::singleline(&mut self.move_new).hint_text("Neuer relativer Pfad").desired_width(240.0));if ui.add_enabled(!self.busy()&&!self.move_old.is_empty()&&!self.move_new.is_empty(),egui::Button::new("Zuordnen")).clicked(){self.collection_action("resolve");}});
-            ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.purge_confirm,"Fehlende Dateieinträge aus dem Index entfernen; Foto-IDs und Personen bleiben");ui.add(egui::DragValue::new(&mut self.purge_scans).range(0..=10000).prefix("Scanabstand "));if ui.add_enabled(!self.busy()&&self.purge_confirm,egui::Button::new("Einträge entfernen")).clicked(){self.purge_confirm=false;self.collection_action("purge");}});
-        });
-        self.search_builder(ui);
+        ui.separator();
+        ui.label(RichText::new("Fehlende Dateien").strong());
         ui.horizontal_wrapped(|ui| {
-            ui.label("Ordner:");
-            if ui.small_button("Gesamte Sammlung").clicked() {
-                self.filters.folder = None;
-                self.filters.folder_page = 0;
-                self.filters.page = 0;
-                self.refresh_collection();
+            if ui.button("Fehlende & letzte Änderungen anzeigen").clicked() {
+                let root = self.settings.collection.clone();
+                self.collection_dialog = None;
+                self.launch("Bestandsbericht lesen", false, "report", move |_| {
+                    let collection = Collection::open(Path::new(&root), false)?;
+                    Ok(Outcome::Report(collection.inventory_report()?))
+                });
             }
-            if let Some(folder) = self.filters.folder.clone() {
-                ui.label(&folder);
-                if ui.small_button("Übergeordneter Ordner").clicked() {
-                    self.filters.folder = folder.rsplit_once('/').map(|v| v.0.to_string());
-                    self.filters.folder_page = 0;
-                    self.filters.page = 0;
-                    self.refresh_collection();
+            if ui.add_enabled(!self.busy(), egui::Button::new("Fehlende nach erneuter Prüfung markieren"))
+                .on_hover_text("Bestätigt auch einen Anteil über 20 %. Bei Lesefehlern werden keine unbesuchten Dateien als fehlend markiert.")
+                .clicked()
+            {
+                self.collection_dialog = None;
+                self.collection_action("confirm_missing");
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(
+                &mut self.purge_confirm,
+                "Fehlende Einträge aus dem Index entfernen",
+            );
+            ui.add(
+                egui::DragValue::new(&mut self.purge_scans)
+                    .range(0..=10000)
+                    .prefix("Scanabstand "),
+            );
+            if ui
+                .add_enabled(
+                    !self.busy() && self.purge_confirm,
+                    egui::Button::new("Einträge entfernen"),
+                )
+                .clicked()
+            {
+                self.purge_confirm = false;
+                self.collection_dialog = None;
+                self.collection_action("purge");
+            }
+        });
+        ui.label(RichText::new("Foto-IDs und Personen bleiben erhalten.").small());
+        ui.separator();
+        ui.label(RichText::new("Geprüfte Verschiebung zuordnen").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.move_old)
+                    .hint_text("Alter relativer Pfad")
+                    .desired_width(200.0),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut self.move_new)
+                    .hint_text("Neuer relativer Pfad")
+                    .desired_width(200.0),
+            );
+            let ready = !self.busy() && !self.move_old.is_empty() && !self.move_new.is_empty();
+            if ui
+                .add_enabled(ready, egui::Button::new("Zuordnen"))
+                .clicked()
+            {
+                self.collection_dialog = None;
+                self.collection_action("resolve");
+            }
+        });
+    }
+    fn search_builder(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Aufnahmedatum").strong());
+        ui.horizontal_wrapped(|ui| {
+            for (label, date) in [
+                ("Von", &mut self.filters.start),
+                ("Bis", &mut self.filters.end),
+            ] {
+                ui.label(label);
+                ui.add(
+                    egui::TextEdit::singleline(date)
+                        .hint_text("JJJJ-MM-TT")
+                        .desired_width(110.0),
+                );
+            }
+            ui.checkbox(&mut self.filters.oldest, "Älteste zuerst");
+        });
+        ui.horizontal_wrapped(|ui| {
+            for (month, label) in [
+                "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let number = month as u32 + 1;
+                let mut checked = self.filters.months.contains(&number);
+                if ui.checkbox(&mut checked, label).changed() {
+                    if checked {
+                        self.filters.months.push(number);
+                    } else {
+                        self.filters.months.retain(|m| *m != number);
+                    }
                 }
             }
         });
-        egui::ScrollArea::horizontal()
-            .id_salt("folder-paths")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for folder in self.page.folders.clone() {
-                        if ui.button(format!("{folder}/")).clicked() {
-                            self.filters.folder = Some(
-                                self.filters
-                                    .folder
-                                    .as_ref()
-                                    .filter(|p| !p.is_empty())
-                                    .map(|p| format!("{p}/{folder}"))
-                                    .unwrap_or(folder),
-                            );
-                            self.filters.folder_page = 0;
-                            self.filters.page = 0;
-                            self.refresh_collection();
+        ui.separator();
+        ui.label(RichText::new("Personen").strong());
+        for (label, group) in [
+            ("Alle diese Personen", &mut self.filters.people_all),
+            ("Mindestens eine", &mut self.filters.people_any),
+            ("Keine dieser Personen", &mut self.filters.people_none),
+        ] {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(label);
+                egui::ComboBox::from_id_salt(label)
+                    .selected_text("Person hinzufügen …")
+                    .show_ui(ui, |ui| {
+                        for person in &self.face_page.people {
+                            let included = group.contains(&person.id);
+                            if ui
+                                .selectable_label(
+                                    included,
+                                    format!("{} · #{}", person.name, person.id),
+                                )
+                                .clicked()
+                                && !included
+                            {
+                                group.push(person.id);
+                            }
                         }
+                    });
+                let mut remove = None;
+                for &id in group.iter() {
+                    let name = self
+                        .face_page
+                        .people
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map_or_else(|| format!("#{id}"), |p| p.name.clone());
+                    if ui.small_button(format!("{name} entfernen")).clicked() {
+                        remove = Some(id);
                     }
-                    if self.filters.folder_page > 0 && ui.small_button("Vorherige Ordner").clicked()
-                    {
-                        self.filters.folder_page -= 1;
-                        self.refresh_collection();
-                    }
-                    if self.page.folders_more && ui.small_button("Weitere Ordner").clicked() {
-                        self.filters.folder_page += 1;
-                        self.refresh_collection();
+                }
+                if let Some(id) = remove {
+                    group.retain(|person| *person != id);
+                }
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.filters.only_people, "Nur diese Personen");
+            ui.checkbox(
+                &mut self.filters.suggestions,
+                "Unbestätigte Vorschläge einbeziehen",
+            );
+            egui::ComboBox::from_id_salt("face-state")
+                .selected_text(face_label(&self.filters.face_state))
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        ("any", "Alle Fotos"),
+                        ("with_faces", "Mit Gesichtern"),
+                        ("none", "Ohne erkannte Gesichter"),
+                        ("unknown", "Unbekannte Gesichter"),
+                        ("unanalysed", "Noch nicht analysiert"),
+                    ] {
+                        ui.selectable_value(&mut self.filters.face_state, value.into(), label);
                     }
                 });
-            });
+        });
+        ui.label(RichText::new("Ausschlüsse benötigen eine erfolgreiche Analyse. Ignorierte Gesichter zählen weiterhin als anwesend.").small());
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} Aufnahmen", self.page.total)).strong());
-            if ui
-                .add_enabled(
-                    self.filters.page > 0 && !self.tasks.iter().any(|t| t.kind == "search"),
-                    egui::Button::new("Zurück"),
-                )
-                .clicked()
-            {
-                self.filters.page -= 1;
-                self.refresh_collection();
+        ui.label(RichText::new("Metadaten").strong());
+        let mut remove = None;
+        for (index, rule) in self.filters.rules.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                let field_label = metadata::FIELDS
+                    .iter()
+                    .find(|(field, _)| *field == rule.field)
+                    .map_or("Kriterium", |(_, label)| *label);
+                egui::ComboBox::from_id_salt(("field", index))
+                    .selected_text(field_label)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in metadata::FIELDS {
+                            ui.selectable_value(&mut rule.field, (*value).into(), *label);
+                        }
+                    });
+                egui::ComboBox::from_id_salt(("operator", index))
+                    .selected_text(operator_label(&rule.operator))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            ("is", "ist"),
+                            ("not", "ist nicht"),
+                            ("contains", "enthält"),
+                            ("min", "mindestens"),
+                            ("max", "höchstens"),
+                            ("present", "vorhanden"),
+                            ("empty", "fehlt"),
+                        ] {
+                            ui.selectable_value(&mut rule.operator, value.into(), label);
+                        }
+                    });
+                ui.add(egui::TextEdit::singleline(&mut rule.value).desired_width(130.0));
+                if ui.small_button("Entfernen").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            self.filters.rules.remove(index);
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("+ Kriterium").clicked() {
+                self.filters.rules.push(Rule {
+                    field: "camera".into(),
+                    operator: "contains".into(),
+                    value: String::new(),
+                });
             }
-            ui.label(format!(
-                "Seite {} / {}",
-                self.applied.page + 1,
-                self.page.total.div_ceil(config::PAGE_SIZE).max(1)
-            ));
-            if ui
-                .add_enabled(
-                    (self.filters.page + 1) * config::PAGE_SIZE < self.page.total
-                        && !self.tasks.iter().any(|t| t.kind == "search"),
-                    egui::Button::new("Weiter"),
-                )
-                .clicked()
-            {
-                self.filters.page += 1;
-                self.refresh_collection();
-            }
-            ui.checkbox(&mut self.inspector, "Details");
-        });
-        let available = ui.available_width();
-        let inspect = self.inspector && available > 650.0;
-        let gallery_width = if inspect {
-            available - 320.0
-        } else {
-            available
-        };
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(gallery_width, ui.available_height()),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    self.photo_gallery(ui);
-                },
+            ui.checkbox(
+                &mut self.filters.any_rule,
+                "Mindestens ein Metadatenkriterium erfüllt",
             );
-            if inspect {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(300.0, ui.available_height()),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        self.inspector(ui);
-                    },
-                );
-            }
         });
     }
-    pub(super) fn search_builder(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filters.text)
-                    .hint_text("Pfad, Kamera oder Objektiv …")
-                    .desired_width(300.0),
-            );
-            if theme::primary(ui, "Suchen", true) {
-                self.filters.page = 0;
-                self.refresh_collection();
-            }
-            if ui.button("Zurücksetzen").clicked() {
-                self.filters = Search::default();
-                self.refresh_collection();
-            }
-            if self.filters != self.applied {
-                ui.label(
-                    RichText::new("Änderungen noch nicht angewendet")
-                        .small()
-                        .color(theme::WARM),
-                );
-            }
-        });
-        egui::CollapsingHeader::new("Zeitraum, Personen & weitere Kriterien").id_salt("search-builder").show(ui,|ui|{
-            ui.horizontal(|ui|{ui.label("Von");ui.add(egui::TextEdit::singleline(&mut self.filters.start).hint_text("JJJJ-MM-TT").desired_width(110.0));ui.label("bis");ui.add(egui::TextEdit::singleline(&mut self.filters.end).hint_text("JJJJ-MM-TT").desired_width(110.0));ui.checkbox(&mut self.filters.oldest,"Älteste zuerst");});
-            ui.horizontal_wrapped(|ui|{for(month,label)in ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"].iter().enumerate(){let number=month as u32+1;let mut checked=self.filters.months.contains(&number);if ui.checkbox(&mut checked,*label).changed(){if checked{self.filters.months.push(number);}else{self.filters.months.retain(|m|*m!=number);}}}});
-            for(label,group)in [("Alle diese Personen",&mut self.filters.people_all),("Mindestens eine",&mut self.filters.people_any),("Keine dieser Personen",&mut self.filters.people_none)]{
-                ui.horizontal_wrapped(|ui|{ui.label(label);egui::ComboBox::from_id_salt(label).selected_text("Person hinzufügen …").show_ui(ui,|ui|{for person in &self.face_page.people{if ui.selectable_label(false,format!("{} · #{}",person.name,person.id)).clicked()&&!group.contains(&person.id){group.push(person.id);}}});let mut remove=None;for(id,person)in group.iter().enumerate(){let name=self.face_page.people.iter().find(|p|p.id==*person).map(|p|p.name.clone()).unwrap_or_else(||format!("#{person}"));if ui.small_button(format!("{name} ×")).clicked(){remove=Some(id);}}
-if let Some(id)=remove{group.remove(id);}});
-            }
-            ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.filters.only_people,"Nur diese Personen");ui.checkbox(&mut self.filters.suggestions,"Unbestätigte Vorschläge einbeziehen");egui::ComboBox::from_id_salt("face-state").selected_text(face_label(&self.filters.face_state)).show_ui(ui,|ui|{for(value,label)in [("any","Alle Fotos"),("with_faces","Mit Gesichtern"),("none","Ohne erkannte Gesichter"),("unknown","Unbekannte Gesichter"),("unanalysed","Noch nicht analysiert")]{ui.selectable_value(&mut self.filters.face_state,value.into(),label);}});});
-            ui.label(RichText::new("Ausschlüsse benötigen eine erfolgreiche Analyse. Ignorierte Gesichter zählen weiterhin als anwesend.").small().weak());
-            let mut remove=None;for(index,rule)in self.filters.rules.iter_mut().enumerate(){ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("field",index)).selected_text(metadata::FIELDS.iter().find(|f|f.0==rule.field).map(|f|f.1).unwrap_or("Kriterium")).show_ui(ui,|ui|{for(value,label)in metadata::FIELDS{ui.selectable_value(&mut rule.field,value.to_string(),*label);}});egui::ComboBox::from_id_salt(("operator",index)).selected_text(operator_label(&rule.operator)).show_ui(ui,|ui|{for(value,label)in [("is","ist"),("not","ist nicht"),("contains","enthält"),("min","mindestens"),("max","höchstens"),("present","vorhanden"),("empty","fehlt")]{ui.selectable_value(&mut rule.operator,value.into(),label);}});ui.add(egui::TextEdit::singleline(&mut rule.value).desired_width(150.0));if ui.small_button("Entfernen").clicked(){remove=Some(index);}});}
-if let Some(index)=remove{self.filters.rules.remove(index);}
-            ui.horizontal(|ui|{if ui.button("+ Kriterium").clicked(){self.filters.rules.push(Rule{field:"camera".into(),operator:"contains".into(),value:String::new()});}ui.checkbox(&mut self.filters.any_rule,"Mindestens ein Metadatenkriterium erfüllt");});
-        });
-    }
-    pub(super) fn photo_gallery(&mut self, ui: &mut egui::Ui) {
+    fn photo_gallery(&mut self, ui: &mut egui::Ui) {
         if self.page.photos.is_empty() {
             self.empty(
                 ui,
@@ -209,14 +540,15 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
             );
             return;
         }
-        let columns = (ui.available_width() / 190.0).floor().max(1.0) as usize;
-        let width = (ui.available_width() / columns as f32 - 12.0).min(250.0);
+        let available = ui.available_width() - 12.0;
+        let columns = (available / 155.0).floor().max(1.0) as usize;
+        let width = (available / columns as f32 - ui.spacing().item_spacing.x).min(250.0);
         let photos = self.page.photos.clone();
         egui::ScrollArea::vertical()
             .id_salt("collection-gallery")
             .show_rows(
                 ui,
-                width * 0.7 + 60.0,
+                width * 0.7 + 50.0,
                 photos.len().div_ceil(columns),
                 |ui, range| {
                     for row in range {
@@ -278,141 +610,201 @@ if let Some(index)=remove{self.filters.rules.remove(index);}
                 },
             );
     }
-    pub(super) fn inspector(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .id_salt("inspector")
-            .show(ui, |ui| {
-                let Some(photo) = self.selected_photo.clone() else {
-                    ui.label(
-                        RichText::new("Ein Bild. Seine Geschichte.")
-                            .size(18.0)
-                            .strong(),
-                    );
-                    ui.label("Wähle eine Aufnahme für Vorschau und Metadaten.");
-                    return;
-                };
-                theme::eyebrow(ui, "BILDDETAILS");
-                ui.label(RichText::new(&photo.name).size(20.0).strong());
-                let request = PreviewRequest {
-                    root: Some(PathBuf::from(&self.settings.collection)),
-                    path: Path::new(&self.settings.collection).join(&photo.source),
-                    orientation: photo.orientation,
-                    crop: None,
-                    edge: 960,
-                    generation: 0,
-                };
-                let image_ready = self.thumbnails.ready(&request);
-                let response = self.thumbnails.image(
-                    ui,
-                    request,
-                    &self.settings.exiftool,
-                    egui::vec2(ui.available_width(), 200.0),
-                );
-                let face_action = image_ready && self.overlay(ui, response.rect, &photo);
-                if response.clicked() && !face_action {
+    fn inspector(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width();
+        let height = ui.available_height();
+        theme::card(ui).inner_margin(12).show(ui, |ui| {
+            ui.set_width(width - 24.0);
+            ui.set_height((height - 24.0).max(0.0));
+            let Some(photo) = self.selected_photo.clone() else {
+                ui.label(RichText::new("Bilddetails").size(19.0).strong());
+                ui.label("Wähle ein Foto für Vorschau und Metadaten.");
+                return;
+            };
+            ui.horizontal(|ui| {
+                let name_width = (ui.available_width() - 117.0).max(100.0);
+                ui.add_sized(
+                    [name_width, 30.0],
+                    egui::Label::new(RichText::new(&photo.name).size(18.0).strong()).truncate(),
+                )
+                .on_hover_text(&photo.path);
+                if ui.button("Vergrößern").clicked() {
                     self.large = true;
                 }
-                ui.checkbox(&mut self.show_frames, "Gesichtsrahmen anzeigen");
-                ui.label(&photo.date);
-                ui.label(format!("{} · {}", photo.camera, photo.lens));
-                ui.label(format!(
-                    "ISO {} · {}",
-                    photo
-                        .iso
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "unbekannt".into()),
-                    human_size(photo.size)
-                ));
-                ui.label(RichText::new(&photo.path).small().weak());
-                for face in self.detail_faces.clone() {
+            });
+            let request = PreviewRequest {
+                root: Some(PathBuf::from(&self.settings.collection)),
+                path: Path::new(&self.settings.collection).join(&photo.source),
+                orientation: photo.orientation,
+                crop: None,
+                edge: 960,
+                generation: 0,
+            };
+            let image_ready = self.thumbnails.ready(&request);
+            let image_height = (ui.available_height() * 0.5).clamp(150.0, 440.0);
+            let response = self.thumbnails.image(
+                ui,
+                request,
+                &self.settings.exiftool,
+                egui::vec2(ui.available_width(), image_height),
+            );
+            let face_action = image_ready && self.overlay(ui, response.rect, &photo);
+            if response.clicked() && !face_action {
+                self.large = true;
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(!self.inspect_people, "Metadaten")
+                    .clicked()
+                {
+                    self.inspect_people = false;
+                }
+                if ui
+                    .selectable_label(self.inspect_people, "Personen")
+                    .clicked()
+                {
+                    self.inspect_people = true;
+                }
+                if !self.detail_faces.is_empty() || self.inspect_people {
+                    ui.checkbox(&mut self.show_frames, "Rahmen");
+                }
+            });
+            ui.separator();
+            let scroller = egui::ScrollArea::vertical().id_salt((
+                "photo-details",
+                photo.id,
+                self.inspect_people,
+            ));
+            if self.inspect_people {
+                scroller.show(ui, |ui| self.photo_people(ui));
+            } else {
+                let bounds = self.photo_metadata(ui, scroller, &photo);
+                #[cfg(test)]
+                {
+                    self.collection_bounds = Some((response.rect, bounds));
+                }
+                #[cfg(not(test))]
+                let _ = bounds;
+            }
+        });
+    }
+
+    fn photo_metadata(
+        &self,
+        ui: &mut egui::Ui,
+        scroller: egui::ScrollArea,
+        photo: &Photo,
+    ) -> egui::Rect {
+        let capture = [
+            ("Aufnahme", photo.date.as_str()),
+            ("Kamera", photo.camera.as_str()),
+            ("Objektiv", photo.lens.as_str()),
+        ];
+        let iso_size = photo.iso.map_or_else(
+            || human_size(photo.size),
+            |iso| format!("ISO {iso:.0} · {}", human_size(photo.size)),
+        );
+        let summary = [
+            capture[0],
+            capture[1],
+            capture[2],
+            ("Dateigröße", iso_size.as_str()),
+        ];
+        let total = summary.len() + self.detail_rows.len();
+        scroller
+            .show_rows(ui, 23.0, total, |ui, range| {
+                let field_width = (ui.available_width() * 0.34).clamp(92.0, 170.0);
+                for index in range {
+                    let (key, value) = if let Some((key, value)) = summary.get(index) {
+                        (
+                            *key,
+                            if value.is_empty() {
+                                "Unbekannt"
+                            } else {
+                                *value
+                            },
+                        )
+                    } else {
+                        let (key, value) = &self.detail_rows[index - summary.len()];
+                        (key.as_str(), value.as_str())
+                    };
                     ui.horizontal(|ui| {
-                        let name = face
-                            .person
-                            .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| "Unbekannt".into());
-                        if ui.button(format!("{name} · #{}", face.id)).clicked() {
-                            self.open_naming(face.clone());
-                        }
-                        if face.assignment.as_deref() == Some("user") {
-                            ui.menu_button("Referenz", |ui| {
-                                for (action, label) in [
-                                    ("pin", "Fixieren"),
-                                    ("unpin", "Fixierung entfernen"),
-                                    ("exclude", "Als Referenz ausschließen"),
-                                ] {
-                                    if ui
-                                        .add_enabled(!self.busy(), egui::Button::new(label))
-                                        .clicked()
-                                    {
-                                        let root = self.settings.collection.clone();
-                                        let id = face.id;
-                                        self.undo.clear();
-                                        self.launch(
-                                            "Referenzentscheidung speichern",
-                                            true,
-                                            "mutation",
-                                            move |_| {
-                                                let c = Collection::open(Path::new(&root), true)?;
-                                                crate::core::maintenance::reference_action(
-                                                    &c, id, action,
-                                                )?;
-                                                Ok(Outcome::Done(
-                                                    "Referenzentscheidung gespeichert".into(),
-                                                ))
-                                            },
-                                        );
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        }
-                        if ui
-                            .add_enabled(!self.busy(), egui::Button::new("Löschen"))
-                            .on_hover_text(
-                                "Nur diese Fehldetektion löschen, Original bleibt erhalten",
-                            )
-                            .clicked()
-                        {
-                            let root = self.settings.collection.clone();
-                            let id = face.id;
-                            let photo = face.photo;
-                            self.undo.clear();
-                            self.launch("Fehldetektion löschen", true, "mutation", move |_| {
-                                let mut c = Collection::open(Path::new(&root), true)?;
-                                faces::delete_face(&mut c, photo, id)?;
-                                Ok(Outcome::Done("Fehldetektion gelöscht".into()))
-                            });
+                        ui.add_sized(
+                            [field_width, 23.0],
+                            egui::Label::new(RichText::new(key).small().weak()).truncate(),
+                        )
+                        .on_hover_text(key);
+                        ui.add_sized(
+                            [ui.available_width(), 23.0],
+                            egui::Label::new(value).truncate(),
+                        )
+                        .on_hover_text(value);
+                    });
+                }
+            })
+            .inner_rect
+    }
+
+    fn photo_people(&mut self, ui: &mut egui::Ui) {
+        if self.detail_faces.is_empty() {
+            ui.label("Keine erkannten Gesichter für dieses Foto gespeichert.");
+        }
+        for face in self.detail_faces.clone() {
+            ui.horizontal(|ui| {
+                let name = face
+                    .person
+                    .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "Unbekannt".into());
+                if ui.button(format!("{name} · #{}", face.id)).clicked() {
+                    self.open_naming(face.clone());
+                }
+                if face.assignment.as_deref() == Some("user") {
+                    ui.menu_button("Referenz", |ui| {
+                        for (action, label) in [
+                            ("pin", "Fixieren"),
+                            ("unpin", "Fixierung entfernen"),
+                            ("exclude", "Als Referenz ausschließen"),
+                        ] {
+                            if ui
+                                .add_enabled(!self.busy(), egui::Button::new(label))
+                                .clicked()
+                            {
+                                let root = self.settings.collection.clone();
+                                let id = face.id;
+                                self.undo.clear();
+                                self.launch(
+                                    "Referenzentscheidung speichern",
+                                    true,
+                                    "mutation",
+                                    move |_| {
+                                        let c = Collection::open(Path::new(&root), true)?;
+                                        crate::core::maintenance::reference_action(&c, id, action)?;
+                                        Ok(Outcome::Done("Referenzentscheidung gespeichert".into()))
+                                    },
+                                );
+                                ui.close();
+                            }
                         }
                     });
                 }
-                ui.separator();
-                egui::CollapsingHeader::new("Alle gespeicherten Metadaten")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("metadata-values")
-                            .max_height(280.0)
-                            .show_rows(ui, 24.0, self.detail_rows.len(), |ui, range| {
-                                for index in range {
-                                    let (key, value) = &self.detail_rows[index];
-                                    ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [110.0, 24.0],
-                                            egui::Label::new(RichText::new(key).small().weak())
-                                                .truncate(),
-                                        )
-                                        .on_hover_text(key);
-                                        ui.add_sized(
-                                            [ui.available_width(), 24.0],
-                                            egui::Label::new(value).truncate(),
-                                        )
-                                        .on_hover_text(value);
-                                    });
-                                }
-                            });
+                if ui
+                    .add_enabled(!self.busy(), egui::Button::new("Löschen"))
+                    .on_hover_text("Nur diese Fehldetektion löschen, Original bleibt erhalten")
+                    .clicked()
+                {
+                    let root = self.settings.collection.clone();
+                    let id = face.id;
+                    let photo = face.photo;
+                    self.undo.clear();
+                    self.launch("Fehldetektion löschen", true, "mutation", move |_| {
+                        let mut c = Collection::open(Path::new(&root), true)?;
+                        faces::delete_face(&mut c, photo, id)?;
+                        Ok(Outcome::Done("Fehldetektion gelöscht".into()))
                     });
+                }
             });
+        }
     }
     pub(super) fn overlay(&mut self, ui: &egui::Ui, rect: egui::Rect, photo: &Photo) -> bool {
         if !self.show_frames {

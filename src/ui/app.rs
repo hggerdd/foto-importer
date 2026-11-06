@@ -35,6 +35,11 @@ enum View {
     Tasks,
     Settings,
 }
+#[derive(Clone, Copy, PartialEq)]
+enum CollectionDialog {
+    Filters,
+    Inventory,
+}
 #[derive(Clone, Copy)]
 enum Pick {
     Source,
@@ -121,6 +126,8 @@ pub struct PhotoApp {
     large: bool,
     show_frames: bool,
     inspector: bool,
+    collection_dialog: Option<CollectionDialog>,
+    inspect_people: bool,
     zoom: f32,
     detector: String,
     embedder: String,
@@ -148,6 +155,8 @@ pub struct PhotoApp {
     capture_requested: bool,
     #[cfg(test)]
     plan_bounds: Option<egui::Rect>,
+    #[cfg(test)]
+    collection_bounds: Option<(egui::Rect, egui::Rect)>,
 }
 impl PhotoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -193,6 +202,8 @@ impl PhotoApp {
             large: false,
             show_frames: true,
             inspector: true,
+            collection_dialog: None,
+            inspect_people: false,
             zoom: 172.0,
             detector: "yunet".into(),
             embedder: "sface".into(),
@@ -220,6 +231,8 @@ impl PhotoApp {
             capture_requested: false,
             #[cfg(test)]
             plan_bounds: None,
+            #[cfg(test)]
+            collection_bounds: None,
         };
         if !app.settings.source.is_empty() {
             app.begin_scan();
@@ -384,13 +397,15 @@ impl PhotoApp {
         });
     }
     fn refresh_collection(&mut self) {
+        self.query_collection(self.filters.clone());
+    }
+    fn query_collection(&mut self, filters: Search) {
         if self.settings.collection.is_empty() {
             return;
         }
         self.query_revision += 1;
         let revision = self.query_revision;
         let root = PathBuf::from(&self.settings.collection);
-        let filters = self.filters.clone();
         self.launch("Sammlung durchsuchen", false, "search", move |control| {
             let c = Collection::open(&root, false)?;
             c.cancel_with(&control);
@@ -612,8 +627,19 @@ impl PhotoApp {
                 {
                     self.status = status;
                     self.page = page;
+                    self.filters.folder.clone_from(&filters.folder);
+                    self.filters.page = filters.page;
+                    self.filters.folder_page = filters.folder_page;
                     self.applied = filters;
                     self.thumbnails.clear();
+                    if !self.large
+                        && self.selected_photo.as_ref().is_some_and(|selected| {
+                            !self.page.photos.iter().any(|photo| photo.id == selected.id)
+                        })
+                    {
+                        self.selected_photo = None;
+                        self.detail_revision += 1;
+                    }
                 }
                 Ok(Outcome::Faces(revision, page)) if revision == self.face_revision => {
                     if self.view != View::Settings
@@ -662,7 +688,7 @@ impl PhotoApp {
                     }
                     self.message(message, false);
                     if running.write && running.collection == self.settings.collection {
-                        self.refresh_collection();
+                        self.query_collection(self.applied.clone());
                         self.refresh_faces();
                         if let Some(photo) = self.selected_photo.clone() {
                             self.choose_photo(photo);
@@ -755,7 +781,7 @@ impl PhotoApp {
                         ),
                         !report.errors.is_empty(),
                     );
-                    self.refresh_collection();
+                    self.query_collection(self.applied.clone());
                     self.refresh_faces();
                 }
                 Ok(Outcome::Suggestions(revision, id, suggestions))
@@ -891,7 +917,7 @@ impl PhotoApp {
                     if response.clicked() {
                         self.view = view;
                         if view == View::Collection {
-                            self.refresh_collection();
+                            self.query_collection(self.applied.clone());
                         }
                         if view == View::People {
                             self.refresh_faces();

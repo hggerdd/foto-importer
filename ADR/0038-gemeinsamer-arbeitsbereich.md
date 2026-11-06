@@ -28,6 +28,9 @@ Platz und hält die Löschaktion vom Klick zur Vergrößerung getrennt.
 Quelldateibezogene Rahmen und die Regeln zum Erhalt von Originalen,
 Fotoidentitäten und Personenstammdaten gelten weiter.
 
+[ADR-0045](0045-fotofokus-in-der-sammlung.md) konkretisiert die Anordnung der
+Sammlungsseite mit kompakten Leisten und einem breiten Bildinspektor.
+
 ## Alternativen
 
 Geführter Assistent und reine Fotobibliothek sind in der UX-Dokumentation aus
