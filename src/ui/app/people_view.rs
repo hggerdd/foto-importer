@@ -216,11 +216,7 @@ impl PhotoApp {
     }
 
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
-        let key = group
-            .iter()
-            .map(|f| f.id.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
+        let key = draft_key(group);
         let busy = self.busy();
         let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
@@ -591,5 +587,43 @@ impl PhotoApp {
                     );
                 }
             });
+    }
+}
+
+/// Entwürfe gelten für genau diese Gesichter *und* Person: Eine zuvor unbenannte
+/// Gruppe, die später einer Person vorgeschlagen wird, darf ihren leeren
+/// Namen nicht behalten.
+fn draft_key(group: &[Face]) -> String {
+    let ids = group
+        .iter()
+        .map(|f| f.id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    match group.first().and_then(|f| f.person) {
+        Some(person) => format!("p{person}:{ids}"),
+        None => ids,
+    }
+}
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+    fn face(id: i64, person: Option<i64>) -> Face {
+        Face {
+            id,
+            photo: 1,
+            source: String::new(),
+            bbox: [0.0; 4],
+            person,
+            assignment: None,
+            ignored: false,
+            score: 0.0,
+        }
+    }
+    #[test]
+    fn draft_changes_when_the_group_gets_a_person() {
+        let unnamed = [face(1, None), face(2, None)];
+        let suggested = [face(1, Some(7)), face(2, Some(7))];
+        assert_eq!(draft_key(&unnamed), "1,2");
+        assert_ne!(draft_key(&unnamed), draft_key(&suggested));
     }
 }
