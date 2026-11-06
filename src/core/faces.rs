@@ -485,7 +485,7 @@ pub fn analyze(
         }
         prepare_groups(collection, &embedder_key, control)?;
     }
-    while prepare_groups(collection, &embedder_key, control)? > 0 {}
+    super::grouping::rebuild_groups(collection, &embedder_key, control)?;
     collection.backup()?;
     Ok(format!(
         "{done} Fotos geprüft · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"

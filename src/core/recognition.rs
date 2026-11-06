@@ -271,7 +271,7 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
     }
     rematch(collection, &key, control)?;
     control.set_face_phase(super::jobs::FacePhase::Groups);
-    while faces::prepare_groups(collection, &key, control)? > 0 {}
+    super::grouping::rebuild_groups(collection, &key, control)?;
     Ok("Referenzen balanciert und Namen vorgeschlagen".into())
 }
 

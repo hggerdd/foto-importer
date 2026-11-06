@@ -179,3 +179,73 @@ fn analysis_coverage_counts_only_the_current_detector() -> anyhow::Result<()> {
     assert_eq!((status.analysed_photos, status.present_photos), (1, 3));
     Ok(())
 }
+fn polar(c: &Collection, id: i64, photo: i64, degrees: f32) -> anyhow::Result<()> {
+    c.db.execute(
+        "INSERT OR IGNORE INTO photos(id,status) VALUES(?,'present')",
+        [photo],
+    )?;
+    c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality) VALUES(?,?,?,'det',0,0,1,1,1)", params![id, photo, format!("{id}.jpg")])?;
+    let r = degrees.to_radians();
+    c.db.execute(
+        "INSERT INTO face_embeddings VALUES(?,'test',2,?)",
+        params![id, faces::encode(&[r.cos(), r.sin()])],
+    )?;
+    Ok(())
+}
+#[test]
+fn small_groups_join_similar_groups_but_not_dissimilar_or_same_photo() -> anyhow::Result<()> {
+    use foto_importer::core::grouping;
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    for (id, degrees) in [(1, 0.0), (2, 4.0), (3, -4.0), (4, 2.0)] {
+        polar(&c, id, id, degrees)?;
+    }
+    polar(&c, 10, 10, 55.0)?; // ähnlich genug, aber unter dem strengen Wert
+    polar(&c, 11, 1, 58.0)?; // teilt ein Foto mit Gesicht 1
+    polar(&c, 12, 12, -55.0)?; // ähnlich genug und ohne Fotokonflikt
+    polar(&c, 13, 13, -58.0)?;
+    polar(&c, 20, 20, 85.0)?; // zu verschieden
+    polar(&c, 21, 21, 88.0)?;
+    while faces::prepare_groups(&mut c, "test", &Control::default())? > 0 {}
+    let before: i64 = c.db.query_row(
+        "SELECT count(*) FROM face_group_catalog WHERE members>0",
+        [],
+        |r| r.get(0),
+    )?;
+    let merged = grouping::merge_small_groups(&mut c, "test", &Control::default())?;
+    let group_of = |face: i64| -> anyhow::Result<i64> {
+        Ok(c.db.query_row(
+            "SELECT group_id FROM face_group_members WHERE face_id=?",
+            [face],
+            |r| r.get(0),
+        )?)
+    };
+    assert!(merged > 0);
+    assert_eq!(group_of(12)?, group_of(13)?);
+    assert_eq!(
+        group_of(12)?,
+        group_of(1)?,
+        "Paar schließt sich der großen Gruppe an"
+    );
+    assert_ne!(
+        group_of(10)?,
+        group_of(1)?,
+        "kein zweites Gesicht desselben Fotos"
+    );
+    assert_ne!(group_of(20)?, group_of(1)?);
+    let after: i64 = c.db.query_row(
+        "SELECT count(*) FROM face_group_catalog WHERE members>0",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(after < before);
+    let total: i64 =
+        c.db.query_row("SELECT count(*) FROM face_group_members", [], |r| r.get(0))?;
+    assert_eq!(total, 10);
+    let largest: i64 =
+        c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
+            r.get(0)
+        })?;
+    assert!(largest <= 14);
+    Ok(())
+}
