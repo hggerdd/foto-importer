@@ -38,6 +38,10 @@ pub struct Status {
     pub review: usize,
     pub ignored: usize,
     pub references: usize,
+    pub reference_people: usize,
+    pub dirty_people: usize,
+    pub analysed_photos: usize,
+    pub nameable: usize,
     pub pending: usize,
     pub applied: String,
     pub detector: String,
@@ -133,18 +137,35 @@ pub fn status(collection: &Collection) -> Result<Status> {
             .and_then(|v| serde_json::from_str::<bool>(&v).ok())
             .unwrap_or(false);
     }
-    status.references = collection.db.query_row(
-        "SELECT count(*) FROM training_set WHERE embedder_id=? AND split='ref'",
+    (status.references, status.reference_people) = collection.db.query_row(
+        "SELECT count(*),count(DISTINCT person_id) FROM training_set WHERE embedder_id=? AND split='ref'",
+        [&status.embedder],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    status.dirty_people = collection.db.query_row(
+        "SELECT count(*) FROM face_reference_dirty WHERE embedder_id=?",
         [&status.embedder],
         |r| r.get(0),
+    )?;
+    status.nameable = collection.db.query_row(
+        "SELECT coalesce(sum(members),0) FROM face_group_catalog WHERE embedder_id=?",
+        [&status.embedder],
+        |r| r.get(0),
+    )?;
+    status.analysed_photos = collection.db.query_row(
+        "SELECT count(*) FROM face_jobs j JOIN photos p ON p.id=j.photo_id WHERE p.status='present' AND j.stage='detect' AND j.model_id=? AND j.status='done'",
+        [&status.detector], |r| r.get(0),
     )?;
     status.pending = collection.db.query_row(
         "SELECT count(*) FROM face_maintenance WHERE embedder_id=?",
         [&status.embedder],
         |r| r.get(0),
     )?;
-    status.applied = setting(collection, "rust.recognition_applied")?
-        .unwrap_or_else(|| "Noch nicht protokolliert".into());
+    status.applied = setting(
+        collection,
+        &super::recognition::applied_key(&status.embedder),
+    )?
+    .unwrap_or_default();
     Ok(status)
 }
 fn face_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Face> {
@@ -229,6 +250,7 @@ pub fn analyze(
     control: &Control,
 ) -> Result<String> {
     collection.writable()?;
+    control.set_face_phase(super::jobs::FacePhase::Analysis);
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
     let detector_key = models.detector.key();
     let embedder_key = models.embedder.key();

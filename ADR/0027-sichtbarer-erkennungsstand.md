@@ -44,6 +44,10 @@ Sammlungsantworten werden verworfen. Bildladen bleibt sichtbereichsgebunden.
 Bei kleineren Fenstern berücksichtigt die Kachelgröße auch die Höhe des
 Sichtbereichs, damit eine vollständige 14er-Gruppe Platz behält.
 
+Die Rust-Umsetzung ist in [ADR-0048](0048-erkennungsablauf-im-personenbereich.md)
+beschrieben. Dort wird der Abschluss unter einem Embedder-spezifischen
+Schlüssel gespeichert.
+
 ## Alternativen
 
 Ein separater Trainingsdialog verstärkt die Vorstellung eines manuell trainierten

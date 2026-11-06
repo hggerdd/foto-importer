@@ -1,6 +1,7 @@
 mod collection_view;
 mod import_view;
 mod people_view;
+mod recognition_view;
 mod settings_view;
 #[cfg(test)]
 mod tests;
@@ -13,7 +14,7 @@ use crate::{
         collection::{Collection, CollectionStatus},
         faces::{self, Face, FacePage, Undo},
         files::{self, Scan, SourceFile},
-        jobs::{Control, Task},
+        jobs::{Control, FacePhase, Task},
         metadata::{self, Photo, Rule, Search, SearchPage},
         previews::PreviewRequest,
     },
@@ -74,6 +75,11 @@ struct Running {
     write: bool,
     kind: &'static str,
     collection: String,
+}
+impl Running {
+    fn is_face_matching(&self) -> bool {
+        matches!(self.kind, "maintenance" | "face-knowledge")
+    }
 }
 #[derive(Default)]
 struct Draft {
@@ -172,6 +178,7 @@ pub struct PhotoApp {
     dng_status: String,
     closing: bool,
     maintenance_paused: bool,
+    recognition_tools_open: bool,
     auto_analysis_pending: bool,
     last_night: String,
     capture_started: std::time::Instant,
@@ -251,6 +258,7 @@ impl PhotoApp {
             dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
+            recognition_tools_open: false,
             auto_analysis_pending: false,
             last_night: String::new(),
             capture_started: std::time::Instant::now(),
@@ -476,10 +484,12 @@ impl PhotoApp {
         );
     }
     fn collection_action(&mut self, action: &str) {
+        if self.busy() || self.settings.collection.is_empty() {
+            return;
+        }
         if action == "resume" {
             self.maintenance_paused = false;
-        }
-        if self.busy() || self.settings.collection.is_empty() {
+            self.refresh_faces();
             return;
         }
         if [
@@ -509,15 +519,19 @@ impl PhotoApp {
             "metadata" => "Metadaten lesen",
             "verify" => "Dateien mit BLAKE3 prüfen",
             "analyze" => "Fotos lokal analysieren",
-            "knowledge" => "Erkennungswissen anwenden",
+            "knowledge" => "Referenzen und Namensvorschläge aktualisieren",
             "automatic" | "nightly" => "Automatische Sammlungsanalyse",
             "export" => "Referenzausschnitte exportieren",
             "calibrate" => "Referenzen validieren",
-            "resume" => "Erkennungsabgleich fortsetzen",
             "delete_biometrics" => "Biometrie bereinigen",
             _ => "Sammlung öffnen",
         };
-        self.launch(label, true, "mutation", move |control| {
+        let kind = match action.as_str() {
+            "analyze" | "automatic" | "nightly" => "face-analysis",
+            "knowledge" => "face-knowledge",
+            _ => "mutation",
+        };
+        self.launch(label, true, kind, move |control| {
             let mut c = Collection::open(Path::new(&settings.collection), true)?;
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
@@ -550,12 +564,6 @@ impl PhotoApp {
                     return Ok(Outcome::Report(serde_json::to_string_pretty(
                         &crate::core::maintenance::calibrate(&c, &control)?,
                     )?));
-                }
-                "resume" => {
-                    let key = faces::setting(&c, "rust.embedder_key")?
-                        .ok_or_else(|| anyhow::anyhow!("Kein Modellraum"))?;
-                    faces::rematch(&mut c, &key, &control)?;
-                    "Erkennungsabgleich abgeschlossen".into()
                 }
                 "analyze" => faces::analyze(
                     &mut c,
@@ -625,10 +633,17 @@ impl PhotoApp {
             let running = self.tasks.remove(index);
             match result {
                 Err(e) => {
-                    if running.kind == "maintenance"
-                        && !running.task.control.cancel.load(Ordering::Relaxed)
+                    if (running.is_face_matching() || running.kind == "face-analysis")
+                        && running.collection == self.settings.collection
                     {
-                        self.maintenance_paused = true;
+                        if running.is_face_matching()
+                            && !running.task.control.cancel.load(Ordering::Relaxed)
+                        {
+                            self.maintenance_paused = true;
+                        }
+                        if !self.closing {
+                            self.refresh_faces();
+                        }
                     }
                     if !running.task.control.cancel.load(Ordering::Relaxed) {
                         self.message(format!("{}: {e:#}", running.task.label), true);
@@ -880,6 +895,8 @@ impl PhotoApp {
                             self.page = SearchPage::default();
                             self.selected_photo = None;
                             self.face_page = FacePage::default();
+                            self.maintenance_paused = false;
+                            self.auto_analysis_pending = false;
                             self.face_index = 0;
                             self.face_advance = None;
                             self.face_row_tops.clear();
@@ -937,10 +954,12 @@ impl PhotoApp {
             && !self.maintenance_paused
             && !self.busy()
             && self.face_page.status.pending > 0
-            && !self.tasks.iter().any(|t| t.kind == "maintenance")
+            && !self
+                .tasks
+                .iter()
+                .any(|t| matches!(t.kind, "maintenance" | "faces"))
             && !self.settings.collection.is_empty()
         {
-            self.face_page.status.pending = 0;
             let root = self.settings.collection.clone();
             self.launch(
                 "Erkennungswissen im Hintergrund aktualisieren",
@@ -1054,8 +1073,12 @@ impl PhotoApp {
                         } else if done > 0 {
                             ui.label(format!("{done} gefunden"));
                         }
-                        if ui.button("Abbrechen").clicked() {
-                            if running.kind == "maintenance" {
+                        let can_pause = running.is_face_matching();
+                        if ui
+                            .button(if can_pause { "Pausieren" } else { "Abbrechen" })
+                            .clicked()
+                        {
+                            if can_pause {
                                 self.maintenance_paused = true;
                             }
                             running.task.control.stop();

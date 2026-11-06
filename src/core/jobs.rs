@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc,
 };
@@ -13,6 +13,15 @@ pub struct Control {
     pub total: Arc<AtomicUsize>,
     pub foreground: Arc<AtomicUsize>,
     pub background: bool,
+    pub face_phase: Arc<Mutex<Option<FacePhase>>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FacePhase {
+    Analysis,
+    References,
+    Matching,
+    Groups,
 }
 fn foreground_count() -> Arc<AtomicUsize> {
     static COUNT: std::sync::OnceLock<Arc<AtomicUsize>> = std::sync::OnceLock::new();
@@ -31,6 +40,7 @@ impl Default for Control {
             total: Arc::new(AtomicUsize::new(0)),
             foreground: foreground_count(),
             background: false,
+            face_phase: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -81,6 +91,15 @@ impl Drop for Lane {
     }
 }
 impl Control {
+    pub fn set_face_phase(&self, phase: FacePhase) {
+        self.progress(0, 0);
+        if let Ok(mut current) = self.face_phase.lock() {
+            *current = Some(phase);
+        }
+    }
+    pub fn face_phase(&self) -> Option<FacePhase> {
+        self.face_phase.lock().ok().and_then(|current| *current)
+    }
     pub fn checkpoint(&self) -> Result<()> {
         loop {
             if self.cancel.load(Ordering::Relaxed) {

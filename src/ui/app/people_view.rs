@@ -2,115 +2,25 @@ use super::*;
 
 impl PhotoApp {
     pub(super) fn people_view(&mut self, ui: &mut egui::Ui) {
-        Self::header(
-            ui,
-            "GESICHTER & PERSONEN",
-            "Aus Gesichtern werden Geschichten.",
-            "Lokal analysieren, gemeinsam benennen und bestätigtes Wissen anwenden.",
-        );
-        if self.runtime_downloading() || !Path::new(&self.settings.onnx_runtime).is_file() {
-            theme::card(ui).show(ui, |ui| {
-                ui.label("Für die Gesichtsanalyse brauchst du die ONNX Runtime.");
-                self.runtime_download_button(ui);
-            });
-        }
-        let installing = self.models_installing();
-        let weights_present = self.model_weights_present();
-        if installing || !weights_present {
-            theme::card(ui).show(ui, |ui| {
-                ui.label("Für die Gesichtsanalyse fehlen Modellgewichte.");
-                ui.horizontal_wrapped(|ui| {
-                    self.model_install_button(ui);
-                    if ui
-                        .add_enabled(!installing, egui::Button::new("Modellordner wählen …"))
-                        .clicked()
-                    {
-                        self.pick(Pick::Models);
-                    }
-                });
-            });
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Sammlung wählen …").clicked() {
-                self.pick(Pick::Collection);
-            }
-            for (action, label) in [
-                ("analyze", "1  Fotos analysieren"),
-                ("knowledge", "2  Lernen & Namen vorschlagen"),
-            ] {
-                if ui
-                    .add_enabled(
-                        !self.busy()
-                            && !self.settings.collection.is_empty()
-                            && (action != "analyze" || (!installing && weights_present)),
-                        egui::Button::new(label),
-                    )
-                    .clicked()
-                {
-                    self.collection_action(action);
-                }
-            }
-            if ui
-                .add_enabled(
-                    !self.busy() && !self.undo.is_empty(),
-                    egui::Button::new("Rückgängig"),
-                )
-                .clicked()
-                && let Some(undo) = self.undo.last().cloned()
-            {
-                let root = self.settings.collection.clone();
-                self.launch(
-                    "Gruppenentscheidung zurücknehmen",
-                    true,
-                    "undo",
-                    move |_| {
-                        let mut c = Collection::open(Path::new(&root), true)?;
-                        faces::undo(&mut c, &undo)?;
-                        Ok(Outcome::Done("Gruppenentscheidung zurückgenommen".into()))
-                    },
-                );
-            }
-        });
+        self.people_workflow(ui);
         if self.settings.collection.is_empty() {
-            self.empty(ui,"Wer gehört zu deiner Geschichte?","Wähle zuerst eine Sammlung. Gesichtsbilder und Vektoren bleiben auf diesem Rechner.");
+            self.empty(
+                ui,
+                "Wer gehört zu deiner Sammlung?",
+                "Wähle eine Sammlung, um Gesichter lokal zu analysieren.",
+            );
             return;
         }
         let status = &self.face_page.status;
+        let tabs = [
+            ("unknown", format!("Benennen · {}", status.nameable)),
+            ("review", format!("Vorschläge prüfen · {}", status.review)),
+            ("confirmed", format!("Bestätigt · {}", status.confirmed)),
+            ("ignored", format!("Ignoriert · {}", status.ignored)),
+            ("persons", "Personen & Beziehungen".into()),
+        ];
         ui.horizontal_wrapped(|ui| {
-            for (label, value) in [
-                ("Bestätigt", status.confirmed),
-                ("Unbekannt", status.unknown),
-                ("Vorschläge", status.review),
-                ("Ignoriert", status.ignored),
-                ("Referenzen", status.references),
-            ] {
-                theme::card(ui).show(ui, |ui| {
-                    ui.label(RichText::new(value.to_string()).size(22.0).strong());
-                    ui.label(label);
-                });
-            }
-        });
-        ui.label(
-            RichText::new(format!(
-                "Letzter Abgleich: {}{}",
-                status.applied,
-                if status.pending > 0 {
-                    " · Nacharbeit offen"
-                } else {
-                    ""
-                }
-            ))
-            .small()
-            .weak(),
-        );
-        ui.horizontal_wrapped(|ui| {
-            for (mode, label) in [
-                ("unknown", "Benennen"),
-                ("review", "Prüfen"),
-                ("confirmed", "Bestätigte"),
-                ("ignored", "Ignorierte"),
-                ("persons", "Personen & Beziehungen"),
-            ] {
+            for (mode, label) in tabs {
                 if ui.selectable_label(self.face_mode == mode, label).clicked() {
                     self.face_mode = mode.into();
                     self.face_index = 0;
@@ -121,17 +31,10 @@ impl PhotoApp {
             }
         });
         ui.separator();
-        egui::CollapsingHeader::new("Erkennungswissen verwalten").show(ui,|ui|{
-            let mut auto_import=self.face_page.status.auto_import;let mut nightly=self.face_page.status.nightly;
-            let changed=ui.add_enabled(!self.busy(),egui::Checkbox::new(&mut auto_import,"Nach Import automatisch analysieren")).changed()|ui.add_enabled(!self.busy(),egui::Checkbox::new(&mut nightly,"Um 03:00 Uhr analysieren, solange die App läuft")).changed();
-            if changed{let root=self.settings.collection.clone();self.launch("Automatik speichern",true,"mutation",move |_|{let mut c=Collection::open(Path::new(&root),true)?;faces::configure_automatic(&mut c,auto_import,nightly)?;Ok(Outcome::Done("Sammlungsautomatik gespeichert".into()))});}
-            if ui.checkbox(&mut self.settings.auto_metadata,"Metadaten beim automatischen Ablauf vorab anreichern").changed(){self.save();}
-            ui.horizontal_wrapped(|ui|{for(action,label)in [("resume","Offenen Abgleich fortsetzen"),("export","Referenzen exportieren"),("calibrate","Validierung auswerten")]{if ui.add_enabled(!self.busy(),egui::Button::new(label)).clicked(){self.collection_action(action);}}});
-            ui.label("Biometrie entfernen löscht Gesichter, Personen und bekannte Biometrie-Sicherungen. Foto-Dateien und Inventar bleiben erhalten.");
-            ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(&mut self.delete_phrase).hint_text("Zum Löschen BIOMETRIE eingeben"));if ui.add_enabled(!self.busy()&&self.delete_phrase=="BIOMETRIE",egui::Button::new("Biometrie dauerhaft entfernen")).clicked(){self.undo.clear();self.delete_phrase.clear();self.collection_action("delete_biometrics");}});
-        });
         if self.face_mode == "persons" {
-            self.person_manager(ui);
+            egui::ScrollArea::vertical()
+                .id_salt("person-management")
+                .show(ui, |ui| self.person_manager(ui));
             return;
         }
         ui.horizontal(|ui| {
@@ -158,15 +61,28 @@ impl PhotoApp {
                 self.face_row_tops.clear();
                 self.refresh_faces();
             }
+            self.undo_face_button(ui);
             if ui.button("Aktualisieren").clicked() {
                 self.refresh_faces();
             }
         });
         if self.face_page.groups.is_empty() {
-            if self.face_page.status.embedder.is_empty() {
-                self.empty(ui,"Bereit für die lokale Analyse.","Fotos einmal mit einem Rust-Modellraum analysieren. Vorhandene Personenentscheidungen bleiben erhalten.");
+            if self.analysing_current_collection() {
+                self.empty(
+                    ui,
+                    "Die Analyse läuft.",
+                    "Offene Gesichtsgruppen erscheinen nach der Analyse unter Benennen.",
+                );
+            } else if self.face_page.status.embedder.is_empty() {
+                self.empty(ui, "Bereit für die lokale Analyse.", "Starte mit Fotos analysieren. Anschließend kannst du erkannte Gesichter benennen.");
+            } else if self.face_mode == "review" {
+                self.empty(ui, "Keine offenen Namensvorschläge.", "Bestätige Gesichter, damit die App geeignete Beispiele für den nächsten Abgleich hat.");
             } else {
-                self.empty(ui,"Hier ist gerade nichts zu benennen.","Fotos analysieren oder eine andere Ansicht wählen. Neue Referenzen entstehen nur aus bestätigten Namen.");
+                self.empty(
+                    ui,
+                    "In diesem Reiter sind keine Gesichter.",
+                    "Analysiere weitere Fotos oder wähle einen anderen Reiter.",
+                );
             }
             return;
         }

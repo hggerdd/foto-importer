@@ -63,3 +63,11 @@ Die ursprüngliche Folgegruppe landet auch nach einer Umsortierung wieder an
 dieser Position. Ihr Namensentwurf bleibt erhalten. Eine zweite Regression
 prüft den Rücksprung von einer leeren Seite zur ersten Seite, wenn keine
 Gruppen mehr vorhanden sind.
+
+## Erkennungsablauf im Personenbereich
+
+Die Windows-Sichtprüfung bei 980 × 680 umfasst die drei Schritte, den
+Dialog für Automatik und einen Analyseauftrag mit 30 synthetischen Fotos.
+Der sichtbare Fortschritt stieg während der Analyse. Die Übersicht zeigte
+anschließend 30 analysierte Fotos. Die Statusregression prüft getrennte
+Abschlüsse für verschiedene Modelle und einen offenen Auftrag nach Abbruch.

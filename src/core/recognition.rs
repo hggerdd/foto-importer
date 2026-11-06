@@ -82,8 +82,12 @@ pub fn apply_knowledge(collection: &mut Collection, control: &Control) -> Result
 pub fn maintain(collection: &mut Collection, control: &Control) -> Result<String> {
     rebuild(collection, control, false)
 }
+pub(super) fn applied_key(embedder: &str) -> String {
+    format!("rust.recognition_applied:{embedder}")
+}
 fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Result<String> {
     collection.writable()?;
+    control.set_face_phase(super::jobs::FacePhase::References);
     let key =
         faces::setting(collection, "rust.embedder_key")?.context("Zuerst Fotos analysieren")?;
     if reset {
@@ -98,6 +102,7 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
             .collect::<rusqlite::Result<_>>()?;
         people.retain(|p| dirty.contains(&p.id));
     }
+    control.progress(0, people.len());
     for (index, person) in people.iter().enumerate() {
         control.checkpoint()?;
         let mut statement=collection.db.prepare("SELECT f.id,f.quality,coalesce(f.captured_at,''),e.vec,EXISTS(SELECT 1 FROM training_set t WHERE t.face_id=f.id AND t.embedder_id=? AND t.pinned=1) FROM faces f JOIN face_embeddings e ON e.face_id=f.id WHERE e.embedder_id=? AND f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5 AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=e.embedder_id) AND (f.id IN (SELECT face_id FROM training_set WHERE person_id=? AND embedder_id=? AND pinned=1) OR f.id IN (SELECT id FROM (SELECT id,substr(captured_at,1,4) year,ROW_NUMBER() OVER(PARTITION BY substr(captured_at,1,4) ORDER BY quality DESC,id) rank FROM faces WHERE person_id=? AND assignment='user' AND ignored=0 AND quality>=0.5) ORDER BY rank,year,id LIMIT 2048)) ORDER BY f.id")?;
@@ -173,11 +178,13 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
         control.progress(index + 1, people.len());
     }
     rematch(collection, &key, control)?;
+    control.set_face_phase(super::jobs::FacePhase::Groups);
     while faces::prepare_groups(collection, &key, control)? > 0 {}
     Ok("Referenzen balanciert und Namen vorgeschlagen".into())
 }
 
 pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
+    control.set_face_phase(super::jobs::FacePhase::Matching);
     let mut cursor: i64 = collection
         .db
         .query_row(
@@ -282,13 +289,10 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
             cursor = photo;
         }
     }
+    control.checkpoint()?;
     let tx = collection.db.transaction()?;
     tx.execute("DELETE FROM face_maintenance WHERE embedder_id=?", [key])?;
-    faces::save_setting(
-        &tx,
-        "rust.recognition_applied",
-        &chrono::Utc::now().to_rfc3339(),
-    )?;
+    faces::save_setting(&tx, &applied_key(key), &chrono::Utc::now().to_rfc3339())?;
     tx.commit()?;
     Ok(())
 }

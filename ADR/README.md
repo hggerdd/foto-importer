@@ -114,3 +114,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0045](0045-fotofokus-in-der-sammlung.md) | Kompakte Sammlungsleiste mit Galerie und großem Inspektor | Akzeptiert |
 | [0046](0046-gesichtsmodelle-installieren.md) | Standard-Gesichtsmodelle auf Klick im Benutzerprofil installieren | Akzeptiert |
 | [0047](0047-gesichter-als-suchmetadaten.md) | Gesichter und Personen als Fotometadaten anzeigen und suchen | Akzeptiert |
+| [0048](0048-erkennungsablauf-im-personenbereich.md) | Analyse, Referenzauswahl und Abgleich sichtbar trennen | Akzeptiert |

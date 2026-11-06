@@ -31,6 +31,9 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.
+  Die Übersicht unterscheidet Fotoanalyse, Referenzauswahl nach Bestätigungen
+  und Abgleich für Namensvorschläge. **Automatik & Werkzeuge** zeigt den
+  Zeitplan und enthält Einrichtung, Export und Wartung.
   Nach dem Speichern rückt die nächste offene Gruppe an die bisherige
   Bildschirmposition, soweit die Liste genug Platz zum Scrollen bietet.
   Namen am Bild lassen sich anklicken; Details bieten Löschen und Referenzaktionen.

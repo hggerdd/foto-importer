@@ -210,8 +210,12 @@ impl PhotoApp {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(&running.task.label);
-                    if ui.button("Abbrechen").clicked() {
-                        if running.kind == "maintenance" {
+                    let can_pause = running.is_face_matching();
+                    if ui
+                        .button(if can_pause { "Pausieren" } else { "Abbrechen" })
+                        .clicked()
+                    {
+                        if can_pause {
                             self.maintenance_paused = true;
                         }
                         running.task.control.stop();

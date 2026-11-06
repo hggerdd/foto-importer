@@ -1,6 +1,36 @@
 use foto_importer::core::{collection::Collection, faces, maintenance};
 use rusqlite::params;
 #[test]
+fn completed_matching_status_belongs_to_its_model_and_cancellation_keeps_pending()
+-> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut collection = Collection::open(root.path(), true)?;
+    let select_model = |collection: &Collection, model: &str| -> anyhow::Result<()> {
+        collection.db.execute(
+            "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key',?)",
+            [serde_json::to_string(model)?],
+        )?;
+        Ok(())
+    };
+    select_model(&collection, "first")?;
+    faces::rematch(&mut collection, "first", &Default::default())?;
+    assert!(!faces::status(&collection)?.applied.is_empty());
+    select_model(&collection, "second")?;
+    collection
+        .db
+        .execute("INSERT INTO face_maintenance VALUES('second',0,1)", [])?;
+    let control = foto_importer::core::jobs::Control::default();
+    control.stop();
+    assert!(faces::rematch(&mut collection, "second", &control).is_err());
+    let status = faces::status(&collection)?;
+    assert!(status.applied.is_empty());
+    assert_eq!(status.pending, 1);
+    select_model(&collection, "first")?;
+    assert!(!faces::status(&collection)?.applied.is_empty());
+    Ok(())
+}
+
+#[test]
 fn biometric_erasure_scrubs_backup_but_preserves_inventory() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("original.jpg"), b"photo")?;
