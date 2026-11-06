@@ -1,4 +1,5 @@
 use super::{
+    classifier,
     collection::Collection,
     faces::{self, decode},
     inference,
@@ -50,14 +51,47 @@ fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, Str
     result.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
     Ok(result)
 }
-pub fn suggestions(
-    collection: &Collection,
-    face: i64,
-    key: &str,
-) -> Result<Vec<(i64, String, f32)>> {
+/// Namensvorschläge für ein Gesicht. `by_model` ist wahr, wenn der trainierte
+/// Klassifikator die Reihenfolge bestimmt (Score = Wahrscheinlichkeit);
+/// sonst gilt der Ähnlichkeitsvergleich (Score = Kosinus).
+pub struct Suggestions {
+    pub by_model: bool,
+    pub items: Vec<(i64, String, f32)>,
+}
+pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
     let mut result = ranked(collection, face, key)?;
+    if let Some(model) = classifier::load(collection, key)? {
+        let bytes: Option<Vec<u8>> = collection
+            .db
+            .query_row(
+                "SELECT vec FROM face_embeddings WHERE face_id=? AND embedder_id=?",
+                params![face, key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(query) = bytes.and_then(|b| inference::normalize(&decode(&b).ok()?).ok()) {
+            // Dieselben Ausschlüsse wie beim Ähnlichkeitsvergleich bleiben maßgeblich.
+            let allowed: BTreeSet<i64> = result.iter().map(|r| r.0).collect();
+            let names: BTreeMap<i64, &str> = result.iter().map(|r| (r.0, r.1.as_str())).collect();
+            let items: Vec<_> = model
+                .predict_among(&query, &allowed)
+                .into_iter()
+                .take(3)
+                .map(|(id, p)| (id, names[&id].to_string(), p))
+                .collect();
+            if !items.is_empty() {
+                return Ok(Suggestions {
+                    by_model: true,
+                    items,
+                });
+            }
+        }
+    }
     result.truncate(6);
-    Ok(result)
+    Ok(Suggestions {
+        by_model: false,
+        items: result,
+    })
 }
 
 fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
@@ -177,6 +211,14 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
         control.checkpoint()?;
         tx.commit()?;
         control.progress(index + 1, people.len());
+    }
+    if reset || !people.is_empty() {
+        // Ein fehlgeschlagenes Training darf Abgleich und Gruppen nicht blockieren.
+        if let Err(error) = classifier::train(collection, &key, control)
+            && control.cancel.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(error);
+        }
     }
     rematch(collection, &key, control)?;
     control.set_face_phase(super::jobs::FacePhase::Groups);

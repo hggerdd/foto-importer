@@ -21,7 +21,7 @@ Zusicherung identischer Ergebnisse auf jeder privaten Sammlung.
 | Lokale Inferenz | YuNet/SFace und SCRFD/ArcFace mit SHA-256 und CPU ausgeführt | Synthetische Smoke-Tests, kein Nachweis gleicher realer Präzision wie OpenCV |
 | Wiederaufnahme und Modellwechsel | Modell-/Quelljobs, eigene Rust-Räume, IoU-Erhaltung, historische Nutzerlabels | Umfangreiche Hin-/Zurückwechsel mit privaten Gesichtern offen |
 | Gruppen und Rücknahme | Complete Link, höchstens 14 sichtbare Mitglieder, Größe vor Pagination, Ablehnungen und Pins | Langzeittest mit echter Tastatur-/Screenreader-Nutzung offen |
-| Namensvorschläge und Lernen | Top-3-Scores, sechs Vorschläge, Pins/Ausschlüsse, FPS mit Jahresbalance, Maximum-Weight-Fotozuordnung, Alter/Ko-Okkurrenz | Split bewusst anders reproduziert (ADR 0040); keine Qualitätsgarantie |
+| Namensvorschläge und Lernen | Trainierter Softmax-Klassifikator für Top-3-Buttons (ADR 0051, nur synthetisch getestet), Top-3-Scores, sechs Ähnlichkeitsvorschläge als Fallback, Pins/Ausschlüsse, FPS mit Jahresbalance, Maximum-Weight-Fotozuordnung, Alter/Ko-Okkurrenz | Split bewusst anders reproduziert (ADR 0040); keine Qualitätsgarantie |
 | Personen und Beziehungen | Stabile IDs, Bearbeiten, Fotofilter, Merge, kanonische Kanten, Zyklusprüfung, Ableitungen | Kein eigenständiger grafischer Stammbaum-Editor |
 | Export, Validierung, Biometrielöschung | Atomare Ausschnitte/Manifest, Held-out-Auswertung, Bereinigung bekannter Backups | Auswertungsbericht kompakter als der Python-Bericht; historische fremde Exporte bleiben außerhalb der Kontrolle |
 | Automatik | Sammlungsbezogen opt-in nach Import / 03:00 bei laufender App; Metadaten optional vorher | Kein Dienst bei geschlossener App; keine externe Aufgabenplanung |

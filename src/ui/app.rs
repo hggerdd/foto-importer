@@ -59,7 +59,7 @@ enum Outcome {
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
     Imported(files::ImportReport),
-    Suggestions(u64, i64, Vec<(i64, String, f32)>),
+    Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
     RelationshipGraph(u64, crate::core::relationship_graph::Graph),
     RuntimeDownloaded(PathBuf),
@@ -167,6 +167,7 @@ pub struct PhotoApp {
     name_input: String,
     name_person: Option<i64>,
     name_suggestions: Vec<(i64, String, f32)>,
+    name_suggestions_by_model: bool,
     relation_from: Option<i64>,
     relation_to: Option<i64>,
     relation_kind: String,
@@ -248,6 +249,7 @@ impl PhotoApp {
             name_input: String::new(),
             name_person: None,
             name_suggestions: Vec::new(),
+            name_suggestions_by_model: false,
             relation_from: None,
             relation_to: None,
             relation_kind: "parent".into(),
@@ -887,7 +889,8 @@ impl PhotoApp {
                     if revision == self.detail_revision
                         && self.naming.as_ref().is_some_and(|f| f.id == id) =>
                 {
-                    self.name_suggestions = suggestions
+                    self.name_suggestions_by_model = suggestions.by_model;
+                    self.name_suggestions = suggestions.items
                 }
                 Ok(Outcome::Pick(pick, Some(path))) => {
                     let value = path.to_string_lossy().into_owned();

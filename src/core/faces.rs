@@ -42,6 +42,7 @@ pub struct Status {
     pub dirty_people: usize,
     pub analysed_photos: usize,
     pub present_photos: usize,
+    pub classifier: Option<super::classifier::Metrics>,
     pub nameable: usize,
     pub pending: usize,
     pub applied: String,
@@ -162,6 +163,8 @@ pub fn status(collection: &Collection) -> Result<Status> {
         [],
         |r| r.get(0),
     )?;
+    status.classifier =
+        super::classifier::load(collection, &status.embedder)?.and_then(|m| m.metrics);
     status.pending = collection.db.query_row(
         "SELECT count(*) FROM face_maintenance WHERE embedder_id=?",
         [&status.embedder],

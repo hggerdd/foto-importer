@@ -67,6 +67,20 @@ impl PhotoApp {
             Self::recognition_step(&mut columns[1], "2  Aus Namen lernen", |ui| {
                 ui.label(format!("{} bestätigt", status.confirmed));
                 ui.label(format!("{} Referenzen · {} Personen", status.references, status.reference_people));
+                match &status.classifier {
+                    Some(m) if m.validated_on > 0 => {
+                        ui.label(RichText::new(format!(
+                            "Modell: richtig auf Platz 1 {:.0} %, unter den ersten drei {:.0} % (Ähnlichkeit: {:.0} % / {:.0} %, {} Prüfbeispiele)",
+                            m.top1 * 100.0, m.top3 * 100.0, m.baseline_top1 * 100.0, m.baseline_top3 * 100.0, m.validated_on
+                        )).small());
+                    }
+                    Some(m) => {
+                        ui.label(RichText::new(format!("Modell für {} Personen trainiert, noch zu wenig Prüfbeispiele", m.people)).small());
+                    }
+                    None => {
+                        ui.label(RichText::new("Noch kein Modell · mindestens zwei Personen mit je zwei Referenzen nötig").small().weak());
+                    }
+                }
                 if status.dirty_people > 0 {
                     ui.label(RichText::new(format!("{} Personen offen", status.dirty_people)).small());
                 } else {

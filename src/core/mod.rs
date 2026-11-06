@@ -1,3 +1,4 @@
+pub mod classifier;
 pub mod collection;
 pub mod dng_updates;
 pub mod face_models;
