@@ -345,7 +345,7 @@ impl PhotoApp {
                         && self.relation_from.is_some()
                         && self.relation_to.is_some()
                         && self.relation_from != self.relation_to,
-                    egui::Button::new("Person Von in Person Zu zusammenführen"),
+                    egui::Button::new("Person „Von“ in Person „Nach“ zusammenführen"),
                 )
                 .clicked()
             {
@@ -422,39 +422,26 @@ impl PhotoApp {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            for (id, selected) in [
-                ("Von", &mut self.relation_from),
-                ("Zu", &mut self.relation_to),
-            ] {
-                egui::ComboBox::from_id_salt(id)
-                    .selected_text(
-                        selected
-                            .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
-                            .map(|p| format!("{} #{}", p.name, p.id))
-                            .unwrap_or_else(|| id.into()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for person in &self.face_page.people {
-                            ui.selectable_value(
-                                selected,
-                                Some(person.id),
-                                format!("{} #{}", person.name, person.id),
-                            );
-                        }
-                    });
-            }
+            let people = &self.face_page.people;
+            Self::relationship_person(ui, "Von", people, &mut self.relation_from);
+            let kinds = [
+                ("parent", "Elternteil von"),
+                ("child", "Kind von"),
+                ("partner", "Partner von"),
+                ("sibling", "Geschwister von"),
+            ];
+            let kind_label = kinds
+                .iter()
+                .find(|(value, _)| *value == self.relation_kind)
+                .map_or("wählen …", |(_, label)| *label);
             egui::ComboBox::from_id_salt("relation-kind")
-                .selected_text(&self.relation_kind)
+                .selected_text(format!("Beziehungstyp: {kind_label}"))
                 .show_ui(ui, |ui| {
-                    for (value, label) in [
-                        ("parent", "Elternteil von"),
-                        ("child", "Kind von"),
-                        ("partner", "Partner von"),
-                        ("sibling", "Geschwister von"),
-                    ] {
+                    for (value, label) in kinds {
                         ui.selectable_value(&mut self.relation_kind, value.into(), label);
                     }
                 });
+            Self::relationship_person(ui, "Nach", people, &mut self.relation_to);
             if ui
                 .add_enabled(
                     !self.busy() && self.relation_from.is_some() && self.relation_to.is_some(),
@@ -474,5 +461,30 @@ impl PhotoApp {
                 });
             }
         });
+    }
+
+    fn relationship_person(
+        ui: &mut egui::Ui,
+        label: &str,
+        people: &[faces::Person],
+        selected: &mut Option<i64>,
+    ) {
+        let caption = selected
+            .and_then(|id| people.iter().find(|person| person.id == id))
+            .map_or_else(
+                || format!("{label}: Person wählen …"),
+                |person| format!("{label}: {} · #{}", person.name, person.id),
+            );
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(caption)
+            .show_ui(ui, |ui| {
+                for person in people {
+                    ui.selectable_value(
+                        selected,
+                        Some(person.id),
+                        format!("{} · #{}", person.name, person.id),
+                    );
+                }
+            });
     }
 }
