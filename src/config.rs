@@ -25,6 +25,14 @@ fn resource_root() -> PathBuf {
     }
 }
 
+pub fn model_sources(configured: &str) -> [PathBuf; 3] {
+    [
+        PathBuf::from(configured),
+        resource_root().join("models"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models"),
+    ]
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {

@@ -9,13 +9,19 @@ Unter **Runtime und Modellordner manuell auswählen** lassen sich eine vorhanden
 Windows-DLL `onnxruntime.dll` und der Ordner mit den JSON-Manifesten auswählen.
 Weitere DLLs aus derselben Distribution gehören neben die Haupt-DLL.
 
-Die Manifeste nennen Bezugsquelle, Datei, Prüfsumme und Lizenz. Das jeweilige
-ONNX-Gewicht unter dem im Manifest angegebenen Pfad in `weights/` ablegen.
-Wenn ein Manifest ein Archiv nennt, wird daraus nur die angegebene Datei benötigt.
-YuNet und SFace bilden die Standardkombination; SCRFD und ArcFace sind optional.
-Die InsightFace-Gewichte sind laut Manifest auf nichtkommerzielle Forschung
-beschränkt. Die App prüft lokale Dateien und lädt keine Modelle herunter.
-Das Release-Paket enthält nur diese Anleitung und die Manifeste.
+Unter **Personen** oder **Einstellungen** auf **YuNet und SFace installieren**
+klicken. Die App verwendet vorhandene passende Gewichte aus dem konfigurierten
+Modellordner, dem Release oder dem lokalen Entwicklungsordner. Fehlende Dateien
+lädt sie von OpenCV Zoo (zusammen rund 39 MB). Nach der SHA-256-Prüfung speichert
+sie die Gewichte und Manifeste unter `%APPDATA%\FotoImporter\models` und wählt
+den neuen Ordner. Der Pfad bleibt bei einem Release-Wechsel gültig.
+
+SCRFD und ArcFace können über **Modellordner wählen** manuell eingerichtet
+werden. Die Manifeste nennen Bezugsquelle, Datei, Prüfsumme und Lizenz. Das
+jeweilige ONNX-Gewicht am angegebenen Pfad in `weights/` ablegen. Bei
+Archiven genügt die angegebene Datei. Die InsightFace-Gewichte sind laut
+Manifest auf nichtkommerzielle Forschung beschränkt. Das Release-Paket
+enthält diese Anleitung und die Manifeste.
 
 Rust und Python speichern Vektoren in getrennten Modellräumen. Nach einem Wechsel
 zu Rust muss die Sammlung für Rust neu analysiert werden, bevor Gruppierung und

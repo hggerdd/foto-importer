@@ -68,11 +68,14 @@ impl Manifest {
         format!("{}@{}:{}:rust-ort-v1", self.id, self.version, self.sha256)
     }
     pub fn verify(&self, folder: &Path) -> Result<PathBuf> {
-        let folder = folder.canonicalize()?;
-        let path = folder
-            .join(&self.file)
+        let folder = folder
             .canonicalize()
-            .context("Modellgewichte fehlen; lokal installieren und Modellordner prüfen")?;
+            .with_context(|| format!("Modellordner nicht verfügbar: {}", folder.display()))?;
+        let expected = folder.join(&self.file);
+        let path = expected.canonicalize().with_context(|| format!(
+            "Modellgewicht für {} fehlt oder ist nicht zugänglich: {}. Unter Einstellungen die Modellgewichte installieren oder den Modellordner wählen.",
+            self.name, expected.display()
+        ))?;
         if !path.starts_with(&folder) {
             bail!("Modellpfad liegt außerhalb des Modellordners");
         }
@@ -111,7 +114,9 @@ impl Manifest {
 }
 pub fn manifests(folder: &Path) -> Result<Vec<Manifest>> {
     let mut list: Vec<Manifest> = Vec::new();
-    for entry in std::fs::read_dir(folder)? {
+    for entry in std::fs::read_dir(folder)
+        .with_context(|| format!("Modellordner nicht verfügbar: {}", folder.display()))?
+    {
         let path = entry?.path();
         if path.extension().is_some_and(|x| x == "json") {
             list.push(serde_json::from_reader(std::fs::File::open(path)?)?);

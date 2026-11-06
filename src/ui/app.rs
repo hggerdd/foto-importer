@@ -55,6 +55,7 @@ enum Outcome {
     Suggestions(u64, i64, Vec<(i64, String, f32)>),
     Report(String),
     RuntimeDownloaded(PathBuf),
+    ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
     DngUpdate(
         String,
         Option<String>,
@@ -696,6 +697,24 @@ impl PhotoApp {
                         self.settings.onnx_runtime = previous;
                     }
                 }
+                Ok(Outcome::ModelsInstalled(path, models)) => {
+                    let previous = std::mem::replace(
+                        &mut self.settings.model_dir,
+                        path.to_string_lossy().into_owned(),
+                    );
+                    if self.save() {
+                        self.models = models;
+                        self.message(
+                            format!(
+                                "YuNet und SFace sind installiert. Modellordner: {}",
+                                path.display()
+                            ),
+                            false,
+                        );
+                    } else {
+                        self.settings.model_dir = previous;
+                    }
+                }
                 Ok(Outcome::DngUpdate(converter, installed, cache)) => {
                     self.settings.dng_update = cache.clone();
                     self.save();
@@ -812,13 +831,15 @@ impl PhotoApp {
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        if !self.closing && !self.busy() && self.auto_analysis_pending {
+        if !self.closing && !self.busy() && !self.models_installing() && self.auto_analysis_pending
+        {
             self.auto_analysis_pending = false;
             self.collection_action("automatic");
         }
         let now = chrono::Local::now();
         if !self.closing
             && !self.busy()
+            && !self.models_installing()
             && !self.settings.collection.is_empty()
             && (self.face_page.status.nightly || self.settings.auto_metadata)
             && chrono::Timelike::hour(&now) == 3

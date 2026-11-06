@@ -37,6 +37,7 @@ prozessweit gebunden; eine Änderung benötigt einen Neustart. Modellgewichte
 und DLLs werden lokal bereitgestellt und nicht ins Git aufgenommen.
 Seit [ADR-0044](0044-onnx-runtime-download.md) kann der Nutzer die Runtime
 per Klick beziehen. Der Startvorgang und die Inferenz bleiben lokal.
+Seit [ADR-0046](0046-gesichtsmodelle-installieren.md) sind auch YuNet und SFace per Klick installierbar.
 Der Adapter ist ohne repräsentative private Bildtests keine Zusage gleicher
 Detektionsqualität. Der Paritätsbericht nennt offene Algorithmen und Abläufe.
 

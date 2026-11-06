@@ -1,5 +1,71 @@
 use super::*;
 impl PhotoApp {
+    pub(super) fn models_installing(&self) -> bool {
+        self.tasks.iter().any(|task| task.kind == "model-install")
+    }
+
+    pub(super) fn model_weights_present(&self) -> bool {
+        crate::core::face_models::weights_present(
+            &self.models,
+            Path::new(&self.settings.model_dir),
+            &self.detector,
+            &self.embedder,
+        )
+    }
+
+    pub(super) fn model_install_button(&mut self, ui: &mut egui::Ui) {
+        if let Some(running) = self.tasks.iter().find(|task| task.kind == "model-install") {
+            let done = running.task.control.done.load(Ordering::Relaxed);
+            let total = running.task.control.total.load(Ordering::Relaxed);
+            ui.horizontal(|ui| {
+                if total == 0 {
+                    ui.spinner();
+                } else {
+                    ui.add(
+                        egui::ProgressBar::new(done as f32 / total as f32)
+                            .desired_width(230.0)
+                            .text("Modellgewichte werden installiert"),
+                    );
+                }
+                if ui.button("Abbrechen").clicked() {
+                    running.task.control.stop();
+                }
+            });
+            return;
+        }
+        if self.detector != "yunet" || self.embedder != "sface" {
+            ui.label(
+                "Für diese Modellauswahl bitte einen Ordner mit den passenden Gewichten wählen.",
+            );
+            return;
+        }
+        if ui
+            .add_enabled(
+                !self.tasks.iter().any(|task| task.kind == "picker"),
+                egui::Button::new("YuNet und SFace installieren"),
+            )
+            .on_hover_text("Vorhandene Gewichte verwenden oder rund 39 MB von OpenCV Zoo laden")
+            .clicked()
+        {
+            let candidates = config::model_sources(&self.settings.model_dir);
+            self.launch(
+                "Modellgewichte installieren",
+                false,
+                "model-install",
+                move |control| {
+                    let settings = std::path::absolute(Settings::path())?;
+                    let destination = settings
+                        .parent()
+                        .ok_or_else(|| anyhow::anyhow!("Einstellungspfad ungültig"))?
+                        .join("models");
+                    let (path, models) =
+                        crate::core::face_models::install(&destination, &candidates, &control)?;
+                    Ok(Outcome::ModelsInstalled(path, models))
+                },
+            );
+        }
+    }
+
     pub(super) fn runtime_downloading(&self) -> bool {
         self.tasks
             .iter()
@@ -71,6 +137,7 @@ impl PhotoApp {
         );
         let mut chosen = None;
         let downloading = self.runtime_downloading();
+        let installing = self.models_installing();
         egui::ScrollArea::vertical().show(ui,|ui|{
             theme::card(ui).show(ui,|ui|{
                 ui.label(RichText::new("Externe Werkzeuge").size(20.0).strong());
@@ -91,10 +158,11 @@ impl PhotoApp {
                     "ONNX Runtime · DLL fehlt"
                 });
                 self.runtime_download_button(ui);
+                self.model_install_button(ui);
                 ui.collapsing("Runtime und Modellordner manuell auswählen", |ui| {
                     for (pick, label, value, enabled) in [
                         (Pick::Runtime, "ONNX Runtime DLL", &mut self.settings.onnx_runtime, !downloading),
-                        (Pick::Models, "Modellordner", &mut self.settings.model_dir, true),
+                        (Pick::Models, "Modellordner", &mut self.settings.model_dir, !installing),
                     ] {
                         ui.label(label);
                         ui.add_enabled_ui(enabled, |ui| {
@@ -107,9 +175,11 @@ impl PhotoApp {
                         });
                     }
                 });
-                for(kind,selected)in [("detector",&mut self.detector),("embedder",&mut self.embedder)]{egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
+                ui.add_enabled_ui(!installing, |ui| {
+                    for(kind,selected)in [("detector",&mut self.detector),("embedder",&mut self.embedder)]{egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
+                });
                 for model in &self.models{ui.label(format!("{} · {}",model.name,model.license));}
-                ui.label(RichText::new("Keine automatischen Gewichtsdownloads. SHA-256 wird vor dem Laden geprüft. Rust-Adapter verwenden getrennte Modellschlüssel.").small().weak());
+                ui.label(RichText::new("Die Installation prüft die Gewichte mit SHA-256. Rust-Adapter verwenden getrennte Modellschlüssel.").small().weak());
             });
             ui.add_space(16.0);
             if ui.checkbox(&mut self.settings.dark,"Dunkle Oberfläche").changed(){theme::apply(ui.ctx(),self.settings.dark);}

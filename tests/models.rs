@@ -1,11 +1,18 @@
-use foto_importer::core::inference::{Detection, Models};
+use foto_importer::core::{
+    face_models,
+    inference::{Detection, Models},
+    jobs::Control,
+};
 use std::path::Path;
 
 #[test]
 #[ignore = "Requires locally installed models and ONNX Runtime; no downloads"]
 fn real_yunet_and_sface_execute_on_synthetic_rgb() -> anyhow::Result<()> {
+    let destination = tempfile::tempdir()?;
+    let (folder, _) =
+        face_models::install(destination.path(), &["models".into()], &Control::default())?;
     let mut models = Models::load(
-        Path::new("models"),
+        &folder,
         Path::new("runtime/onnxruntime.dll"),
         "yunet",
         "sface",
@@ -29,6 +36,17 @@ fn real_yunet_and_sface_execute_on_synthetic_rgb() -> anyhow::Result<()> {
     assert!((vector.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 0.0001);
     let blank = image::DynamicImage::new_rgb8(640, 640);
     assert!(models.detect(&blank)?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[ignore = "Downloads YuNet and SFace from OpenCV Zoo"]
+fn downloads_and_installs_standard_models() -> anyhow::Result<()> {
+    let destination = tempfile::tempdir()?;
+    let (folder, models) = face_models::install(destination.path(), &[], &Control::default())?;
+    assert!(face_models::weights_present(
+        &models, &folder, "yunet", "sface"
+    ));
     Ok(())
 }
 #[test]

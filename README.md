@@ -38,7 +38,9 @@ Für die Gesichtsanalyse unter **Personen** oder **Einstellungen** auf
 **ONNX Runtime herunterladen** klicken. Die App prüft das Microsoft-Paket
 für Windows x64, legt es im Benutzerprofil ab und speichert den DLL-Pfad.
 Falls zuvor eine andere Runtime geladen war, ist ein Neustart nötig.
-Modellgewichte werden separat eingerichtet. [Modellanleitung](models/README.md)
+Anschließend **YuNet und SFace installieren** wählen. Die App verwendet passende
+lokale Dateien oder lädt die Gewichte von OpenCV Zoo, prüft sie und speichert
+den Modellordner im Benutzerprofil. [Modellanleitung](models/README.md)
 
 Originale werden ausschließlich gelesen. Vollständige Kopien werden unter freien
 Zielnamen veröffentlicht. Vorhandene Zieldateien bleiben erhalten.
@@ -59,7 +61,7 @@ Rust-Adapter tragen eigene Modellschlüssel. Bestehende Python-Vektoren bleiben
 erhalten; für neue Rust-Vorschläge ist eine lokale Analyse erforderlich. Fotos und
 Vektoren werden nicht hochgeladen. Die automatische Netzwerkanfrage prüft
 täglich den Adobe-DNG-Downloadlink per HEAD und speichert auch Fehler zwischen.
-Der Runtime-Download verbindet sich erst nach Klick mit GitHub.
+Runtime- und Modellinstallation verbinden sich erst nach Klick mit GitHub.
 
 ## Entwicklung und Dokumentation
 
