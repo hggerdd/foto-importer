@@ -54,6 +54,11 @@ ScrollFrame bindet das Mausrad pro vorhandenem Widget nur einmal und bindet
 später hinzugefügte Widgets nach; ein WeakSet verhindert zusätzliche Widget-
 Lebensdauer durch die Bindungsverwaltung.
 
+Der Rust-Arbeitsbereich übernimmt nach erfolgreichem Speichern die nächste
+noch offene Gruppe anhand ihrer Gesichts-IDs aus der bisherigen Liste. Ihre
+Namenszeile rückt soweit möglich an die bisherige Bildschirmposition. Wird
+die letzte Seite leer, zeigt die Ansicht wieder eine Seite mit Gruppen.
+
 ## Alternativen
 
 Ein größerer Bildcache allein verhindert weder Widget-Neubau noch Flackern und

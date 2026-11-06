@@ -53,7 +53,7 @@ enum Pick {
 enum Outcome {
     Scan(u64, Scan),
     Search(u64, CollectionStatus, SearchPage, Search),
-    Faces(u64, FacePage),
+    Faces(u64, usize, FacePage),
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
     Imported(files::ImportReport),
@@ -80,6 +80,25 @@ struct Draft {
     name: String,
     person: Option<i64>,
     excluded: BTreeSet<i64>,
+}
+struct GroupAdvance {
+    slot: usize,
+    top: f32,
+    following: Vec<i64>,
+    ready: bool,
+}
+
+impl GroupAdvance {
+    fn target(&self, groups: &[Vec<Face>]) -> usize {
+        self.following
+            .iter()
+            .find_map(|id| {
+                groups
+                    .iter()
+                    .position(|group| group.iter().any(|face| face.id == *id))
+            })
+            .unwrap_or_else(|| self.slot.min(groups.len().saturating_sub(1)))
+    }
 }
 #[derive(Default)]
 struct ImportCache {
@@ -115,6 +134,8 @@ pub struct PhotoApp {
     face_page: FacePage,
     face_mode: String,
     face_index: usize,
+    face_row_tops: Vec<(i64, f32)>,
+    face_advance: Option<GroupAdvance>,
     drafts: BTreeMap<String, Draft>,
     undo: Vec<Undo>,
     thumbnails: Thumbnails,
@@ -192,6 +213,8 @@ impl PhotoApp {
             face_page: FacePage::default(),
             face_mode: "unknown".into(),
             face_index: 0,
+            face_row_tops: Vec::new(),
+            face_advance: None,
             drafts: BTreeMap::new(),
             undo: Vec::new(),
             thumbnails: Thumbnails::new(cc.egui_ctx.clone()),
@@ -437,7 +460,18 @@ impl PhotoApp {
             move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
-                Ok(Outcome::Faces(revision, faces::page(&c, &mode, page)?))
+                c.db.execute_batch("BEGIN")?;
+                let mut index = page;
+                let mut snapshot = faces::page(&c, &mode, index)?;
+                if index > 0 && snapshot.groups.is_empty() {
+                    index -= 1;
+                    snapshot = faces::page(&c, &mode, index)?;
+                    if index > 0 && snapshot.groups.is_empty() {
+                        index = 0;
+                        snapshot = faces::page(&c, &mode, index)?;
+                    }
+                }
+                Ok(Outcome::Faces(revision, index, snapshot))
             },
         );
     }
@@ -648,7 +682,7 @@ impl PhotoApp {
                         self.detail_revision += 1;
                     }
                 }
-                Ok(Outcome::Faces(revision, page)) if revision == self.face_revision => {
+                Ok(Outcome::Faces(revision, index, page)) if revision == self.face_revision => {
                     if self.view != View::Settings
                         || page.status.detector_id != self.face_page.status.detector_id
                         || page.status.embedder_id != self.face_page.status.embedder_id
@@ -656,6 +690,19 @@ impl PhotoApp {
                         self.detector = page.status.detector_id.clone();
                         self.embedder = page.status.embedder_id.clone();
                     }
+                    if page.groups.is_empty()
+                        || page.status.embedder != self.face_page.status.embedder
+                        || page.status.detector != self.face_page.status.detector
+                    {
+                        self.face_advance = None;
+                    } else if let Some(advance) = &mut self.face_advance {
+                        advance.ready = true;
+                        if index != self.face_index {
+                            advance.following.clear();
+                            advance.slot = page.groups.len() - 1;
+                        }
+                    }
+                    self.face_index = index;
                     self.face_page = page;
                 }
                 Ok(Outcome::Detail(revision, detail, faces, analysed))
@@ -705,6 +752,7 @@ impl PhotoApp {
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
                     self.naming = None;
+                    self.prepare_group_advance(&undo);
                     self.undo.push(undo);
                     if self.undo.len() > 20 {
                         self.undo.remove(0);
@@ -832,6 +880,9 @@ impl PhotoApp {
                             self.page = SearchPage::default();
                             self.selected_photo = None;
                             self.face_page = FacePage::default();
+                            self.face_index = 0;
+                            self.face_advance = None;
+                            self.face_row_tops.clear();
                             self.undo.clear();
                             self.drafts.clear();
                             self.thumbnails.clear();

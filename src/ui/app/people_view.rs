@@ -114,6 +114,8 @@ impl PhotoApp {
                 if ui.selectable_label(self.face_mode == mode, label).clicked() {
                     self.face_mode = mode.into();
                     self.face_index = 0;
+                    self.face_advance = None;
+                    self.face_row_tops.clear();
                     self.refresh_faces();
                 }
             }
@@ -133,22 +135,27 @@ impl PhotoApp {
             return;
         }
         ui.horizontal(|ui| {
+            let loading = self.tasks.iter().any(|task| task.kind == "faces");
             if ui
-                .add_enabled(self.face_index > 0, egui::Button::new("Zurück"))
+                .add_enabled(!loading && self.face_index > 0, egui::Button::new("Zurück"))
                 .clicked()
             {
                 self.face_index -= 1;
+                self.face_advance = None;
+                self.face_row_tops.clear();
                 self.refresh_faces();
             }
             ui.label(format!("Seite {}", self.face_index + 1));
             if ui
                 .add_enabled(
-                    !self.face_page.groups.is_empty(),
+                    !loading && !self.face_page.groups.is_empty(),
                     egui::Button::new("Weiter"),
                 )
                 .clicked()
             {
                 self.face_index += 1;
+                self.face_advance = None;
+                self.face_row_tops.clear();
                 self.refresh_faces();
             }
             if ui.button("Aktualisieren").clicked() {
@@ -163,16 +170,69 @@ impl PhotoApp {
             }
             return;
         }
+        let advance = if self
+            .face_advance
+            .as_ref()
+            .is_some_and(|advance| advance.ready)
+        {
+            self.face_advance.take()
+        } else {
+            None
+        };
+        let target = advance
+            .as_ref()
+            .map(|advance| advance.target(&self.face_page.groups));
+        self.face_row_tops.clear();
         egui::ScrollArea::vertical()
             .id_salt("face-groups")
+            .animated(false)
             .show(ui, |ui| {
-                for group in self.face_page.groups.clone() {
-                    self.group(ui, &group);
+                for (index, group) in self.face_page.groups.clone().into_iter().enumerate() {
+                    let top = ui.next_widget_position().y - ui.clip_rect().top();
+                    if let Some(face) = group.first() {
+                        self.face_row_tops.push((face.id, top));
+                    }
+                    let focus = target == Some(index);
+                    self.group(ui, &group, focus);
                     ui.add_space(12.0);
+                }
+                if let (Some(advance), Some(index)) = (&advance, target)
+                    && let Some((_, top)) = self.face_row_tops.get(index)
+                {
+                    ui.scroll_with_delta(egui::vec2(0.0, advance.top - top));
                 }
             });
     }
-    pub(super) fn group(&mut self, ui: &mut egui::Ui, group: &[Face]) {
+    pub(super) fn prepare_group_advance(&mut self, undo: &Undo) {
+        if self.view != View::People || !matches!(self.face_mode.as_str(), "unknown" | "review") {
+            return;
+        }
+        let Some(slot) = self.face_page.groups.iter().position(|group| {
+            group
+                .iter()
+                .any(|face| undo.before.iter().any(|snapshot| snapshot.id == face.id))
+        }) else {
+            return;
+        };
+        let Some(first) = self.face_page.groups[slot].first() else {
+            return;
+        };
+        let Some((_, top)) = self.face_row_tops.iter().find(|(id, _)| *id == first.id) else {
+            return;
+        };
+        self.face_advance = Some(GroupAdvance {
+            slot,
+            top: top.max(0.0),
+            following: self.face_page.groups[slot + 1..]
+                .iter()
+                .flatten()
+                .map(|face| face.id)
+                .collect(),
+            ready: false,
+        });
+    }
+
+    fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
         let key = group
             .iter()
             .map(|f| f.id.to_string())
@@ -203,6 +263,9 @@ impl PhotoApp {
                             .hint_text("Name eingeben, Enter bestätigen")
                             .desired_width(240.0),
                     );
+                    if focus && !response.has_focus() {
+                        response.request_focus();
+                    }
                     if response.changed() {
                         draft.person = None;
                     }

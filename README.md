@@ -31,6 +31,8 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.
+  Nach dem Speichern rückt die nächste offene Gruppe an die bisherige
+  Bildschirmposition, soweit die Liste genug Platz zum Scrollen bietet.
   Namen am Bild lassen sich anklicken; Details bieten Löschen und Referenzaktionen.
   Unter Personen & Beziehungen stehen Bearbeitung, Fotosuche, Zusammenführung
   und Familienbeziehungen bereit. Erkennungswissen verwalten enthält Export,

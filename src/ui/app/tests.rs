@@ -2,6 +2,97 @@ use super::*;
 use eframe::App;
 
 #[test]
+fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.face_index = 3;
+    app.refresh_faces();
+    for _ in 0..1000 {
+        app.poll(&ctx);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.tasks.is_empty());
+    assert_eq!(app.face_index, 0);
+    assert!(app.face_page.groups.is_empty());
+    Ok(())
+}
+
+#[test]
+fn confirming_a_group_brings_its_successor_to_the_same_viewport_position() {
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.view = View::People;
+    app.settings.collection = "tmp/synthetic-faces".into();
+    let face = |id| Face {
+        id,
+        photo: id,
+        source: format!("{id}.jpg"),
+        bbox: [0.1, 0.1, 0.9, 0.9],
+        person: None,
+        assignment: None,
+        ignored: false,
+        score: 0.0,
+    };
+    let draw = |app: &mut PhotoApp| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+        );
+    };
+    app.face_page.groups = (1..=6).map(|id| vec![face(id)]).collect();
+    draw(&mut app);
+    let original_top = app.face_row_tops[0].1;
+    app.drafts.get_mut("2").expect("second group rendered").name = "Schon eingetippt".into();
+    app.prepare_group_advance(&Undo {
+        before: vec![faces::FaceSnapshot {
+            id: 1,
+            person: None,
+            assignment: None,
+            confidence: None,
+            ignored: false,
+            rejections: Vec::new(),
+            pins: Vec::new(),
+        }],
+        after: Vec::new(),
+        created: None,
+    });
+    let advance = app
+        .face_advance
+        .as_mut()
+        .expect("successor captured after commit");
+    assert!(!advance.ready);
+    advance.ready = true;
+    // The former successor remains the target even when refresh inserts a row.
+    app.face_page.groups = [7, 2, 3, 4, 5, 6]
+        .into_iter()
+        .map(|id| vec![face(id)])
+        .collect();
+    draw(&mut app);
+    draw(&mut app);
+    assert!(
+        (app.face_row_tops[1].1 - original_top).abs() < 2.0,
+        "{:?}",
+        app.face_row_tops
+    );
+    assert_eq!(app.drafts["2"].name, "Schon eingetippt");
+    assert!(app.face_advance.is_none());
+}
+
+#[test]
 fn collection_keeps_preview_and_metadata_visible_when_filters_open() {
     for size in [egui::vec2(980.0, 680.0), egui::vec2(1280.0, 800.0)] {
         let context = egui::Context::default();

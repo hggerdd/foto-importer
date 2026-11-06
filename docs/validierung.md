@@ -55,3 +55,11 @@ Der Suchtest kombiniert einen Namen mit der Gesichtsanzahl und unterscheidet
 bestätigte Zuordnungen, Vorschläge und historische Vorkommen. Er prüft
 außerdem, dass null erkannte Gesichter und eine fehlende Analyse
 unterschiedliche Treffer liefern.
+
+## Nachrücken der Gesichtsgruppen
+
+Die UI-Regression misst die Bildschirmposition vor und nach der Bestätigung.
+Die ursprüngliche Folgegruppe landet auch nach einer Umsortierung wieder an
+dieser Position. Ihr Namensentwurf bleibt erhalten. Eine zweite Regression
+prüft den Rücksprung von einer leeren Seite zur ersten Seite, wenn keine
+Gruppen mehr vorhanden sind.
