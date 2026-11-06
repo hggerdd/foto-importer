@@ -8,6 +8,12 @@ impl PhotoApp {
             "Aus Gesichtern werden Geschichten.",
             "Lokal analysieren, gemeinsam benennen und bestätigtes Wissen anwenden.",
         );
+        if self.runtime_downloading() || !Path::new(&self.settings.onnx_runtime).is_file() {
+            theme::card(ui).show(ui, |ui| {
+                ui.label("Für die Gesichtsanalyse brauchst du die ONNX Runtime.");
+                self.runtime_download_button(ui);
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             if ui.button("Sammlung wählen …").clicked() {
                 self.pick(Pick::Collection);

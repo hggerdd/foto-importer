@@ -9,5 +9,6 @@ pub mod maintenance;
 pub mod matching;
 pub mod metadata;
 pub mod migrations;
+pub mod onnx_runtime;
 pub mod previews;
 pub mod recognition;

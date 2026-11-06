@@ -34,10 +34,11 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 
 ExifTool für Sammlungsexif und RAW-Vorschauen, Adobe DNG Converter für optionale
 NEF-Konvertierung separat installieren. Werkzeugpfade in Einstellungen wählen.
-Für Gesichtsanalyse müssen ONNX Runtime DLL und Modellgewichte lokal vorliegen.
-Die [Modellanleitung](models/README.md) erklärt Ablage, Hashes und Lizenzen.
-Keine Gewichtsdownloads beim Start.
-Eine geänderte Runtime-DLL wird erst nach Neustart geladen.
+Für die Gesichtsanalyse unter **Personen** oder **Einstellungen** auf
+**ONNX Runtime herunterladen** klicken. Die App prüft das Microsoft-Paket
+für Windows x64, legt es im Benutzerprofil ab und speichert den DLL-Pfad.
+Falls zuvor eine andere Runtime geladen war, ist ein Neustart nötig.
+Modellgewichte werden separat eingerichtet. [Modellanleitung](models/README.md)
 
 Originale werden ausschließlich gelesen. Vollständige Kopien werden unter freien
 Zielnamen veröffentlicht. Vorhandene Zieldateien bleiben erhalten.
@@ -56,8 +57,9 @@ fremde Sicherungskopien außerhalb der Sammlung werden nicht gesucht oder verän
 
 Rust-Adapter tragen eigene Modellschlüssel. Bestehende Python-Vektoren bleiben
 erhalten; für neue Rust-Vorschläge ist eine lokale Analyse erforderlich. Fotos und
-Vektoren werden nicht hochgeladen. Die einzige automatische Netzwerkanfrage ist
-die tägliche HEAD-Prüfung des Adobe-DNG-Downloadlinks, auch Fehler werden gecacht.
+Vektoren werden nicht hochgeladen. Die automatische Netzwerkanfrage prüft
+täglich den Adobe-DNG-Downloadlink per HEAD und speichert auch Fehler zwischen.
+Der Runtime-Download verbindet sich erst nach Klick mit GitHub.
 
 ## Entwicklung und Dokumentation
 

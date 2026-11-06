@@ -35,6 +35,8 @@ Vorhandene Personenentscheidungen sind lesbar. Neue Referenzen im Rust-Raum
 benötigen passende neue Embeddings. Der Runtime-Pfad ist nach Initialisierung
 prozessweit gebunden; eine Änderung benötigt einen Neustart. Modellgewichte
 und DLLs werden lokal bereitgestellt und nicht ins Git aufgenommen.
+Seit [ADR-0044](0044-onnx-runtime-download.md) kann der Nutzer die Runtime
+per Klick beziehen. Der Startvorgang und die Inferenz bleiben lokal.
 Der Adapter ist ohne repräsentative private Bildtests keine Zusage gleicher
 Detektionsqualität. Der Paritätsbericht nennt offene Algorithmen und Abläufe.
 

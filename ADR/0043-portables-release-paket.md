@@ -17,6 +17,7 @@ Eine Windows-EXE mit nativer Oberfläche wird über Cargo Release gebaut. Ein
 reproduzierbares PowerShell-Skript erzeugt ein neues, datiertes lokales ZIP mit
 EXE, Modellmanifesten, Dokumentation und ADRs. Es überschreibt keine alten Pakete.
 ExifTool, Adobe, ONNX Runtime und Gewichte werden nicht automatisch gebündelt.
+Die Runtime ist seit [ADR-0044](0044-onnx-runtime-download.md) auf Klick in der App installierbar.
 Ressourcen werden zuerst neben der EXE gesucht, beim Entwickeln ersatzweise im
 Projektordner. Konfigurierte absolute Pfade behalten Vorrang. App-Einstellungen
 bleiben im Benutzerprofil; Fenstergröße wird am Monitor begrenzt wiederhergestellt.

@@ -29,3 +29,13 @@ synthetischen Fotos. Den Beispieldatensatz erzeugt `cargo run --example demo --l
 unter `tmp/demo`; zum Öffnen `FOTO_IMPORTER_SETTINGS` auf dessen `settings.json` setzen.
 
 Einzelne Abweichungen von Python stehen in der [Funktionsmatrix](paritaet.md).
+
+## ONNX-Runtime-Download am 06.11.2026
+
+`cargo test --locked --test onnx_runtime -- --ignored` hat das offizielle
+Windows-x64-Paket von Microsoft heruntergeladen, geprüft, entpackt und
+die DLL erfolgreich geladen. Der reguläre Testlauf bleibt offline. Seine
+Installationsprüfungen verwenden kleine ZIP-Dateien und decken falsche
+Prüfsummen, fehlende Dateien, Abbruch und die Erhaltung früherer Installationen ab.
+Alle 53 Offline-Regressionen bestanden. Ein Lauf über die Windows-Oberfläche
+hat den Download mit leerem DLL-Pfad gestartet und den neuen Pfad gespeichert.

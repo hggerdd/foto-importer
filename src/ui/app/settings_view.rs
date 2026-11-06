@@ -1,5 +1,67 @@
 use super::*;
 impl PhotoApp {
+    pub(super) fn runtime_downloading(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|task| task.kind == "runtime-download")
+    }
+
+    pub(super) fn runtime_download_button(&mut self, ui: &mut egui::Ui) {
+        if !crate::core::onnx_runtime::SUPPORTED {
+            return;
+        }
+        if let Some(running) = self
+            .tasks
+            .iter()
+            .find(|task| task.kind == "runtime-download")
+        {
+            let done = running.task.control.done.load(Ordering::Relaxed);
+            let total = running.task.control.total.load(Ordering::Relaxed);
+            ui.horizontal(|ui| {
+                if total == 0 {
+                    ui.spinner();
+                    ui.label("Verbindung zu Microsoft …");
+                } else {
+                    ui.add(
+                        egui::ProgressBar::new(done as f32 / total as f32)
+                            .desired_width(230.0)
+                            .text(if done < total {
+                                "ONNX Runtime wird geladen"
+                            } else {
+                                "Paket wird geprüft und installiert"
+                            }),
+                    );
+                }
+                if ui.button("Abbrechen").clicked() {
+                    running.task.control.stop();
+                }
+            });
+        } else if ui
+            .add_enabled(
+                !self.tasks.iter().any(|task| task.kind == "picker"),
+                egui::Button::new("ONNX Runtime herunterladen"),
+            )
+            .on_hover_text("Offizielles Microsoft-Paket für Windows x64 · ca. 72 MB")
+            .clicked()
+        {
+            self.launch(
+                "ONNX Runtime herunterladen",
+                false,
+                "runtime-download",
+                |control| {
+                    let settings = std::path::absolute(Settings::path())?;
+                    let destination = settings
+                        .parent()
+                        .ok_or_else(|| anyhow::anyhow!("Einstellungspfad ungültig"))?
+                        .join("runtime");
+                    Ok(Outcome::RuntimeDownloaded(
+                        crate::core::onnx_runtime::download(&destination, &control)?,
+                    ))
+                },
+            );
+        }
+    }
+
     pub(super) fn settings_view(&mut self, ui: &mut egui::Ui) {
         Self::header(
             ui,
@@ -8,10 +70,11 @@ impl PhotoApp {
             "Lokale Werkzeuge und Modelle konfigurieren. Adobe-Versionen werden höchstens einmal täglich abgefragt.",
         );
         let mut chosen = None;
+        let downloading = self.runtime_downloading();
         egui::ScrollArea::vertical().show(ui,|ui|{
             theme::card(ui).show(ui,|ui|{
                 ui.label(RichText::new("Externe Werkzeuge").size(20.0).strong());
-                for(pick,label,value)in [(Pick::Converter,"Adobe DNG Converter",&mut self.settings.converter),(Pick::Exiftool,"ExifTool",&mut self.settings.exiftool),(Pick::Runtime,"ONNX Runtime DLL",&mut self.settings.onnx_runtime),(Pick::Models,"Modellordner",&mut self.settings.model_dir)]{
+                for(pick,label,value)in [(Pick::Converter,"Adobe DNG Converter",&mut self.settings.converter),(Pick::Exiftool,"ExifTool",&mut self.settings.exiftool)]{
                     ui.label(label);ui.horizontal(|ui|{ui.add(egui::TextEdit::singleline(value).desired_width(570.0));if ui.button("Auswählen …").clicked(){chosen=Some(pick);}});
                 }
                 ui.label(&self.dng_status);
@@ -22,6 +85,28 @@ impl PhotoApp {
             ui.add_space(16.0);
             theme::card(ui).show(ui,|ui|{
                 ui.label(RichText::new("Lokale Gesichtserkennung").size(20.0).strong());
+                ui.label(if Path::new(&self.settings.onnx_runtime).is_file() {
+                    "ONNX Runtime · DLL ausgewählt"
+                } else {
+                    "ONNX Runtime · DLL fehlt"
+                });
+                self.runtime_download_button(ui);
+                ui.collapsing("Runtime und Modellordner manuell auswählen", |ui| {
+                    for (pick, label, value, enabled) in [
+                        (Pick::Runtime, "ONNX Runtime DLL", &mut self.settings.onnx_runtime, !downloading),
+                        (Pick::Models, "Modellordner", &mut self.settings.model_dir, true),
+                    ] {
+                        ui.label(label);
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(value).desired_width(570.0));
+                                if ui.button("Auswählen …").clicked() {
+                                    chosen = Some(pick);
+                                }
+                            });
+                        });
+                    }
+                });
                 for(kind,selected)in [("detector",&mut self.detector),("embedder",&mut self.embedder)]{egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
                 for model in &self.models{ui.label(format!("{} · {}",model.name,model.license));}
                 ui.label(RichText::new("Keine automatischen Gewichtsdownloads. SHA-256 wird vor dem Laden geprüft. Rust-Adapter verwenden getrennte Modellschlüssel.").small().weak());

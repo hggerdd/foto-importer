@@ -25,6 +25,7 @@ tempfile = "3"
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
 ndarray = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+zip = { version = "=4.6.1", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

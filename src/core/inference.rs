@@ -137,7 +137,7 @@ impl Models {
     pub fn load(folder: &Path, dll: &Path, detector: &str, embedder: &str) -> Result<Self> {
         if !dll.is_file() {
             bail!(
-                "ONNX Runtime fehlt: {}. DLL-Pfad in Einstellungen wählen.",
+                "ONNX Runtime fehlt: {}. Unter Einstellungen „ONNX Runtime herunterladen“ wählen.",
                 dll.display()
             );
         }

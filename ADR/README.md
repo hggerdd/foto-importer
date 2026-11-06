@@ -110,3 +110,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0041](0041-native-adobe-versionspruefung.md) | Native tägliche Adobe-Versionsprüfung | Akzeptiert |
 | [0042](0042-native-bestandsmigrationen.md) | Native Bestandsmigrationen; löst 0037 ab | Akzeptiert |
 | [0043](0043-portables-release-paket.md) | Portables Windows-Release-Paket | Akzeptiert |
+| [0044](0044-onnx-runtime-download.md) | ONNX Runtime auf Klick im Benutzerprofil installieren | Akzeptiert |

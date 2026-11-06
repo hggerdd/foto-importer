@@ -17,6 +17,8 @@ flowchart TB
     Writer --> Faces[Personen / Gesichter / Referenzen]
     Writer --> Migrations[Sicherung und Schema-Migration 1–5]
     Faces --> ONNX[Lokale CPU-Inferenz · ORT]
+    UI -->|Nur nach Klick| Runtime[Runtime-Download mit SHA-256-Prüfung]
+    Runtime -->|DLL im Benutzerprofil| ONNX
     Writer --> Lock[Exklusive Host/PID-Sperrdatei]
     Query --> DB[(SQLite .myfotomanager · Schema 6)]
     Index --> DB
@@ -73,6 +75,7 @@ nutzt eine optionale DNG-Konvertierung ihre eigene Warteschlange.
 * `src/core/matching.rs` und `recognition.rs`: Referenzauswahl, Vorschläge und Zuordnung.
 * `src/core/maintenance.rs`: Personenpflege, Datensatzexport, Kalibrierung und Biometrielöschung.
 * `src/core/inference.rs`: geprüfte Modellmanifeste und lokale ONNX-Ausführung.
+* `src/core/onnx_runtime.rs`: optionaler Download und geprüfte lokale Ablage der Runtime.
 * `src/core/previews.rs`: Vorschauen ohne dauerhaften Vollbildspeicher.
 * `src/ui/`: Darstellung und UI-Zustand; keine SQL- oder Kopierlogik.
 

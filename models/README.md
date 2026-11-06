@@ -1,10 +1,13 @@
 # Lokale Gesichtsmodelle
 
 Import, Sammlung und Metadatensuche funktionieren ohne Gesichtsmodelle.
-Für die Gesichtsanalyse unter **Einstellungen** den Ordner mit den JSON-Manifesten
-und die lokale Windows-DLL `onnxruntime.dll` wählen. Weitere DLLs aus derselben
-ONNX-Runtime-Distribution gehören neben die Haupt-DLL. Im Projektordner lautet
-der Standardpfad `runtime/onnxruntime.dll`.
+Für die Gesichtsanalyse unter **Personen** oder **Einstellungen** auf
+**ONNX Runtime herunterladen** klicken. Die App lädt das offizielle
+Windows-x64-Paket von Microsoft (rund 72 MB) und wählt die DLL automatisch.
+Installierte Dateien liegen unter `%APPDATA%\FotoImporter\runtime`.
+Unter **Runtime und Modellordner manuell auswählen** lassen sich eine vorhandene
+Windows-DLL `onnxruntime.dll` und der Ordner mit den JSON-Manifesten auswählen.
+Weitere DLLs aus derselben Distribution gehören neben die Haupt-DLL.
 
 Die Manifeste nennen Bezugsquelle, Datei, Prüfsumme und Lizenz. Das jeweilige
 ONNX-Gewicht unter dem im Manifest angegebenen Pfad in `weights/` ablegen.

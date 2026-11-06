@@ -54,6 +54,7 @@ enum Outcome {
     Imported(files::ImportReport),
     Suggestions(u64, i64, Vec<(i64, String, f32)>),
     Report(String),
+    RuntimeDownloaded(PathBuf),
     DngUpdate(
         String,
         Option<String>,
@@ -278,7 +279,9 @@ impl PhotoApp {
                     } else {
                         None
                     };
-                    let _foreground = if !write && kind != "picker" && kind != "dngupdates" {
+                    let _foreground = if !write
+                        && !matches!(kind, "picker" | "dngupdates" | "runtime-download")
+                    {
                         Some(crate::core::jobs::foreground())
                     } else {
                         None
@@ -679,6 +682,20 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Report(text)) => self.report = Some(text),
+                Ok(Outcome::RuntimeDownloaded(path)) => {
+                    let previous = std::mem::replace(
+                        &mut self.settings.onnx_runtime,
+                        path.to_string_lossy().into_owned(),
+                    );
+                    if self.save() {
+                        self.message(
+                            "ONNX Runtime ist installiert und ausgewählt. Falls zuvor eine andere Runtime geladen wurde, bitte die App neu starten.".into(),
+                            false,
+                        );
+                    } else {
+                        self.settings.onnx_runtime = previous;
+                    }
+                }
                 Ok(Outcome::DngUpdate(converter, installed, cache)) => {
                     self.settings.dng_update = cache.clone();
                     self.save();
