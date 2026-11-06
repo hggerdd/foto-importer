@@ -14,10 +14,52 @@ use std::{
     },
 };
 
+struct Entry {
+    texture: Option<egui::TextureHandle>,
+    bytes: usize,
+    tick: u64,
+    frame: u64,
+    error: String,
+}
+
+/// Cache key without the generation: identical content keeps its texture
+/// across searches and refreshes. Only `clear` (new collection/scan) drops it.
+pub fn cache_key(request: &PreviewRequest) -> String {
+    format!(
+        "{}:{}:{:?}:{}:{}",
+        request.path.display(),
+        request.orientation,
+        request.crop,
+        request.edge,
+        request
+            .root
+            .as_ref()
+            .map_or(String::new(), |root| root.display().to_string())
+    )
+}
+
+/// Evicts least recently used entries, but never entries drawn in the current
+/// or previous frame, so visible images cannot thrash against the budget.
+fn evict(cache: &mut HashMap<String, Entry>, bytes: &mut usize, frame: u64, max_bytes: usize) {
+    while *bytes > max_bytes || cache.len() > config::CACHE_ENTRIES {
+        let Some(oldest) = cache
+            .iter()
+            .filter(|(_, v)| v.frame + 1 < frame)
+            .min_by_key(|(_, v)| v.tick)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        if let Some(entry) = cache.remove(&oldest) {
+            *bytes -= entry.bytes;
+        }
+    }
+}
+
 pub struct Thumbnails {
     requests: mpsc::SyncSender<(String, PreviewRequest, String)>,
-    results: mpsc::Receiver<(String, anyhow::Result<Preview>)>,
-    cache: HashMap<String, (Option<egui::TextureHandle>, usize, u64, String)>,
+    results: mpsc::Receiver<(String, u64, anyhow::Result<Preview>)>,
+    cache: HashMap<String, Entry>,
     pending: HashSet<String>,
     generation: Arc<AtomicU64>,
     tick: u64,
@@ -35,8 +77,9 @@ impl Thumbnails {
                     continue;
                 }
                 let _foreground = crate::core::jobs::foreground();
+                let request_generation = request.generation;
                 let result = previews::preview(request, &exiftool, &Control::default());
-                if out.send((key, result)).is_err() {
+                if out.send((key, request_generation, result)).is_err() {
                     break;
                 }
                 ctx.request_repaint();
@@ -59,24 +102,17 @@ impl Thumbnails {
         self.bytes = 0;
     }
     pub fn ready(&self, request: &PreviewRequest) -> bool {
-        let key = format!(
-            "{}:{}:{}:{:?}:{}",
-            self.generation.load(Ordering::Relaxed),
-            request.path.display(),
-            request.orientation,
-            request.crop,
-            request.edge
-        );
-        self.cache.get(&key).is_some_and(|entry| entry.0.is_some())
+        self.cache
+            .get(&cache_key(request))
+            .is_some_and(|entry| entry.texture.is_some())
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
-        while let Ok((key, result)) = self.results.try_recv() {
+        while let Ok((key, generation, result)) = self.results.try_recv() {
             self.pending.remove(&key);
-            let generation = self.generation.load(Ordering::Relaxed);
-            if !key.starts_with(&format!("{generation}:")) {
+            if generation != self.generation.load(Ordering::Relaxed) {
                 continue;
             }
-            let (value, bytes, error) = match result {
+            let (texture, bytes, error) = match result {
                 Ok(p) => {
                     let bytes = p.rgba.len();
                     let image =
@@ -90,21 +126,25 @@ impl Thumbnails {
                 Err(e) => (None, 0, e.to_string()),
             };
             self.bytes += bytes;
-            self.cache.insert(key, (value, bytes, self.tick, error));
-        }
-        while self.bytes > config::CACHE_BYTES || self.cache.len() > 128 {
-            let Some(oldest) = self
-                .cache
-                .iter()
-                .min_by_key(|(_, v)| v.2)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            if let Some((_, bytes, _, _)) = self.cache.remove(&oldest) {
-                self.bytes -= bytes;
+            if let Some(old) = self.cache.insert(
+                key,
+                Entry {
+                    texture,
+                    bytes,
+                    tick: self.tick,
+                    frame: ctx.cumulative_frame_nr(),
+                    error,
+                },
+            ) {
+                self.bytes -= old.bytes;
             }
         }
+        evict(
+            &mut self.cache,
+            &mut self.bytes,
+            ctx.cumulative_frame_nr(),
+            config::CACHE_BYTES,
+        );
     }
     pub fn image(
         &mut self,
@@ -115,14 +155,7 @@ impl Thumbnails {
     ) -> egui::Response {
         self.tick += 1;
         request.generation = self.generation.load(Ordering::Relaxed);
-        let key = format!(
-            "{}:{}:{}:{:?}:{}",
-            request.generation,
-            request.path.display(),
-            request.orientation,
-            request.crop,
-            request.edge
-        );
+        let key = cache_key(&request);
         let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
@@ -146,9 +179,11 @@ impl Thumbnails {
         if ui.is_rect_visible(rect) {
             ui.painter()
                 .rect_filled(rect, 8, egui::Color32::from_rgb(13, 18, 24));
-            if let Some((texture, _, tick, error)) = self.cache.get_mut(&key) {
-                *tick = self.tick;
-                if let Some(texture) = texture {
+            if let Some(entry) = self.cache.get_mut(&key) {
+                entry.tick = self.tick;
+                entry.frame = ui.ctx().cumulative_frame_nr();
+                let error = &entry.error;
+                if let Some(texture) = &entry.texture {
                     let fit = texture.size_vec2();
                     let scale = (rect.width() / fit.x).min(rect.height() / fit.y);
                     let dest = egui::Rect::from_center_size(rect.center(), fit * scale);
@@ -188,5 +223,58 @@ impl Thumbnails {
             }
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn request(path: &str, generation: u64) -> PreviewRequest {
+        PreviewRequest {
+            root: None,
+            path: PathBuf::from(path),
+            orientation: 1,
+            crop: None,
+            edge: 400,
+            generation,
+        }
+    }
+    fn entry(bytes: usize, tick: u64, frame: u64) -> Entry {
+        Entry {
+            texture: None,
+            bytes,
+            tick,
+            frame,
+            error: String::new(),
+        }
+    }
+
+    #[test]
+    fn key_is_stable_across_generations_but_not_variants() {
+        assert_eq!(
+            cache_key(&request("a.jpg", 0)),
+            cache_key(&request("a.jpg", 7))
+        );
+        let mut other = request("a.jpg", 0);
+        other.edge = 960;
+        assert_ne!(cache_key(&request("a.jpg", 0)), cache_key(&other));
+    }
+
+    #[test]
+    fn eviction_keeps_recent_frames_and_drops_oldest() {
+        let mut cache = HashMap::new();
+        cache.insert("old".to_string(), entry(60, 1, 1));
+        cache.insert("older".to_string(), entry(60, 0, 1));
+        cache.insert("visible".to_string(), entry(60, 5, 10));
+        let mut bytes = 180;
+        evict(&mut cache, &mut bytes, 10, 100);
+        assert!(cache.contains_key("visible"));
+        assert!(!cache.contains_key("older") && !cache.contains_key("old"));
+        assert_eq!(bytes, 60);
+        let mut bytes = 60;
+        evict(&mut cache, &mut bytes, 10, 10);
+        assert_eq!(cache.len(), 1);
     }
 }

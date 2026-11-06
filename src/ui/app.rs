@@ -693,7 +693,6 @@ impl PhotoApp {
                     self.filters.page = filters.page;
                     self.filters.folder_page = filters.folder_page;
                     self.applied = filters;
-                    self.thumbnails.clear();
                     if !self.large
                         && self.selected_photo.as_ref().is_some_and(|selected| {
                             !self.page.photos.iter().any(|photo| photo.id == selected.id)
