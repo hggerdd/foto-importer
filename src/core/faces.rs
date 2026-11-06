@@ -8,7 +8,10 @@ use super::{
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 #[derive(Clone, Debug)]
 pub struct Person {
@@ -58,6 +61,8 @@ pub struct FacePage {
     pub groups: Vec<Vec<Face>>,
     pub people: Vec<Person>,
     pub status: Status,
+    /// Namensvorschläge je Gruppe, Schlüssel ist die ID des ersten Gesichts.
+    pub suggestions: BTreeMap<i64, super::recognition::Suggestions>,
 }
 
 pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
@@ -220,6 +225,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             groups,
             people: people(collection)?,
             status,
+            suggestions: BTreeMap::new(),
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -245,10 +251,24 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             }
         }
     }
+    let mut suggestions = BTreeMap::new();
+    if !status.embedder.is_empty() {
+        for group in groups.iter().filter(|g| g[0].person.is_none()) {
+            let ids: Vec<i64> = group.iter().map(|f| f.id).collect();
+            // Fehlende Vorschläge dürfen die Gruppenansicht nicht blockieren.
+            if let Ok(found) =
+                super::recognition::group_suggestions(collection, &ids, &status.embedder)
+                && !found.items.is_empty()
+            {
+                suggestions.insert(group[0].id, found);
+            }
+        }
+    }
     Ok(FacePage {
         groups,
         people: people(collection)?,
         status,
+        suggestions,
     })
 }
 

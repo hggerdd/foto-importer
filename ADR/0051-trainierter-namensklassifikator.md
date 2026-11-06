@@ -35,6 +35,8 @@ Ausschlüssen (Ablehnungen, Person schon im Foto bestätigt, Qualität); das
 Modell sortiert nur und normiert über die erlaubten Personen. Ohne Modell oder
 Vektor gilt der bisherige Vergleich mit sechs Schaltflächen.
 
+Auch die Gruppenkarten im Personenbereich zeigen diese drei Buttons. Der Wert einer Gruppe ist das Mittel der Einzelwerte von höchstens drei ihrer Gesichter; er wird beim Laden der Seite im Worker berechnet. Ein Klick wählt die Person und speichert die Gruppe wie „Bestätigen“ (rückgängig machbar). Bestehende Sammlungen haben das Modell erst nach „Neu abgleichen“.
+
 Automatische Zuordnung (`rematch`, Schwellen) bleibt unverändert.
 
 ## Alternativen

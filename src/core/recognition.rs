@@ -54,12 +54,42 @@ fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, Str
 /// Namensvorschläge für ein Gesicht. `by_model` ist wahr, wenn der trainierte
 /// Klassifikator die Reihenfolge bestimmt (Score = Wahrscheinlichkeit);
 /// sonst gilt der Ähnlichkeitsvergleich (Score = Kosinus).
+#[derive(Clone, Default)]
 pub struct Suggestions {
     pub by_model: bool,
     pub items: Vec<(i64, String, f32)>,
 }
 pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
-    let mut result = ranked(collection, face, key)?;
+    let mut all = scored(collection, face, key)?;
+    all.items.truncate(if all.by_model { 3 } else { 6 });
+    Ok(all)
+}
+/// Gemeinsamer Vorschlag für eine Gruppe: Mittel der Einzelwerte über
+/// höchstens drei Gesichter (begrenzt die Lesezeit je Seite).
+pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> Result<Suggestions> {
+    let mut totals: BTreeMap<i64, (String, f32)> = BTreeMap::new();
+    let (mut used, mut by_model) = (0usize, true);
+    for face in faces.iter().take(3) {
+        let one = scored(collection, *face, key)?;
+        if one.items.is_empty() {
+            continue;
+        }
+        used += 1;
+        by_model &= one.by_model;
+        for (id, name, score) in one.items {
+            totals.entry(id).or_insert((name, 0.0)).1 += score;
+        }
+    }
+    let mut items: Vec<_> = totals
+        .into_iter()
+        .map(|(id, (name, sum))| (id, name, sum / used.max(1) as f32))
+        .collect();
+    items.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    items.truncate(3);
+    Ok(Suggestions { by_model, items })
+}
+fn scored(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
+    let result = ranked(collection, face, key)?;
     if let Some(model) = classifier::load(collection, key)? {
         let bytes: Option<Vec<u8>> = collection
             .db
@@ -76,7 +106,6 @@ pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Sugg
             let items: Vec<_> = model
                 .predict_among(&query, &allowed)
                 .into_iter()
-                .take(3)
                 .map(|(id, p)| (id, names[&id].to_string(), p))
                 .collect();
             if !items.is_empty() {
@@ -87,7 +116,6 @@ pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Sugg
             }
         }
     }
-    result.truncate(6);
     Ok(Suggestions {
         by_model: false,
         items: result,

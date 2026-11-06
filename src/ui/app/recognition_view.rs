@@ -78,7 +78,7 @@ impl PhotoApp {
                         ui.label(RichText::new(format!("Modell für {} Personen trainiert, noch zu wenig Prüfbeispiele", m.people)).small());
                     }
                     None => {
-                        ui.label(RichText::new("Noch kein Modell · mindestens zwei Personen mit je zwei Referenzen nötig").small().weak());
+                        ui.label(RichText::new(if status.reference_people >= 2 && status.references >= 4 { "Modell noch nicht trainiert · „Neu abgleichen“ in Schritt 3 trainiert es" } else { "Noch kein Modell · mindestens zwei Personen mit je zwei Referenzen nötig" }).small().weak());
                     }
                 }
                 if status.dirty_people > 0 {

@@ -113,6 +113,16 @@ fn stored_model_orders_collection_suggestions_with_fallback() -> anyhow::Result<
     assert!(after.by_model);
     assert_eq!(after.items.len(), 3);
     assert_eq!(after.items[0].0, 2);
+    let group = recognition::group_suggestions(&c, &[face_id], "test")?;
+    assert!(group.by_model);
+    assert_eq!(group.items[0].0, 2);
+    assert!(group.items.len() <= 3);
+    c.db.execute(
+        "INSERT INTO face_settings VALUES('rust.embedder_key','\"test\"')",
+        [],
+    )?;
+    let page = faces::page(&c, "unnamed", 0)?;
+    assert!(page.suggestions.values().any(|s| s.items[0].0 == 2));
     // Eine Ablehnung entfernt die Person auch aus den Modellvorschlägen.
     c.db.execute("INSERT INTO face_rejections VALUES(?,2)", [face_id])?;
     let rejected = recognition::suggestions(&c, face_id, "test")?;

@@ -171,6 +171,10 @@ impl PhotoApp {
         });
         let mut submit = false;
         let mut ignore = false;
+        let proposals = group
+            .first()
+            .and_then(|f| self.face_page.suggestions.get(&f.id))
+            .cloned();
         theme::card(ui).show(ui, |ui| {
             ui.push_id(&key, |ui| {
                 ui.horizontal(|ui| {
@@ -226,6 +230,31 @@ impl PhotoApp {
                         ignore = true;
                     }
                 });
+                if let Some(proposals) = &proposals {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(if proposals.by_model {
+                                "Passendste Personen (Modell):"
+                            } else {
+                                "Ähnlichste Personen:"
+                            })
+                            .small()
+                            .weak(),
+                        );
+                        for (person, name, score) in &proposals.items {
+                            let label = if proposals.by_model {
+                                format!("{name} · {:.0} %", score * 100.0)
+                            } else {
+                                format!("{name} · {score:.2}")
+                            };
+                            if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                                draft.person = Some(*person);
+                                draft.name = name.clone();
+                                submit = true;
+                            }
+                        }
+                    });
+                }
                 let size = ((ui.available_width() - 6.0 * 10.0) / 7.0).clamp(42.0, 110.0);
                 for chunk in group.chunks(7) {
                     ui.horizontal(|ui| {
