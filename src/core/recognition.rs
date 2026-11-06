@@ -13,7 +13,8 @@ fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, Str
     let bytes: Option<Vec<u8>> = collection
         .db
         .query_row(
-            "SELECT vec FROM face_embeddings WHERE face_id=? AND embedder_id=?",
+            "SELECT e.vec FROM face_embeddings e JOIN faces f ON f.id=e.face_id
+             WHERE e.face_id=? AND e.embedder_id=? AND f.retained=0 AND f.quality>=0.5",
             params![face, key],
             |r| r.get(0),
         )

@@ -38,6 +38,9 @@ und DLLs werden lokal bereitgestellt und nicht ins Git aufgenommen.
 Seit [ADR-0044](0044-onnx-runtime-download.md) kann der Nutzer die Runtime
 per Klick beziehen. Der Startvorgang und die Inferenz bleiben lokal.
 Seit [ADR-0046](0046-gesichtsmodelle-installieren.md) sind auch YuNet und SFace per Klick installierbar.
+Seit [ADR-0050](0050-empfindlichere-gesichtspraesenz.md) werden Präsenztreffer
+und Namensmerkmale getrennt behandelt. Der Detektorschlüssel enthält die
+Version der Präsenzregel.
 Der Adapter ist ohne repräsentative private Bildtests keine Zusage gleicher
 Detektionsqualität. Der Paritätsbericht nennt offene Algorithmen und Abläufe.
 

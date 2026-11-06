@@ -80,3 +80,12 @@ Historische Gesichter, Vorschläge und weitergeleitete Personen tragen
 nichts zur Fotozahl bei. Eingetragene Beziehungen ohne gemeinsames
 Foto bleiben sichtbar. Ein zweiter Test prüft die Grenze von zwölf
 angezeigten Verbindungen.
+
+## Empfindlichere Gesichtserkennung
+
+Lokal geprüft mit dem bereitgestellten Beispielbild. YuNet erkannte vorher
+ein Gesicht und mit der neuen Präsenzregel vier. SCRFD stieg von drei auf
+fünf. Ein temporärer Sammlungsindex speicherte vier aktuelle YuNet-Treffer.
+Zwei davon zählten ohne Namensmerkmale. Die bestehende Bestätigung blieb
+erhalten. Die Personensuche fand das Foto, der Filter ohne weiteres
+Gesicht schloss es aus. Das Beispielbild gehört nicht zum Repository.

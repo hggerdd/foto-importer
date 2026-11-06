@@ -457,7 +457,10 @@ impl PhotoApp {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.filters.only_people, "Nur diese Personen");
+            ui.checkbox(
+                &mut self.filters.only_people,
+                "Nur diese Personen · kein weiteres erkanntes Gesicht",
+            );
             ui.checkbox(
                 &mut self.filters.suggestions,
                 "Unbestätigte Vorschläge einbeziehen",
@@ -476,7 +479,7 @@ impl PhotoApp {
                     }
                 });
         });
-        ui.label(RichText::new("Ausschlüsse benötigen eine erfolgreiche Analyse. Ignorierte Gesichter zählen weiterhin als anwesend.").small());
+        ui.label(RichText::new("Für Ausschlüsse und diese strenge Suche muss das Foto mit der aktuellen Erkennung analysiert sein. Auch schwache, unbekannte und ignorierte Gesichter zählen.").small());
         ui.separator();
         ui.label(RichText::new("Metadaten").strong());
         let mut remove = None;

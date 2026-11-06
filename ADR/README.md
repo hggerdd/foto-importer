@@ -116,3 +116,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0047](0047-gesichter-als-suchmetadaten.md) | Gesichter und Personen als Fotometadaten anzeigen und suchen | Akzeptiert |
 | [0048](0048-erkennungsablauf-im-personenbereich.md) | Analyse, Referenzauswahl und Abgleich sichtbar trennen | Akzeptiert |
 | [0049](0049-gewichteter-beziehungsgraph.md) | Beziehungsgraph nach Anzahl gemeinsamer Fotos gewichten | Akzeptiert |
+| [0050](0050-empfindlichere-gesichtspraesenz.md) | Kleine und schwache Gesichter für die Präsenzsuche erfassen | Akzeptiert |

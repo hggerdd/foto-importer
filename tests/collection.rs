@@ -260,6 +260,57 @@ fn face_names_and_counts_are_searchable_photo_metadata() -> anyhow::Result<()> {
 }
 
 #[test]
+fn strict_people_search_requires_current_presence_policy_and_counts_weak_faces()
+-> anyhow::Result<()> {
+    use foto_importer::core::faces;
+
+    let root = tempfile::tempdir()?;
+    let collection = Collection::open(root.path(), true)?;
+    seed(&collection)?;
+    collection.db.execute_batch(
+        "INSERT INTO face_settings VALUES('rust.detector_key','\"example:rust-ort-v1\"');
+         INSERT INTO persons(id) VALUES(1);
+         INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,quality)
+         VALUES(1,'album/1.jpg','example:rust-ort-v1',1,'user',0.8);
+         INSERT INTO face_jobs(photo_id,stage,model_id,status)
+         VALUES(1,'detect','example:rust-ort-v1','done');",
+    )?;
+    let key = faces::active_detector_key(&collection)?.expect("active detector");
+    let search = Search {
+        people_all: vec![1],
+        only_people: true,
+        ..Search::default()
+    };
+    assert!(!faces::photo_analysis_done(&collection, 1)?);
+    assert_eq!(metadata::search(&collection, &search, &key)?.total, 0);
+    collection.db.execute(
+        "INSERT INTO face_jobs(photo_id,stage,model_id,status) VALUES(1,'detect',?,'done')",
+        [&key],
+    )?;
+    assert!(faces::photo_analysis_done(&collection, 1)?);
+    assert_eq!(metadata::search(&collection, &search, &key)?.total, 1);
+    collection.db.execute(
+        "INSERT INTO faces(photo_id,source_relpath,detector_id,quality,det_score)
+         VALUES(1,'album/1.jpg',?,0.1,0.62)",
+        [&key],
+    )?;
+    assert_eq!(metadata::search(&collection, &search, &key)?.total, 0);
+    assert_eq!(
+        metadata::search(
+            &collection,
+            &Search {
+                only_people: false,
+                ..search
+            },
+            &key
+        )?
+        .total,
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn bound_values_cannot_change_query_structure() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;

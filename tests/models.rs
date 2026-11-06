@@ -34,7 +34,7 @@ fn real_yunet_and_sface_execute_on_synthetic_rgb() -> anyhow::Result<()> {
     let vector = models.embed(&image, &detection)?;
     assert_eq!(vector.len(), 128);
     assert!((vector.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 0.0001);
-    let blank = image::DynamicImage::new_rgb8(640, 640);
+    let blank = image::DynamicImage::new_rgb8(960, 640);
     assert!(models.detect(&blank)?.is_empty());
     Ok(())
 }

@@ -119,7 +119,7 @@ pub fn configure_models(
 }
 pub fn status(collection: &Collection) -> Result<Status> {
     let mut status=collection.db.query_row("SELECT count(*),coalesce(sum(assignment='user'),0),coalesce(sum(person_id IS NULL AND ignored=0),0),coalesce(sum(assignment IN ('auto','suggested') AND ignored=0),0),coalesce(sum(ignored=1),0) FROM faces WHERE retained=0",[],|r|Ok(Status{total:r.get(0)?,confirmed:r.get(1)?,unknown:r.get(2)?,review:r.get(3)?,ignored:r.get(4)?,..Default::default()}))?;
-    status.detector = setting(collection, "rust.detector_key")?.unwrap_or_default();
+    status.detector = active_detector_key(collection)?.unwrap_or_default();
     status.embedder = setting(collection, "rust.embedder_key")?.unwrap_or_default();
     status.detector_id = setting(collection, "active_detector")?.unwrap_or_else(|| "yunet".into());
     status.embedder_id = setting(collection, "active_embedder")?.unwrap_or_else(|| "sface".into());
@@ -191,7 +191,7 @@ pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
         .collect::<rusqlite::Result<_>>()?)
 }
 pub fn photo_analysis_done(collection: &Collection, photo: i64) -> Result<bool> {
-    let Some(detector) = setting(collection, "rust.detector_key")? else {
+    let Some(detector) = active_detector_key(collection)? else {
         return Ok(false);
     };
     Ok(collection.db.query_row(
@@ -199,6 +199,9 @@ pub fn photo_analysis_done(collection: &Collection, photo: i64) -> Result<bool> 
         params![photo, detector],
         |row| row.get(0),
     )?)
+}
+pub fn active_detector_key(collection: &Collection) -> Result<Option<String>> {
+    Ok(setting(collection, "rust.detector_key")?.map(|key| inference::presence_detector_key(&key)))
 }
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     let status = status(collection)?;
@@ -252,7 +255,7 @@ pub fn analyze(
     collection.writable()?;
     control.set_face_phase(super::jobs::FacePhase::Analysis);
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
-    let detector_key = models.detector.key();
+    let detector_key = inference::presence_detector_key(&models.detector.key());
     let embedder_key = models.embedder.key();
     if setting(collection, "rust.detector_key")?.is_some_and(|key| key != detector_key) {
         collection.db.backup(
@@ -287,7 +290,7 @@ pub fn analyze(
     let total: usize = collection
         .db
         .query_row("SELECT count(*) FROM face_sources", [], |r| r.get(0))?;
-    let (mut cursor, mut done, mut found, mut failed) = (0, 0, 0, 0);
+    let (mut cursor, mut done, mut found, mut failed, mut without_vector) = (0, 0, 0, 0, 0);
     loop {
         control.checkpoint()?;
         let rows=collection.db.prepare("SELECT f.photo_id,f.id,f.relpath,f.size,f.mtime_ns,coalesce(m.orientation,1),coalesce(m.dt_original,'') FROM face_sources s JOIN files f ON f.id=s.file_id LEFT JOIN meta m ON m.file_id=f.id WHERE f.photo_id>? AND f.status='present' ORDER BY f.photo_id LIMIT 32")?.query_map([cursor],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?,r.get::<_,u32>(5)?,r.get::<_,String>(6)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -300,7 +303,7 @@ pub fn analyze(
             let fingerprint = format!("rust-v1:{file}:{size}:{mtime}:{orientation}:{embedder_key}");
             let complete:bool=collection.db.query_row("SELECT EXISTS(SELECT 1 FROM face_jobs WHERE photo_id=? AND stage='detect' AND model_id=? AND status='done' AND fingerprint=?)",params![photo,detector_key,fingerprint],|r|r.get(0))?;
             if !complete {
-                let result = (|| -> Result<usize> {
+                let result = (|| -> Result<(usize, usize)> {
                     let image = previews::load(
                         &collection.safe_path(&relative)?,
                         exiftool,
@@ -308,16 +311,28 @@ pub fn analyze(
                         1600,
                         control,
                     )?;
-                    let detections = models.detect(&image)?;
-                    let mut embedded = Vec::new();
+                    let detections = models.detect_with_control(&image, control)?;
+                    let mut embedded = Vec::with_capacity(detections.len());
+                    let mut embedding_errors = 0;
                     for detection in &detections {
                         control.checkpoint()?;
-                        embedded.push(models.embed(&image, detection)?);
+                        let quality = detection.embedding_quality();
+                        if quality < 0.5 {
+                            embedded.push((quality, None));
+                            continue;
+                        }
+                        match models.embed(&image, detection) {
+                            Ok(vector) => embedded.push((quality, Some(vector))),
+                            Err(_) => {
+                                embedding_errors += 1;
+                                embedded.push((0.0, None));
+                            }
+                        }
                     }
                     let old=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? ORDER BY f.assignment='user' DESC,f.retained,f.id"))?.query_map([photo],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
                     let tx = collection.db.transaction()?;
                     let mut used = BTreeSet::new();
-                    for (detection, vector) in detections.iter().zip(&embedded) {
+                    for (detection, (quality, vector)) in detections.iter().zip(&embedded) {
                         let bbox = [
                             detection.bbox[0] / image.width() as f32,
                             detection.bbox[1] / image.height() as f32,
@@ -331,12 +346,6 @@ pub fn analyze(
                             .max_by(|a, b| a.0.total_cmp(&b.0))
                             .filter(|x| x.0 >= 0.5)
                             .map(|x| x.1);
-                        let quality = (detection.score
-                            * ((detection.bbox[2] - detection.bbox[0])
-                                .min(detection.bbox[3] - detection.bbox[1])
-                                / 80.0)
-                                .min(1.0))
-                        .clamp(0.0, 1.0);
                         let landmarks = serde_json::to_string(&detection.landmarks)?;
                         let id = if let Some(previous) = previous {
                             used.insert(previous.id);
@@ -346,10 +355,18 @@ pub fn analyze(
                             tx.execute("INSERT INTO faces(photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality,captured_at,source_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",params![photo,file,relative,detector_key,bbox[0],bbox[1],bbox[2],bbox[3],landmarks,detection.score,quality,date,fingerprint])?;
                             tx.last_insert_rowid()
                         };
-                        tx.execute(
-                            "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
-                            params![id, embedder_key, vector.len() as i64, encode(vector)],
-                        )?;
+                        if let Some(vector) = vector {
+                            tx.execute(
+                                "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
+                                params![id, embedder_key, vector.len() as i64, encode(vector)],
+                            )?;
+                        } else {
+                            // A weaker detection may retain an explicit label or pin, never an old suggestion.
+                            tx.execute(
+                                "UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL,assigned_at=NULL WHERE id=? AND assignment IN ('auto','suggested')",
+                                [id],
+                            )?;
+                        }
                     }
                     for face in old.iter().filter(|f| !used.contains(&f.id)) {
                         if face.assignment.as_deref() == Some("user") || face.ignored {
@@ -359,13 +376,30 @@ pub fn analyze(
                         }
                     }
                     tx.execute("INSERT OR REPLACE INTO face_jobs VALUES(?,'detect',?,'done',NULL,datetime('now'),?)",params![photo,detector_key,fingerprint])?;
-                    tx.execute("INSERT OR REPLACE INTO face_jobs VALUES(?,'embed',?,'done',NULL,datetime('now'),?)",params![photo,embedder_key,fingerprint])?;
+                    let embed_status = if embedding_errors == 0 {
+                        "done"
+                    } else {
+                        "error"
+                    };
+                    let embed_error = (embedding_errors > 0).then(|| {
+                        format!("{embedding_errors} Gesichter ohne berechenbare Namensmerkmale")
+                    });
+                    tx.execute("INSERT OR REPLACE INTO face_jobs VALUES(?,'embed',?,?,?,datetime('now'),?)",params![photo,embedder_key,embed_status,embed_error,fingerprint])?;
                     control.checkpoint()?;
                     tx.commit()?;
-                    Ok(detections.len())
+                    Ok((
+                        detections.len(),
+                        embedded
+                            .iter()
+                            .filter(|(_, vector)| vector.is_none())
+                            .count(),
+                    ))
                 })();
                 match result {
-                    Ok(n) => found += n,
+                    Ok((n, presence_only)) => {
+                        found += n;
+                        without_vector += presence_only;
+                    }
                     Err(e) => {
                         control.checkpoint()?;
                         failed += 1;
@@ -381,7 +415,7 @@ pub fn analyze(
     while prepare_groups(collection, &embedder_key, control)? > 0 {}
     collection.backup()?;
     Ok(format!(
-        "{done} Fotos geprüft · {found} Gesichter verarbeitet · {failed} Fehler"
+        "{done} Fotos geprüft · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"
     ))
 }
 pub fn encode(vector: &[f32]) -> Vec<u8> {

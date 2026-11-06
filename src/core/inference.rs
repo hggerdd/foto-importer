@@ -1,4 +1,5 @@
 //! Local CPU inference. Rust adapter keys deliberately isolate unvalidated vector spaces.
+use super::jobs::Control;
 use anyhow::{Context, Result, bail};
 use image::{DynamicImage, RgbImage};
 use ndarray::Array4;
@@ -132,6 +133,28 @@ pub struct Detection {
     pub landmarks: [[f32; 2]; 5],
     pub score: f32,
 }
+impl Detection {
+    pub(super) fn embedding_quality(&self) -> f32 {
+        if self.score < 0.8
+            || !self
+                .landmarks
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
+        {
+            return 0.0;
+        }
+        let face_size = (self.bbox[2] - self.bbox[0]).min(self.bbox[3] - self.bbox[1]);
+        (self.score * (face_size / 80.0).min(1.0)).clamp(0.0, 1.0)
+    }
+}
+
+pub(super) fn presence_detector_key(model_key: &str) -> String {
+    let base = model_key
+        .split_once(":presence-v")
+        .map_or(model_key, |(base, _)| base);
+    format!("{base}:presence-v2")
+}
 pub struct Models {
     pub detector: Manifest,
     pub embedder: Manifest,
@@ -176,6 +199,51 @@ impl Models {
         })
     }
     pub fn detect(&mut self, image: &DynamicImage) -> Result<Vec<Detection>> {
+        self.detect_with_control(image, &Control::default())
+    }
+
+    pub fn detect_with_control(
+        &mut self,
+        image: &DynamicImage,
+        control: &Control,
+    ) -> Result<Vec<Detection>> {
+        let threshold = if self.detector.runtime == "opencv_yunet" {
+            0.60
+        } else {
+            0.55
+        };
+        control.checkpoint()?;
+        let mut candidates = self.detect_pass(image, threshold)?;
+        let (width, height) = (image.width(), image.height());
+        for [x, y, w, h] in presence_tiles(width, height) {
+            control.checkpoint()?;
+            for mut hit in self.detect_pass(&image.crop_imm(x, y, w, h), threshold)? {
+                let [left, top, right, bottom] = hit.bbox;
+                // The whole-image pass covers faces cut by internal tile edges.
+                if (x > 0 && left <= 3.0)
+                    || (y > 0 && top <= 3.0)
+                    || (x + w < width && right >= w as f32 - 3.0)
+                    || (y + h < height && bottom >= h as f32 - 3.0)
+                {
+                    continue;
+                }
+                hit.bbox = [
+                    left + x as f32,
+                    top + y as f32,
+                    right + x as f32,
+                    bottom + y as f32,
+                ];
+                for [px, py] in &mut hit.landmarks {
+                    *px += x as f32;
+                    *py += y as f32;
+                }
+                candidates.push(hit);
+            }
+        }
+        Ok(suppress_overlaps(candidates))
+    }
+
+    fn detect_pass(&mut self, image: &DynamicImage, threshold: f32) -> Result<Vec<Detection>> {
         let yunet = self.detector.runtime == "opencv_yunet";
         let size = if yunet {
             [640, 640]
@@ -235,7 +303,7 @@ impl Models {
                     .1;
                 for i in 0..cls.len() {
                     let score = (cls[i].clamp(0.0, 1.0) * obj[i].clamp(0.0, 1.0)).sqrt();
-                    if score < 0.8 {
+                    if !score.is_finite() || score < threshold {
                         continue;
                     }
                     let x = (i as u32 % (size[0] / stride)) as f32;
@@ -279,7 +347,7 @@ impl Models {
                     continue;
                 }
                 for (i, score) in scores.iter().enumerate() {
-                    if *score < 0.8 {
+                    if !score.is_finite() || *score < threshold {
                         continue;
                     }
                     let index = i / anchors;
@@ -306,18 +374,26 @@ impl Models {
                 }
             }
         }
-        candidates.retain(|d| {
-            d.bbox.iter().all(|x| x.is_finite()) && d.bbox[2] > d.bbox[0] && d.bbox[3] > d.bbox[1]
-        });
-        candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
-        candidates.truncate(5000);
-        let mut kept: Vec<Detection> = Vec::new();
-        for candidate in candidates {
-            if kept.iter().all(|d| iou(d.bbox, candidate.bbox) < 0.3) {
-                kept.push(candidate);
+        let (width, height) = (image.width() as f32, image.height() as f32);
+        candidates.retain_mut(|d| {
+            if !d.bbox.iter().all(|x| x.is_finite()) {
+                return false;
             }
-        }
-        Ok(kept)
+            let [left, top, right, bottom] = d.bbox;
+            let center_x = (left + right) * 0.5;
+            let center_y = (top + bottom) * 0.5;
+            if !(0.0..width).contains(&center_x) || !(0.0..height).contains(&center_y) {
+                return false;
+            }
+            d.bbox = [
+                left.clamp(0.0, width),
+                top.clamp(0.0, height),
+                right.clamp(0.0, width),
+                bottom.clamp(0.0, height),
+            ];
+            d.bbox[2] - d.bbox[0] >= 8.0 && d.bbox[3] - d.bbox[1] >= 8.0
+        });
+        Ok(suppress_overlaps(candidates))
     }
     pub fn embed(&mut self, image: &DynamicImage, detection: &Detection) -> Result<Vec<f32>> {
         let aligned = align(&image.to_rgb8(), detection.landmarks)?;
@@ -363,6 +439,32 @@ pub fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     let score = a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
     score.is_finite().then_some(score.clamp(-1.0, 1.0))
 }
+fn presence_tiles(width: u32, height: u32) -> Vec<[u32; 4]> {
+    if width.max(height) < 720 || width.min(height) < 320 {
+        return Vec::new();
+    }
+    let w = width * 5 / 8;
+    let h = height * 5 / 8;
+    vec![
+        [0, 0, w, h],
+        [width - w, 0, w, h],
+        [0, height - h, w, h],
+        [width - w, height - h, w, h],
+    ]
+}
+
+fn suppress_overlaps(mut candidates: Vec<Detection>) -> Vec<Detection> {
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    candidates.truncate(5000);
+    let mut kept: Vec<Detection> = Vec::new();
+    for candidate in candidates {
+        if kept.iter().all(|d| iou(d.bbox, candidate.bbox) < 0.3) {
+            kept.push(candidate);
+        }
+    }
+    kept
+}
+
 pub fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
     let intersection =
         (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
@@ -439,4 +541,26 @@ pub fn align(image: &RgbImage, source: [[f32; 2]; 5]) -> Result<RgbImage> {
         *pixel = image::Rgb(color.map(|v| v.round().clamp(0.0, 255.0) as u8));
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_passes_keep_one_hit_per_face_and_allow_weak_presence() {
+        let hit = |bbox, score| Detection {
+            bbox,
+            landmarks: [[1.0; 2]; 5],
+            score,
+        };
+        let detections = suppress_overlaps(vec![
+            hit([21.0, 21.0, 101.0, 101.0], 0.75),
+            hit([20.0, 20.0, 100.0, 100.0], 0.90),
+            hit([115.0, 21.0, 140.0, 49.0], 0.65),
+        ]);
+        assert_eq!(detections.len(), 2);
+        assert!(detections[0].embedding_quality() >= 0.5);
+        assert!(detections[1].embedding_quality() < 0.5);
+    }
 }

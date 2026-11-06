@@ -447,7 +447,7 @@ impl PhotoApp {
         self.launch("Sammlung durchsuchen", false, "search", move |control| {
             let c = Collection::open(&root, false)?;
             c.cancel_with(&control);
-            let detector = faces::setting(&c, "rust.detector_key")?.unwrap_or_default();
+            let detector = faces::active_detector_key(&c)?.unwrap_or_default();
             Ok(Outcome::Search(
                 revision,
                 c.status()?,

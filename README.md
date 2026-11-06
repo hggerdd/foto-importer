@@ -28,6 +28,10 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
   **Personen** in den Bildmetadaten lassen sich als Suchkriterien übernehmen.
   Unter **Filter** kann man die Anzahl erkannter Gesichter mit Datum,
   Kamera oder weiteren Kriterien kombinieren.
+  Für **Nur diese Personen · kein weiteres erkanntes Gesicht** wähle
+  die gewünschte Person unter **Alle diese Personen**. Nach einem Wechsel
+  der Erkennungsregel startet **Personen → Fotos analysieren** die nötige
+  Neuanalyse. Auch schwache, unbenannte Treffer zählen bei der Suche.
 * **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
   benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
   abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.
