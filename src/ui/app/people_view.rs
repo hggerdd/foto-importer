@@ -35,6 +35,7 @@ impl PhotoApp {
             egui::ScrollArea::vertical()
                 .id_salt("person-management")
                 .show(ui, |ui| self.person_manager(ui));
+            self.show_relationship_graph(ui.ctx());
             return;
         }
         ui.horizontal(|ui| {
@@ -287,7 +288,24 @@ impl PhotoApp {
     }
     pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
         let mut photos = None;
+        let mut graph_from = None;
         ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !self.face_page.people.is_empty(),
+                    egui::Button::new("Beziehungsgraph …"),
+                )
+                .on_hover_text("Gemeinsame Fotos und eingetragene Beziehungen als Graph ansehen")
+                .clicked()
+            {
+                graph_from = self.relation_from.or_else(|| {
+                    self.face_page
+                        .people
+                        .iter()
+                        .max_by_key(|person| person.count)
+                        .map(|person| person.id)
+                });
+            }
             if ui
                 .add_enabled(
                     !self.busy() && self.relation_from.is_some(),
@@ -366,10 +384,16 @@ impl PhotoApp {
                         if ui.small_button("Fotos").clicked() {
                             photos = Some(person.id);
                         }
+                        if ui.small_button("Graph").clicked() {
+                            graph_from = Some(person.id);
+                        }
                     });
                 }
             });
         ui.separator();
+        if let Some(person) = graph_from {
+            self.open_relationship_graph(person);
+        }
         if let Some(person) = photos {
             self.filters = Search {
                 people_all: vec![person],

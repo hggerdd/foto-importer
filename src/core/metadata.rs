@@ -277,6 +277,7 @@ pub const FIELDS: &[(&str, &str)] = &[
     ("face_count", "Anzahl erkannter Gesichter"),
 ];
 const CURRENT_FACES: &str = "f.photo_id=p.photo_id AND f.retained=0";
+pub(super) const PHOTO_FORMATS: &str = "p.ext IN ('jpg','jpeg','png','gif','bmp','tif','tiff','nef','nrw','dng','heic','arw','cr2','cr3','orf')";
 const DETECTION_DONE: &str = "EXISTS(SELECT 1 FROM face_jobs j WHERE j.photo_id=p.photo_id AND j.stage='detect' AND j.model_id=? AND j.status='done')";
 
 fn compile_face_count(rule: &Rule, detector: &str) -> Result<(String, Vec<Value>)> {
@@ -401,7 +402,7 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
     {
         bail!("Zu viele Kriterien");
     }
-    let mut clauses=vec!["p.ext IN ('jpg','jpeg','png','gif','bmp','tif','tiff','nef','nrw','dng','heic','arw','cr2','cr3','orf')".to_string()];
+    let mut clauses = vec![PHOTO_FORMATS.to_owned()];
     let mut args = Vec::new();
     let state = if search.suggestions {
         "f.assignment IN ('user','auto','suggested')"

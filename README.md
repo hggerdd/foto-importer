@@ -34,6 +34,9 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
   Die Übersicht unterscheidet Fotoanalyse, Referenzauswahl nach Bestätigungen
   und Abgleich für Namensvorschläge. **Automatik & Werkzeuge** zeigt den
   Zeitplan und enthält Einrichtung, Export und Wartung.
+  **Personen & Beziehungen → Beziehungsgraph** zeigt gemeinsame Fotos.
+  Dickere Linien stehen für mehr gemeinsame Aufnahmen, gestrichelte für
+  eingetragene Beziehungen ohne gemeinsames Foto.
   Nach dem Speichern rückt die nächste offene Gruppe an die bisherige
   Bildschirmposition, soweit die Liste genug Platz zum Scrollen bietet.
   Namen am Bild lassen sich anklicken; Details bieten Löschen und Referenzaktionen.

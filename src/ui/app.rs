@@ -2,6 +2,7 @@ mod collection_view;
 mod import_view;
 mod people_view;
 mod recognition_view;
+mod relationship_view;
 mod settings_view;
 #[cfg(test)]
 mod tests;
@@ -60,6 +61,7 @@ enum Outcome {
     Imported(files::ImportReport),
     Suggestions(u64, i64, Vec<(i64, String, f32)>),
     Report(String),
+    RelationshipGraph(u64, crate::core::relationship_graph::Graph),
     RuntimeDownloaded(PathBuf),
     ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
     DngUpdate(
@@ -169,6 +171,7 @@ pub struct PhotoApp {
     relation_to: Option<i64>,
     relation_kind: String,
     person_edit: Option<faces::Person>,
+    relationship_graph: relationship_view::RelationshipView,
     report: Option<String>,
     delete_phrase: String,
     move_old: String,
@@ -249,6 +252,7 @@ impl PhotoApp {
             relation_to: None,
             relation_kind: "parent".into(),
             person_edit: None,
+            relationship_graph: Default::default(),
             report: None,
             delete_phrase: String::new(),
             move_old: String::new(),
@@ -779,6 +783,12 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Report(text)) => self.report = Some(text),
+                Ok(Outcome::RelationshipGraph(revision, graph))
+                    if running.collection == self.settings.collection
+                        && revision == self.relationship_graph.revision =>
+                {
+                    self.relationship_graph.data = Some(graph);
+                }
                 Ok(Outcome::RuntimeDownloaded(path)) => {
                     let previous = std::mem::replace(
                         &mut self.settings.onnx_runtime,
@@ -895,6 +905,7 @@ impl PhotoApp {
                             self.page = SearchPage::default();
                             self.selected_photo = None;
                             self.face_page = FacePage::default();
+                            self.relationship_graph.clear();
                             self.maintenance_paused = false;
                             self.auto_analysis_pending = false;
                             self.face_index = 0;

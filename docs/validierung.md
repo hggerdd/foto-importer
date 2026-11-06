@@ -71,3 +71,12 @@ Dialog für Automatik und einen Analyseauftrag mit 30 synthetischen Fotos.
 Der sichtbare Fortschritt stieg während der Analyse. Die Übersicht zeigte
 anschließend 30 analysierte Fotos. Die Statusregression prüft getrennte
 Abschlüsse für verschiedene Modelle und einen offenen Auftrag nach Abbruch.
+
+## Beziehungsgraph
+
+Die Graphregression prüft gemeinsame bestätigte Fotos gegen die
+Sammlungssuche. Doppelte Vorkommen erhöhen die Fotozahl nicht.
+Historische Gesichter, Vorschläge und weitergeleitete Personen tragen
+nichts zur Fotozahl bei. Eingetragene Beziehungen ohne gemeinsames
+Foto bleiben sichtbar. Ein zweiter Test prüft die Grenze von zwölf
+angezeigten Verbindungen.

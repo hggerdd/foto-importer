@@ -13,3 +13,4 @@ pub mod migrations;
 pub mod onnx_runtime;
 pub mod previews;
 pub mod recognition;
+pub mod relationship_graph;

@@ -12,6 +12,7 @@ flowchart TB
     Commands --> Writer[Ein aktiver UI-Schreibauftrag]
     Commands --> Copy[Importdienst · Kopier- und DNG-Warteschlangen]
     Readers --> Query[Begrenzte SQL-Suche]
+    Readers --> Graph[Beziehungsgraph · eindeutige gemeinsame Foto-IDs]
     Readers --> Preview[Orientierte Vorschauen · begrenzter Cache]
     Writer --> Index[Inventar / Identitäten / BLAKE3]
     Writer --> Faces[Personen / Gesichter / Referenzen]
@@ -21,6 +22,7 @@ flowchart TB
     Runtime -->|DLL im Benutzerprofil| ONNX
     Writer --> Lock[Exklusive Host/PID-Sperrdatei]
     Query --> DB[(SQLite .myfotomanager · Schema 6)]
+    Graph --> DB
     Index --> DB
     Faces --> DB
     Migrations --> DB
