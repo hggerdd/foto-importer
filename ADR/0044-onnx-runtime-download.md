@@ -35,7 +35,7 @@ gewählter aktueller Release erschwert reproduzierbare Kompatibilitätsprüfunge
 
 Eine bestehende Installation bleibt beim Fehler und beim Abbruch verwendbar.
 Wiederholte Downloads können zusätzlichen Platz belegen. Die Runtime wird nur
-auf Klick bezogen. Modellgewichte bleiben eine separate Einrichtung. Wenn bereits
+auf Klick bezogen. Die separate Gewichtsinstallation regelt [ADR-0046](0046-gesichtsmodelle-installieren.md). Wenn bereits
 eine andere Runtime geladen wurde, muss die App nach dem Wechsel neu gestartet werden.
 
 ## Bei Weiterentwicklung beachten

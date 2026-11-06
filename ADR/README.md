@@ -112,3 +112,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0043](0043-portables-release-paket.md) | Portables Windows-Release-Paket | Akzeptiert |
 | [0044](0044-onnx-runtime-download.md) | ONNX Runtime auf Klick im Benutzerprofil installieren | Akzeptiert |
 | [0045](0045-fotofokus-in-der-sammlung.md) | Kompakte Sammlungsleiste mit Galerie und großem Inspektor | Akzeptiert |
+| [0046](0046-gesichtsmodelle-installieren.md) | Standard-Gesichtsmodelle auf Klick im Benutzerprofil installieren | Akzeptiert |

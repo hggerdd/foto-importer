@@ -14,6 +14,22 @@ impl PhotoApp {
                 self.runtime_download_button(ui);
             });
         }
+        let installing = self.models_installing();
+        let weights_present = self.model_weights_present();
+        if installing || !weights_present {
+            theme::card(ui).show(ui, |ui| {
+                ui.label("Für die Gesichtsanalyse fehlen Modellgewichte.");
+                ui.horizontal_wrapped(|ui| {
+                    self.model_install_button(ui);
+                    if ui
+                        .add_enabled(!installing, egui::Button::new("Modellordner wählen …"))
+                        .clicked()
+                    {
+                        self.pick(Pick::Models);
+                    }
+                });
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             if ui.button("Sammlung wählen …").clicked() {
                 self.pick(Pick::Collection);
@@ -24,7 +40,9 @@ impl PhotoApp {
             ] {
                 if ui
                     .add_enabled(
-                        !self.busy() && !self.settings.collection.is_empty(),
+                        !self.busy()
+                            && !self.settings.collection.is_empty()
+                            && (action != "analyze" || (!installing && weights_present)),
                         egui::Button::new(label),
                     )
                     .clicked()
