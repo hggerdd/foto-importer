@@ -123,9 +123,20 @@ impl Recorded {
     }
 }
 
+/// Ausschnitt eines Gesichts für die Darstellung im Knoten.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Portrait {
+    /// Relativer Pfad des Fotos in der Sammlung.
+    pub source: String,
+    /// Normierter Rahmen `[x1, y1, x2, y2]`.
+    pub bbox: [f32; 4],
+}
+
 pub struct Node {
     pub person: i64,
     pub name: String,
+    /// Typischstes Gesicht der Person, falls vorhanden.
+    pub portrait: Option<Portrait>,
     /// Eindeutige Fotos mit bestätigter Zuordnung (wie in der Sammlungssuche).
     pub photos: usize,
 }
@@ -239,10 +250,22 @@ pub fn network(collection: &Collection) -> Result<Network> {
         *degree.entry(*a).or_default() += 1;
         *degree.entry(*b).or_default() += 1;
     }
+    // Fehlende Gesichter dürfen den Graphen nicht verhindern.
+    let embedder = super::faces::setting(collection, "rust.embedder_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let ids: Vec<i64> = people.iter().map(|(id, _)| *id).collect();
+    let mut portraits =
+        super::faces::person_portraits(collection, &embedder, &ids).unwrap_or_default();
     let mut nodes: Vec<Node> = people
         .into_iter()
         .map(|(person, name)| Node {
             photos: counts.get(&person).copied().unwrap_or(0),
+            portrait: portraits.remove(&person).map(|face| Portrait {
+                source: face.source,
+                bbox: face.bbox,
+            }),
             person,
             name,
         })

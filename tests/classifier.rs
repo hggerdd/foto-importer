@@ -147,3 +147,41 @@ fn stored_model_orders_collection_suggestions_with_fallback() -> anyhow::Result<
     assert!(rejected.items.iter().all(|i| i.0 != 2));
     Ok(())
 }
+
+#[test]
+fn batch_portraits_match_single_portraits_and_fall_back_without_features() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    let mut state = 5;
+    let mut face_id = 0i64;
+    for person in 1..=3i64 {
+        c.db.execute("INSERT INTO persons(id) VALUES(?)", [person])?;
+        for _ in 0..6 {
+            face_id += 1;
+            c.db.execute(
+                "INSERT INTO photos(id,status) VALUES(?,'present')",
+                [face_id],
+            )?;
+            c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,person_id,assignment) VALUES(?,?,'a.jpg','det',0,0,1,1,?,?,'user')", params![face_id, face_id, if person == 3 { 0.4 + face_id as f64 * 0.01 } else { 0.9 }, person])?;
+            // Person 3 hat keine Merkmale und fällt auf das beste Gesicht zurück.
+            if person < 3 {
+                c.db.execute(
+                    "INSERT INTO face_embeddings VALUES(?,'test',16,?)",
+                    params![face_id, faces::encode(&sample(person, &mut state))],
+                )?;
+            }
+        }
+    }
+    let batch = faces::person_portraits(&c, "test", &[1, 2, 3])?;
+    for person in [1, 2] {
+        let single = faces::person_portrait(&c, person, "test")?.map(|f| f.id);
+        assert_eq!(batch.get(&person).map(|f| f.id), single, "Person {person}");
+        assert_eq!(batch[&person].person, Some(person));
+    }
+    // Ersatz: höchste Qualität (zuletzt eingefügtes Gesicht der Person 3).
+    assert_eq!(batch[&3].id, 18);
+    // Nicht angefragte Personen und leerer Embedder bleiben begrenzt.
+    assert_eq!(faces::person_portraits(&c, "test", &[1])?.len(), 1);
+    assert_eq!(faces::person_portraits(&c, "", &[1, 2])?.len(), 2);
+    Ok(())
+}

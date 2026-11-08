@@ -146,6 +146,32 @@ impl Thumbnails {
             config::CACHE_BYTES,
         );
     }
+    /// Textur zu einer Anfrage ohne sie zu zeichnen (z. B. für runde Ausschnitte).
+    /// Stößt das Laden auf dem Worker an; `None`, solange nichts vorliegt.
+    pub fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        mut request: PreviewRequest,
+        exiftool: &str,
+    ) -> Option<(egui::TextureId, egui::Vec2)> {
+        self.tick += 1;
+        request.generation = self.generation.load(Ordering::Relaxed);
+        let key = cache_key(&request);
+        if let Some(entry) = self.cache.get_mut(&key) {
+            entry.tick = self.tick;
+            entry.frame = ctx.cumulative_frame_nr();
+            return entry.texture.as_ref().map(|t| (t.id(), t.size_vec2()));
+        }
+        if !self.pending.contains(&key)
+            && self
+                .requests
+                .try_send((key.clone(), request, exiftool.to_string()))
+                .is_ok()
+        {
+            self.pending.insert(key);
+        }
+        None
+    }
     pub fn image(
         &mut self,
         ui: &mut egui::Ui,

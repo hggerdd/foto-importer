@@ -221,18 +221,8 @@ pub fn person_portrait(
         .into_iter()
         .filter_map(|(id, bytes)| Some((id, inference::normalize(&decode(&bytes).ok()?).ok()?)))
         .collect();
-    let best = vectors
-        .iter()
-        .map(|(id, v)| {
-            let total: f32 = vectors
-                .iter()
-                .filter(|(other, _)| other != id)
-                .filter_map(|(_, w)| inference::cosine(v, w))
-                .sum();
-            (*id, total)
-        })
-        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
-    let Some((id, _)) = best else {
+    let best = medoid(&vectors);
+    let Some(id) = best else {
         return Ok(None);
     };
     Ok(collection
@@ -243,6 +233,100 @@ pub fn person_portrait(
             face_row,
         )
         .optional()?)
+}
+/// ID des Vektors mit der höchsten mittleren Ähnlichkeit zu den übrigen (Medoid);
+/// bei Gleichstand die kleinere ID.
+fn medoid(vectors: &[(i64, Vec<f32>)]) -> Option<i64> {
+    vectors
+        .iter()
+        .map(|(id, v)| {
+            let total: f32 = vectors
+                .iter()
+                .filter(|(other, _)| other != id)
+                .filter_map(|(_, w)| inference::cosine(v, w))
+                .sum();
+            (*id, total)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+        .map(|(id, _)| id)
+}
+/// Typischstes Gesicht für viele Personen auf einmal (Personengraph): je Person das
+/// Medoid der höchstens 40 besten bestätigten Gesichter mit Merkmalen. Personen
+/// ohne Merkmale erhalten ersatzweise ihr Gesicht mit der besten Qualität.
+pub fn person_portraits(
+    collection: &Collection,
+    embedder: &str,
+    persons: &[i64],
+) -> Result<BTreeMap<i64, Face>> {
+    let wanted: BTreeSet<i64> = persons.iter().copied().collect();
+    let mut chosen: BTreeMap<i64, i64> = BTreeMap::new();
+    if !embedder.is_empty() {
+        let rows: Vec<(i64, i64, Vec<u8>)> = collection
+            .db
+            .prepare(
+                "SELECT person_id,id,vec FROM (
+                   SELECT f.person_id,f.id,e.vec,
+                          row_number() OVER (PARTITION BY f.person_id ORDER BY f.quality DESC,f.id) rn
+                   FROM faces f JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?
+                   WHERE f.assignment='user' AND f.ignored=0 AND f.retained=0
+                     AND f.quality>=0.5 AND f.person_id IS NOT NULL AND f.bbox_x1 IS NOT NULL
+                 ) WHERE rn<=40 ORDER BY person_id,rn",
+            )?
+            .query_map([embedder], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut by_person: BTreeMap<i64, Vec<(i64, Vec<f32>)>> = BTreeMap::new();
+        for (person, id, bytes) in rows {
+            if !wanted.contains(&person) {
+                continue;
+            }
+            if let Some(vector) = decode(&bytes)
+                .ok()
+                .and_then(|v| inference::normalize(&v).ok())
+            {
+                by_person.entry(person).or_default().push((id, vector));
+            }
+        }
+        for (person, vectors) in by_person {
+            if let Some(id) = medoid(&vectors) {
+                chosen.insert(person, id);
+            }
+        }
+    }
+    let fallback: Vec<(i64, i64)> = collection
+        .db
+        .prepare(
+            "SELECT person_id,id FROM (
+               SELECT person_id,id,
+                      row_number() OVER (PARTITION BY person_id ORDER BY coalesce(quality,0) DESC,id) rn
+               FROM faces WHERE assignment='user' AND ignored=0 AND retained=0 AND person_id IS NOT NULL
+                 AND bbox_x1 IS NOT NULL AND bbox_y1 IS NOT NULL AND bbox_x2 IS NOT NULL AND bbox_y2 IS NOT NULL
+             ) WHERE rn=1",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (person, id) in fallback {
+        if wanted.contains(&person) {
+            chosen.entry(person).or_insert(id);
+        }
+    }
+    let mut result = BTreeMap::new();
+    for (person, id) in chosen {
+        // Ein einzelnes defektes Gesicht darf die übrigen Porträts nicht verhindern.
+        if let Some(face) = collection
+            .db
+            .query_row(
+                &format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.id=?"),
+                [id],
+                face_row,
+            )
+            .optional()
+            .ok()
+            .flatten()
+        {
+            result.insert(person, face);
+        }
+    }
+    Ok(result)
 }
 pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
     Ok(collection

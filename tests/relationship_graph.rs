@@ -36,8 +36,8 @@ fn weights_match_joint_photo_search_and_include_recorded_zero_links() -> anyhow:
         (999, 2, "user", 0),
     ] {
         collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained)
-             VALUES(?,'a.jpg','det',?,?,?)",
+            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,'a.jpg','det',?,?,?,0.1,0.1,0.5,0.5)",
             rusqlite::params![photo, person, assignment, retained],
         )?;
     }
@@ -111,12 +111,19 @@ fn network_contains_all_people_and_matches_the_photo_counts() -> anyhow::Result<
         (second, 3, "user", 1),
     ] {
         collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained)
-             VALUES(?,'a.jpg','det',?,?,?)",
+            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,'a.jpg','det',?,?,?,0.1,0.1,0.5,0.5)",
             rusqlite::params![photo, person, assignment, retained],
         )?;
     }
     let network = relationship_graph::network(&collection)?;
+    assert!(
+        network
+            .nodes
+            .iter()
+            .all(|n| n.photos == 0 || n.portrait.is_some()),
+        "jede Person mit Fotos hat ein Porträt"
+    );
     // Alle nicht zusammengeführten Personen sind Knoten, auch ohne Fotos.
     assert_eq!(network.nodes.len(), 4);
     assert_eq!(network.positions.len(), 4);

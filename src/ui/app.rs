@@ -1253,7 +1253,7 @@ impl eframe::App for PhotoApp {
         self.windows(ctx);
         if let Ok(path) = std::env::var("FOTO_IMPORTER_CAPTURE") {
             ctx.request_repaint_after(Duration::from_millis(100));
-            if self.capture_started.elapsed() > Duration::from_secs(5) && !self.capture_requested
+            if self.capture_started.elapsed() > capture_delay() && !self.capture_requested
                 || ctx.input(|i| i.key_pressed(egui::Key::F12))
             {
                 self.capture_requested = true;
@@ -1341,4 +1341,13 @@ fn operator_label(value: &str) -> &str {
         "empty" => "fehlt",
         _ => "ist",
     }
+}
+/// Wartezeit bis zur Fensteraufnahme (Sichtprüfung), Standard fünf Sekunden;
+/// `FOTO_IMPORTER_CAPTURE_DELAY` setzt sie in Sekunden, z. B. wenn Bilder nachladen.
+fn capture_delay() -> Duration {
+    let seconds = std::env::var("FOTO_IMPORTER_CAPTURE_DELAY")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(5);
+    Duration::from_secs(seconds.clamp(1, 300))
 }

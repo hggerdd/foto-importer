@@ -155,6 +155,9 @@ fn initials(name: &str) -> String {
     }
 }
 
+/// Wunschradius eines Knotens mit Porträt in Punkten.
+const PORTRAIT_RADIUS: f32 = 14.0;
+
 fn node_radius(photos: usize, max: usize) -> f32 {
     0.16 + 0.2 * (photos as f32 / max.max(1) as f32).sqrt()
 }
@@ -232,7 +235,12 @@ impl PhotoApp {
             ui.label("Benenne Gesichter im Reiter „Benennen“, dann erscheinen sie hier.");
         } else {
             refresh = toolbar(ui, &mut self.relationship_graph, &network, loading);
-            canvas(ui, &mut self.relationship_graph, &network, dark);
+            let source = PortraitSource {
+                thumbnails: &mut self.thumbnails,
+                root: &self.settings.collection,
+                exiftool: &self.settings.exiftool,
+            };
+            canvas(ui, &mut self.relationship_graph, &network, dark, source);
         }
         self.relationship_graph.data = Some(network);
         if refresh {
@@ -310,7 +318,61 @@ fn toolbar(
 const MIN_SCALE: f32 = 1.5;
 const MAX_SCALE: f32 = 250.0;
 
-fn canvas(ui: &mut egui::Ui, view: &mut RelationshipView, network: &Network, dark: bool) {
+/// Zugriff auf Gesichtsausschnitte für die Knoten des Graphen.
+struct PortraitSource<'a> {
+    thumbnails: &'a mut Thumbnails,
+    root: &'a str,
+    exiftool: &'a str,
+}
+
+/// UV-Rechteck, das aus einer beliebigen Textur den mittleren quadratischen Teil wählt.
+fn square_uv(size: egui::Vec2) -> egui::Rect {
+    let (w, h) = (size.x.max(1.0), size.y.max(1.0));
+    let (u, v) = if w > h { (h / w, 1.0) } else { (1.0, w / h) };
+    egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v))
+}
+
+/// Zeichnet die Textur als Kreis (Dreiecksfächer mit passenden UV-Koordinaten).
+fn textured_circle(
+    painter: &egui::Painter,
+    centre: Pos2,
+    radius: f32,
+    texture: egui::TextureId,
+    uv: egui::Rect,
+    tint: Color32,
+) {
+    const SEGMENTS: u32 = 40;
+    let mut mesh = egui::Mesh::with_texture(texture);
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: centre,
+        uv: uv.center(),
+        color: tint,
+    });
+    for i in 0..=SEGMENTS {
+        let angle = std::f32::consts::TAU * i as f32 / SEGMENTS as f32;
+        let (sin, cos) = angle.sin_cos();
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: centre + egui::vec2(cos, sin) * radius,
+            uv: egui::pos2(
+                uv.center().x + cos * uv.width() * 0.5,
+                uv.center().y + sin * uv.height() * 0.5,
+            ),
+            color: tint,
+        });
+    }
+    for i in 0..SEGMENTS {
+        mesh.indices.extend([0, i + 1, i + 2]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+fn canvas(
+    ui: &mut egui::Ui,
+    view: &mut RelationshipView,
+    network: &Network,
+    dark: bool,
+    portraits: PortraitSource<'_>,
+) {
     let size = egui::vec2(
         ui.available_width(),
         (ui.available_height() - 4.0).max(200.0),
@@ -387,7 +449,16 @@ fn canvas(ui: &mut egui::Ui, view: &mut RelationshipView, network: &Network, dar
     let radius_px: Vec<f32> = network
         .nodes
         .iter()
-        .map(|n| (node_radius(n.photos, max_photos) * scale).max(3.0))
+        .map(|n| {
+            let base = (node_radius(n.photos, max_photos) * scale).max(3.0);
+            // Ein Porträt braucht Platz, um erkennbar zu sein; der Mindestabstand der
+            // Knoten (MIN_DISTANCE) bleibt gewahrt, damit sich nichts überlappt.
+            if n.portrait.is_some() {
+                base.max(PORTRAIT_RADIUS.min(crate::core::graph_layout::MIN_DISTANCE * 0.5 * scale))
+            } else {
+                base
+            }
+        })
         .collect();
 
     // Sichtbare Kanten gemäß Ebenen.
@@ -520,7 +591,31 @@ fn canvas(ui: &mut egui::Ui, view: &mut RelationshipView, network: &Network, dar
                 Stroke::new(1.0_f32, ui.visuals().window_fill)
             };
             painter.circle(at, r, fill, ring);
-            if r >= 9.0 {
+            let portrait = node.portrait.as_ref().filter(|_| r >= 8.0).and_then(|p| {
+                portraits.thumbnails.texture(
+                    ui.ctx(),
+                    PreviewRequest {
+                        root: Some(PathBuf::from(portraits.root)),
+                        path: Path::new(portraits.root).join(&p.source),
+                        orientation: 1,
+                        crop: Some(p.bbox),
+                        edge: 96,
+                        generation: 0,
+                    },
+                    portraits.exiftool,
+                )
+            });
+            if let Some((texture, size)) = portrait {
+                textured_circle(
+                    &painter,
+                    at,
+                    r - 1.0,
+                    texture,
+                    square_uv(size),
+                    Color32::WHITE.gamma_multiply(alpha),
+                );
+                painter.circle_stroke(at, r, ring);
+            } else if r >= 9.0 {
                 painter.text(
                     at,
                     Align2::CENTER_CENTER,
@@ -825,4 +920,22 @@ fn legend_row(ui: &mut egui::Ui, colour: Color32, text: &str, line: Line) {
         }
         ui.label(RichText::new(text).small());
     });
+}
+
+#[cfg(test)]
+mod portrait_tests {
+    use super::*;
+    #[test]
+    fn portraits_are_cropped_to_the_central_square() {
+        let wide = square_uv(egui::vec2(200.0, 100.0));
+        assert!((wide.width() - 0.5).abs() < 1e-6 && (wide.height() - 1.0).abs() < 1e-6);
+        let tall = square_uv(egui::vec2(100.0, 200.0));
+        assert!((tall.width() - 1.0).abs() < 1e-6 && (tall.height() - 0.5).abs() < 1e-6);
+        let square = square_uv(egui::vec2(96.0, 96.0));
+        assert_eq!(
+            square,
+            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
+        );
+        assert_eq!(wide.center(), egui::pos2(0.5, 0.5));
+    }
 }
