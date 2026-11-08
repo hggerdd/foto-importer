@@ -134,6 +134,14 @@ pub struct Detection {
     pub score: f32,
 }
 impl Detection {
+    /// Dieselbe Detektion in einem um `factor` größeren Bild.
+    pub(super) fn scaled(&self, factor: f32) -> Detection {
+        Detection {
+            bbox: self.bbox.map(|v| v * factor),
+            landmarks: self.landmarks.map(|p| p.map(|v| v * factor)),
+            score: self.score,
+        }
+    }
     pub(super) fn embedding_quality(&self) -> f32 {
         if self.score < 0.8
             || !self
@@ -562,5 +570,30 @@ mod presence_tests {
         assert_eq!(detections.len(), 2);
         assert!(detections[0].embedding_quality() >= 0.5);
         assert!(detections[1].embedding_quality() < 0.5);
+    }
+}
+
+#[cfg(test)]
+mod hires_tests {
+    use super::*;
+
+    #[test]
+    fn small_clear_face_becomes_usable_in_a_larger_image() {
+        let small = Detection {
+            bbox: [100.0, 100.0, 141.0, 152.0],
+            landmarks: [
+                [110.0, 120.0],
+                [130.0, 120.0],
+                [120.0, 130.0],
+                [112.0, 142.0],
+                [128.0, 142.0],
+            ],
+            score: 0.92,
+        };
+        assert!(small.embedding_quality() < 0.5);
+        let large = small.scaled(2.8);
+        assert!(large.embedding_quality() >= 0.5);
+        assert_eq!(large.score, small.score);
+        assert!((large.landmarks[2][0] - 336.0).abs() < 0.01);
     }
 }

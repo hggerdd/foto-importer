@@ -402,6 +402,34 @@ pub fn analyze(
                             }
                         }
                     }
+                    let small: Vec<usize> = detections
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, d)| embedded[*i].1.is_none() && is_small_but_clear(d))
+                        .map(|(i, _)| i)
+                        .collect();
+                    let hires_tried = !small.is_empty();
+                    if hires_tried
+                        && let Ok(hi) = previews::load(
+                            &collection.safe_path(&relative)?,
+                            exiftool,
+                            orientation,
+                            HIRES_EDGE,
+                            control,
+                        )
+                    {
+                        let factor = hi.width() as f32 / image.width() as f32;
+                        if factor > 1.05 {
+                            for i in small {
+                                control.checkpoint()?;
+                                if let Some(found) =
+                                    embed_hires(&mut models, &hi, &detections[i], factor)
+                                {
+                                    embedded[i] = (found.0, Some(found.1));
+                                }
+                            }
+                        }
+                    }
                     let old=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? ORDER BY f.assignment='user' DESC,f.retained,f.id"))?.query_map([photo],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
                     let tx = collection.db.transaction()?;
                     let mut used = BTreeSet::new();
@@ -449,6 +477,9 @@ pub fn analyze(
                         }
                     }
                     tx.execute("INSERT OR REPLACE INTO face_jobs VALUES(?,'detect',?,'done',NULL,datetime('now'),?)",params![photo,detector_key,fingerprint])?;
+                    if hires_tried {
+                        tx.execute("INSERT OR REPLACE INTO face_jobs VALUES(?,'hires',?,'done',NULL,datetime('now'),?)",params![photo,embedder_key,fingerprint])?;
+                    }
                     let embed_status = if embedding_errors == 0 {
                         "done"
                     } else {
@@ -480,6 +511,18 @@ pub fn analyze(
                     }
                 }
             }
+            if complete {
+                // Eine fehlgeschlagene Nachberechnung bricht die Analyse nicht ab.
+                let _ = upgrade_small_faces(
+                    collection,
+                    &mut models,
+                    (photo, &relative, orientation),
+                    (&embedder_key, &fingerprint),
+                    exiftool,
+                    control,
+                );
+                control.checkpoint()?;
+            }
             done += 1;
             control.progress(done, total);
         }
@@ -490,6 +533,120 @@ pub fn analyze(
     Ok(format!(
         "{done} Fotos geprüft · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"
     ))
+}
+/// Längere Bildkante für die Nachberechnung kleiner, klar erkannter Gesichter.
+const HIRES_EDGE: u32 = 3200;
+
+fn is_small_but_clear(detection: &inference::Detection) -> bool {
+    detection.score >= 0.8 && detection.embedding_quality() < 0.5
+}
+/// Größe und Namensmerkmale aus dem höher aufgelösten Bild; `None`, wenn das
+/// Gesicht auch dort zu klein oder nicht berechenbar ist.
+fn embed_hires(
+    models: &mut Models,
+    hi: &image::DynamicImage,
+    detection: &inference::Detection,
+    factor: f32,
+) -> Option<(f32, Vec<f32>)> {
+    let scaled = detection.scaled(factor);
+    let quality = scaled.embedding_quality();
+    if quality < 0.5 {
+        return None;
+    }
+    models
+        .embed(hi, &scaled)
+        .ok()
+        .map(|vector| (quality, vector))
+}
+/// Bereits analysierte Fotos nachrechnen: kleine, klar erkannte Gesichter ohne
+/// Namensmerkmale erhalten sie aus dem höher aufgelösten Bild. Pro Foto und
+/// Analysestand höchstens einmal.
+fn upgrade_small_faces(
+    collection: &mut Collection,
+    models: &mut Models,
+    (photo, relative, orientation): (i64, &str, u32),
+    (embedder_key, fingerprint): (&str, &str),
+    exiftool: &str,
+    control: &Control,
+) -> Result<()> {
+    let tried: bool = collection.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM face_jobs WHERE photo_id=? AND stage='hires' AND model_id=? AND fingerprint=?)",
+        params![photo, embedder_key, fingerprint],
+        |r| r.get(0),
+    )?;
+    if tried {
+        return Ok(());
+    }
+    let candidates: Vec<(i64, f32, String, [f32; 4])> = collection
+        .db
+        .prepare(
+            "SELECT f.id,f.det_score,f.landmarks,f.bbox_x1,f.bbox_y1,f.bbox_x2,f.bbox_y2 FROM faces f
+             WHERE f.photo_id=? AND f.retained=0 AND f.det_score>=0.8 AND f.quality<0.5
+               AND f.landmarks IS NOT NULL
+               AND NOT EXISTS(SELECT 1 FROM face_embeddings e WHERE e.face_id=f.id AND e.embedder_id=?)",
+        )?
+        .query_map(params![photo, embedder_key], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                [r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?],
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let hi = previews::load(
+        &collection.safe_path(relative)?,
+        exiftool,
+        orientation,
+        HIRES_EDGE,
+        control,
+    )?;
+    let long = hi.width().max(hi.height()) as f32;
+    // Gespeicherte Punkte stammen aus dem auf 1600 begrenzten Analysebild.
+    let factor = long / long.min(1600.0);
+    let (width, height) = (hi.width() as f32, hi.height() as f32);
+    let mut upgraded = Vec::new();
+    if factor > 1.05 {
+        for (id, score, landmarks, bbox) in candidates {
+            control.checkpoint()?;
+            let Ok(landmarks) = serde_json::from_str::<[[f32; 2]; 5]>(&landmarks) else {
+                continue;
+            };
+            let detection = inference::Detection {
+                bbox: [
+                    bbox[0] * width,
+                    bbox[1] * height,
+                    bbox[2] * width,
+                    bbox[3] * height,
+                ],
+                landmarks: landmarks.map(|p| p.map(|v| v * factor)),
+                score,
+            };
+            if let Some((quality, vector)) = embed_hires(models, &hi, &detection, 1.0) {
+                upgraded.push((id, quality, vector));
+            }
+        }
+    }
+    let tx = collection.db.transaction()?;
+    for (id, quality, vector) in &upgraded {
+        tx.execute(
+            "UPDATE faces SET quality=? WHERE id=?",
+            params![quality, id],
+        )?;
+        tx.execute(
+            "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
+            params![id, embedder_key, vector.len() as i64, encode(vector)],
+        )?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO face_jobs VALUES(?,'hires',?,'done',NULL,datetime('now'),?)",
+        params![photo, embedder_key, fingerprint],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 pub fn encode(vector: &[f32]) -> Vec<u8> {
     vector.iter().flat_map(|v| v.to_le_bytes()).collect()

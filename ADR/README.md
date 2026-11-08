@@ -120,3 +120,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0051](0051-trainierter-namensklassifikator.md) | Trainierter Softmax-Klassifikator für die Top-3-Namensvorschläge | Akzeptiert |
 | [0052](0052-stabile-bildtexturen.md) | Bildtexturen stabil im Cache halten; ergänzt 0011/0025 | Akzeptiert |
 | [0053](0053-kleine-gruppen-zusammenfuehren.md) | Kleine Gesichtsgruppen an ähnliche Gruppen anschließen | Akzeptiert |
+| [0054](0054-namensmerkmale-aus-hoher-aufloesung.md) | Namensmerkmale kleiner, klar erkannter Gesichter aus höherer Auflösung | Akzeptiert |
