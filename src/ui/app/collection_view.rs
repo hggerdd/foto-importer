@@ -610,9 +610,9 @@ impl PhotoApp {
                                         [width, 18.0],
                                         egui::Label::new(
                                             RichText::new(if photo.date.is_empty() {
-                                                "Datum unbekannt"
+                                                "Datum unbekannt".to_string()
                                             } else {
-                                                &photo.date
+                                                display_date(&photo.date)
                                             })
                                             .small()
                                             .weak(),
@@ -711,21 +711,18 @@ impl PhotoApp {
         scroller: egui::ScrollArea,
         photo: &Photo,
     ) -> egui::Rect {
-        let capture = [
-            ("Aufnahme", photo.date.as_str()),
+        let taken = display_date(&photo.date);
+        let iso = photo.iso.map(|iso| format!("{iso:.0}"));
+        let size = human_size(photo.size);
+        let mut summary = vec![
+            ("Aufnahme", taken.as_str()),
             ("Kamera", photo.camera.as_str()),
             ("Objektiv", photo.lens.as_str()),
         ];
-        let iso_size = photo.iso.map_or_else(
-            || human_size(photo.size),
-            |iso| format!("ISO {iso:.0} · {}", human_size(photo.size)),
-        );
-        let summary = [
-            capture[0],
-            capture[1],
-            capture[2],
-            ("Dateigröße", iso_size.as_str()),
-        ];
+        if let Some(iso) = &iso {
+            summary.push(("ISO", iso.as_str()));
+        }
+        summary.push(("Dateigröße", size.as_str()));
         const FACE_ROWS: usize = 2;
         let total = FACE_ROWS + summary.len() + self.detail_rows.len();
         scroller
@@ -751,16 +748,21 @@ impl PhotoApp {
                         (key.as_str(), value.as_str())
                     };
                     ui.horizontal(|ui| {
-                        ui.add_sized(
-                            [field_width, 23.0],
-                            egui::Label::new(RichText::new(key).small().weak()).truncate(),
-                        )
-                        .on_hover_text(key);
-                        ui.add_sized(
-                            [ui.available_width(), 23.0],
-                            egui::Label::new(value).truncate(),
-                        )
-                        .on_hover_text(value);
+                        // Beides linksbündig; `add_sized` würde die Texte zentrieren.
+                        let left = egui::Layout::left_to_right(egui::Align::Center);
+                        ui.allocate_ui_with_layout(egui::vec2(field_width, 23.0), left, |ui| {
+                            ui.set_min_size(egui::vec2(field_width, 23.0));
+                            ui.add(egui::Label::new(RichText::new(key).small().weak()).truncate())
+                                .on_hover_text(key);
+                        });
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 23.0),
+                            left,
+                            |ui| {
+                                ui.add(egui::Label::new(value).truncate())
+                                    .on_hover_text(value);
+                            },
+                        );
                     });
                 }
             })
@@ -771,9 +773,13 @@ impl PhotoApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().interact_size.y = 23.0;
             let label = if row == 0 { "Gesichter" } else { "Personen" };
-            ui.add_sized(
-                [field_width, 23.0],
-                egui::Label::new(RichText::new(label).small().weak()),
+            ui.allocate_ui_with_layout(
+                egui::vec2(field_width, 23.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(field_width, 23.0));
+                    ui.add(egui::Label::new(RichText::new(label).small().weak()));
+                },
             );
             if row == 0 {
                 let count = self.detail_faces.len();

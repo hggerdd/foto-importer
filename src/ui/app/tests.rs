@@ -329,3 +329,18 @@ fn hovering_a_face_shows_exactly_that_photo_and_leaving_hides_it() {
     draw(&mut app, Some(at));
     assert!(app.hover_face.is_none());
 }
+
+#[test]
+fn dates_and_sizes_are_shown_in_german_notation_without_touching_unknown_formats() {
+    assert_eq!(display_date("2026:10:25 15:30:00"), "25.10.2026 · 15:30:00");
+    assert_eq!(
+        display_date("2026-10-25T15:30:00+01:00"),
+        "25.10.2026 · 15:30:00"
+    );
+    assert_eq!(display_date("2026:10:25"), "25.10.2026");
+    assert_eq!(display_date("gestern Abend"), "gestern Abend");
+    assert_eq!(display_date("2026:13"), "2026:13");
+    assert_eq!(display_date(""), "");
+    assert_eq!(human_size(300 * 1024), "300 KB");
+    assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+}

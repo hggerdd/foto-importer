@@ -1218,8 +1218,40 @@ impl eframe::App for PhotoApp {
 fn human_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.1} GB", bytes as f64 / 1073741824.0)
-    } else {
+    } else if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / 1048576.0)
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    }
+}
+/// Datum für die Anzeige: `2026:10:25 15:30:00` oder `2026-10-25T15:30:00+01:00`
+/// werden zu `25.10.2026 · 15:30:00`. Unbekannte Formate bleiben unverändert;
+/// gespeicherte Werte und Suche sind nicht betroffen.
+pub(super) fn display_date(raw: &str) -> String {
+    let raw = raw.trim();
+    let digits = |s: &str, n: usize| {
+        (s.len() == n && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.to_string())
+    };
+    let (date, time) = match raw.split_once([' ', 'T']) {
+        Some((date, time)) => (date, Some(time)),
+        None => (raw, None),
+    };
+    let parts: Vec<&str> = date.split([':', '-']).collect();
+    let [year, month, day] = parts[..] else {
+        return raw.to_string();
+    };
+    let (Some(year), Some(month), Some(day)) = (digits(year, 4), digits(month, 2), digits(day, 2))
+    else {
+        return raw.to_string();
+    };
+    let clock = time
+        .map(|t| t.split(['+', 'Z']).next().unwrap_or(t))
+        .map(|t| t.split('-').next().unwrap_or(t))
+        .map(|t| t.split('.').next().unwrap_or(t))
+        .filter(|t| t.len() >= 5 && t.bytes().all(|b| b.is_ascii_digit() || b == b':'));
+    match clock {
+        Some(clock) => format!("{day}.{month}.{year} · {clock}"),
+        None => format!("{day}.{month}.{year}"),
     }
 }
 fn face_label(value: &str) -> &str {
