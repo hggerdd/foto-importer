@@ -99,12 +99,25 @@ impl PhotoApp {
 
     fn collection_search(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            // Gleiche Höhe wie die Schaltflächen daneben, Text mittig; die Breite wächst mit dem Fenster.
+            let height = ui.spacing().interact_size.y;
             let search = ui.add_sized(
-                [(ui.available_width() - 345.0).clamp(160.0, 420.0), 30.0],
+                [(ui.available_width() - 345.0).clamp(160.0, 640.0), height],
                 egui::TextEdit::singleline(&mut self.filters.text)
-                    .hint_text("Person, Datei, Kamera oder Objektiv …"),
+                    .hint_text("Person, Datei, Kamera oder Objektiv …")
+                    .vertical_align(egui::Align::Center)
+                    .margin(egui::Margin::symmetric(10, 6)),
             );
             let submit = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if !self.filters.text.is_empty()
+                && ui
+                    .add(egui::Button::new("×").min_size(egui::vec2(height, height)))
+                    .on_hover_text("Suchtext löschen")
+                    .clicked()
+            {
+                self.filters.text.clear();
+                self.apply_collection_search();
+            }
             let search_button = egui::Button::new(
                 RichText::new("Suchen")
                     .color(Color32::from_rgb(9, 35, 34))
