@@ -13,7 +13,8 @@ Bild. Namensmerkmale entstehen ab Qualität 0,5. Ein klar erkanntes Gesicht
 (Detektion über 0,9) mit 95 bis 110 Pixeln in einem 4528 Pixel breiten Foto
 hat im verkleinerten Bild nur etwa 35 bis 40 Pixel und fällt unter die
 Grenze. Es erschien dann weder unter „Benennen“ noch bei Vorschlägen. In einer
-geprüften Sammlung betraf das etwa 50 von rund 320 unbenannten Gesichtern.
+geprüften Sammlung hatten 78 von 321 unbenannten Gesichtern eine Detektion
+ab 0,8 und Qualität unter 0,5, 63 davon ohne Namensmerkmale.
 
 ## Entscheidung
 
@@ -36,6 +37,10 @@ Die Schwelle zu senken würde winzige Gesichter ungeprüft zulassen. Alle Fotos
 grundsätzlich mit 3200 Pixeln zu erkennen verdoppelt Speicher und Zeit der
 Erkennung ohne Nutzen für große Gesichter. Eine erneute vollständige
 Gesichtserkennung ist für den Nachlauf nicht nötig.
+
+## Messung
+
+Echtlauf auf einer Kopie der Sammlung (452 Fotos, YuNet/SFace, CPU): 31 Fotos wurden nachgerechnet, in 12 Sekunden; die Zahl unbekannter Gesichter mit Namensmerkmalen stieg von 1 auf 58. Sechs Gesichter mit Detektion ab 0,8 blieben ohne Merkmale. Ob die neuen Gruppen und Vorschläge inhaltlich zutreffen, wurde nicht ausgewertet.
 
 ## Folgen und Grenzen
 

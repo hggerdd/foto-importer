@@ -89,3 +89,5 @@ fünf. Ein temporärer Sammlungsindex speicherte vier aktuelle YuNet-Treffer.
 Zwei davon zählten ohne Namensmerkmale. Die bestehende Bestätigung blieb
 erhalten. Die Personensuche fand das Foto, der Filter ohne weiteres
 Gesicht schloss es aus. Das Beispielbild gehört nicht zum Repository.
+
+Nachberechnung kleiner Gesichter (ADR 0054, 08.11.2026): Echtlauf auf einer Kopie einer privaten Sammlung (Fotos nur gelesen, Datenbankkopie). Unbekannte Gesichter mit Namensmerkmalen: 1 → 58; 31 Fotos in 12 Sekunden. Inhaltliche Treffsicherheit nicht ausgewertet; Lauf über `tests/real_hires.rs` (ignoriert).
