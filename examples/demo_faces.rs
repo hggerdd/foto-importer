@@ -115,7 +115,7 @@ fn seed_graph(collection: &Collection) -> anyhow::Result<()> {
     let photos: Vec<(i64, i64, String)> = collection
         .db
         .prepare(
-            "SELECT photo_id, min(id), source_relpath FROM files
+            "SELECT photo_id, min(id), relpath FROM files
              WHERE photo_id IS NOT NULL GROUP BY photo_id ORDER BY photo_id",
         )?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?

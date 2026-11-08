@@ -29,8 +29,59 @@ fn spiral(index: usize) -> [f32; 2] {
 
 /// Ordnet `count` Knoten an. Kanten mit ungültigen Indizes oder Schleifen
 /// werden ignoriert. Die Knotenreihenfolge bestimmt die Startposition; wichtige
-/// Knoten sollten vorne stehen.
+/// Knoten sollten vorne stehen. Verbundene Knoten werden simuliert, Knoten ohne
+/// Kante dicht außerhalb davon auf einer Spirale platziert, damit sie das Bild
+/// nicht aufspreizen.
 pub fn layout(count: usize, edges: &[LayoutEdge]) -> Vec<[f32; 2]> {
+    let valid: Vec<LayoutEdge> = edges
+        .iter()
+        .copied()
+        .filter(|e| e.a < count && e.b < count && e.a != e.b && e.weight.is_finite())
+        .collect();
+    let mut connected = vec![false; count];
+    for e in &valid {
+        connected[e.a] = true;
+        connected[e.b] = true;
+    }
+    let mut slot = vec![usize::MAX; count];
+    let mut members = 0;
+    for (i, flag) in connected.iter().enumerate() {
+        if *flag {
+            slot[i] = members;
+            members += 1;
+        }
+    }
+    let inner: Vec<LayoutEdge> = valid
+        .iter()
+        .map(|e| LayoutEdge {
+            a: slot[e.a],
+            b: slot[e.b],
+            ..*e
+        })
+        .collect();
+    let placed = simulate(members, &inner);
+    let radius = placed
+        .iter()
+        .map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt())
+        .fold(0.0_f32, f32::max);
+    let start = radius + MIN_DISTANCE;
+    let mut result = Vec::with_capacity(count);
+    let mut loose = 0;
+    for i in 0..count {
+        if connected[i] {
+            result.push(placed[slot[i]]);
+        } else {
+            let r = (start * start + 0.81 * (loose as f32 + 0.5)).sqrt();
+            let angle = loose as f32 * 2.399_963_1;
+            result.push([r * angle.cos(), r * angle.sin()]);
+            loose += 1;
+        }
+    }
+    separate(&mut result);
+    result
+}
+
+fn simulate(count: usize, edges: &[LayoutEdge]) -> Vec<[f32; 2]> {
     let mut pos: Vec<[f32; 2]> = (0..count).map(spiral).collect();
     if count < 2 {
         return pos;
@@ -44,6 +95,11 @@ pub fn layout(count: usize, edges: &[LayoutEdge]) -> Vec<[f32; 2]> {
             ..e
         })
         .collect();
+    let mut degree = vec![0.0_f32; count];
+    for e in &edges {
+        degree[e.a] += 1.0;
+        degree[e.b] += 1.0;
+    }
     let steps = iterations(count);
     let mut temperature = 0.6 * (count as f32).sqrt().max(1.0);
     let cooling = (0.02_f32 / temperature).powf(1.0 / steps as f32);
@@ -59,7 +115,7 @@ pub fn layout(count: usize, edges: &[LayoutEdge]) -> Vec<[f32; 2]> {
                     (dx, dy, d2) = (angle.cos() * 1e-3, angle.sin() * 1e-3, 1e-6);
                 }
                 // Abstoßung k²/d, als Vektor (dx,dy)·k²/d².
-                let push = 1.0 / d2;
+                let push = 2.5 / d2;
                 force[i][0] += dx * push;
                 force[i][1] += dy * push;
                 force[j][0] -= dx * push;
@@ -70,7 +126,7 @@ pub fn layout(count: usize, edges: &[LayoutEdge]) -> Vec<[f32; 2]> {
             let (dx, dy) = (pos[e.a][0] - pos[e.b][0], pos[e.a][1] - pos[e.b][1]);
             let d = (dx * dx + dy * dy).sqrt().max(1e-3);
             // Anziehung d²·Gewicht, als Vektor (dx,dy)·d·Gewicht.
-            let pull = d * e.weight;
+            let pull = d * e.weight / (degree[e.a] * degree[e.b]).sqrt();
             force[e.a][0] -= dx * pull;
             force[e.a][1] -= dy * pull;
             force[e.b][0] += dx * pull;

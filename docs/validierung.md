@@ -93,3 +93,15 @@ Gesicht schloss es aus. Das Beispielbild gehört nicht zum Repository.
 Nachberechnung kleiner Gesichter (ADR 0054, 08.11.2026): Echtlauf auf einer Kopie einer privaten Sammlung (Fotos nur gelesen, Datenbankkopie). Unbekannte Gesichter mit Namensmerkmalen: 1 → 58; 31 Fotos in 12 Sekunden. Inhaltliche Treffsicherheit nicht ausgewertet; Lauf über `tests/real_hires.rs` (ignoriert).
 
 Sichtprüfung der Oberfläche (08.11.2026): `cargo run --example demo` und `cargo run --example demo_faces` erzeugen isolierte Kunstsammlungen unter `tmp/`. Mit `FOTO_IMPORTER_SETTINGS`, `FOTO_IMPORTER_VIEW` (collection, people, tasks, settings), `FOTO_IMPORTER_FACE_MODE` (unknown, review, confirmed, ignored, persons) und `FOTO_IMPORTER_CAPTURE` speichert die App nach fünf Sekunden ein Bild des Fensters. Private Sammlungen werden dafür nicht verwendet; Maus-Zustände wie die Hover-Vorschau lassen sich so nicht abbilden.
+
+## Personengraph als Netzwerk (ADR 0058)
+
+Layout- und Netzregressionen: Layout mit 0, 1, 2 und 500 Knoten ist endlich,
+deterministisch und hält den Mindestabstand ein (500 Knoten mit Zeitgrenze);
+verbundene Personen liegen näher als unverbundene; Fotozahlen der Netzabfrage
+stimmen mit der Sammlungssuche überein. Sichtprüfung am 08.11.2026 (Debug-Build,
+synthetische Demodaten aus `examples/demo_faces.rs`, 40 Personen, 154 Verbindungen,
+`FOTO_IMPORTER_FACE_MODE=graph`, `FOTO_IMPORTER_GRAPH_PERSON=1`): [Bild](screenshots/personengraph.png).
+Nicht geprüft: Hell-Design, Mausrad/Ziehen/Doppelklick (Screenshot ist statisch),
+Bedienung per Screenreader, Sammlungen mit mehreren hundert echten Personen,
+Porträts statt Initialen (nicht umgesetzt).

@@ -543,6 +543,8 @@ fn canvas(ui: &mut egui::Ui, view: &mut RelationshipView, network: &Network, dar
             .filter(|i| Some(*i) != selected && Some(*i) != hover),
     );
     let priority = order.len();
+    let fixed =
+        usize::from(selected.is_some()) + usize::from(hover.is_some_and(|h| Some(h) != selected));
     let chosen: HashSet<usize> = order.iter().copied().collect();
     order.extend(
         (0..network.nodes.len())
@@ -563,7 +565,7 @@ fn canvas(ui: &mut egui::Ui, view: &mut RelationshipView, network: &Network, dar
             at + egui::vec2(-galley.size().x / 2.0, radius_px[i] + 3.0),
             galley.size(),
         );
-        if rank >= priority
+        if rank >= fixed
             && placed
                 .iter()
                 .any(|other| other.expand(2.0).intersects(label))
@@ -656,7 +658,7 @@ fn side_panel(
     matches.sort_by(|a, b| view.names[*a].cmp(&view.names[*b]));
     egui::ScrollArea::vertical()
         .id_salt("graph-people")
-        .max_height(150.0)
+        .max_height(110.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
             if matches.is_empty() {
@@ -677,12 +679,14 @@ fn side_panel(
                 ui.label(RichText::new("Weitere Treffer: Suchbegriff eingrenzen").small());
             }
         });
+    egui::TopBottomPanel::bottom("graph-legend").show_inside(ui, |ui| {
+        legend(ui, network, &colours);
+    });
     ui.separator();
     let selected = view.selected.and_then(|person| network.index_of(person));
     egui::ScrollArea::vertical()
         .id_salt("graph-detail")
-        .max_height((ui.available_height() - 150.0).max(120.0))
-        .auto_shrink([false, true])
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             let Some(s) = selected else {
                 ui.label("Wähle eine Person im Graph oder in der Liste, um Verbindungen zu sehen.");
@@ -740,8 +744,28 @@ fn side_panel(
                 });
             }
         });
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.add_space(4.0);
+    photos
+}
+
+fn legend(ui: &mut egui::Ui, network: &Network, colours: &Palette) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.spacing_mut().interact_size.y = 16.0;
+    {
+        ui.label(RichText::new("Legende · Kreisgröße = Zahl der Fotos").strong());
+        legend_row(
+            ui,
+            colours.photo,
+            "Gemeinsame Fotos (dicker = mehr)",
+            Line::Thick,
+        );
+        legend_row(
+            ui,
+            colours.parent,
+            "Elternteil, Pfeil zum Kind",
+            Line::Arrow,
+        );
+        legend_row(ui, colours.partner, "Partner", Line::Dashed);
+        legend_row(ui, colours.sibling, "Geschwister", Line::Dotted);
         // Weitere Beziehungstypen aus der Datenbank erscheinen neutral und mit eigenem Namen.
         let mut others: Vec<String> = network
             .edges
@@ -755,19 +779,7 @@ fn side_panel(
         for name in others.iter().rev() {
             legend_row(ui, colours.other, name, Line::Long);
         }
-        legend_row(ui, colours.sibling, "Geschwister", Line::Dotted);
-        legend_row(ui, colours.partner, "Partner", Line::Dashed);
-        legend_row(ui, colours.parent, "Elternteil → Kind", Line::Arrow);
-        legend_row(
-            ui,
-            colours.photo,
-            "Gemeinsame Fotos (dicker = mehr)",
-            Line::Thick,
-        );
-        ui.label(RichText::new("Legende · Kreisgröße = Zahl der Fotos").strong());
-        ui.separator();
-    });
-    photos
+    }
 }
 
 #[derive(Clone, Copy)]
