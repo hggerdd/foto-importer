@@ -265,3 +265,67 @@ fn repeated_frames_reuse_large_source_selection() {
     assert_eq!(app.import_cache.bytes, 500_000);
     assert_eq!(app.import_cache.counts["jpg"], 100_000);
 }
+
+#[test]
+fn hovering_a_face_shows_exactly_that_photo_and_leaving_hides_it() {
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    assert!(app.settings.hover_preview, "Standard ist eingeschaltet");
+    app.view = View::People;
+    app.settings.collection = "tmp/synthetic-faces".into();
+    let face = |id| Face {
+        id,
+        photo: id,
+        source: format!("{id}.jpg"),
+        bbox: [0.1, 0.1, 0.9, 0.9],
+        person: None,
+        assignment: None,
+        ignored: false,
+        score: 0.0,
+    };
+    app.face_page.groups = (1..=3).map(|id| vec![face(id), face(id + 10)]).collect();
+    let draw = |app: &mut PhotoApp, pointer: Option<egui::Pos2>| {
+        let events = pointer
+            .map(|pos| vec![egui::Event::PointerMoved(pos)])
+            .unwrap_or_else(|| vec![egui::Event::PointerGone]);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+        );
+    };
+    let find = |app: &mut PhotoApp| {
+        draw(app, None);
+        for y in (60..780).step_by(24) {
+            for x in (10..1270).step_by(24) {
+                let at = Some(egui::pos2(x as f32, y as f32));
+                draw(app, at);
+                draw(app, at);
+                if app.hover_face.is_some() {
+                    return at;
+                }
+            }
+        }
+        None
+    };
+    // Mit eingeschaltetem Schalter wird genau ein Gesicht unter der Maus erfasst.
+    let at = find(&mut app).expect("ein Gesicht ist erreichbar");
+    let shown = app.hover_face.clone().expect("hover");
+    assert!([1, 2, 3, 11, 12, 13].contains(&shown.id));
+    // Verlässt die Maus das Fenster, bleibt keine Vorschau übrig.
+    draw(&mut app, None);
+    draw(&mut app, None);
+    assert!(app.hover_face.is_none());
+    // Ausgeschaltet wird nie etwas erfasst.
+    app.settings.hover_preview = false;
+    draw(&mut app, Some(at));
+    draw(&mut app, Some(at));
+    assert!(app.hover_face.is_none());
+}

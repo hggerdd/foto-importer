@@ -2,6 +2,7 @@ use super::*;
 
 impl PhotoApp {
     pub(super) fn people_view(&mut self, ui: &mut egui::Ui) {
+        self.hover_face = None;
         self.people_workflow(ui);
         if self.settings.collection.is_empty() {
             self.empty(
@@ -38,6 +39,17 @@ impl PhotoApp {
             self.show_relationship_graph(ui.ctx());
             return;
         }
+        egui::TopBottomPanel::bottom("people-footer").show_inside(ui, |ui| {
+            if ui
+                .checkbox(
+                    &mut self.settings.hover_preview,
+                    "Foto in der Vorschau zeigen, wenn die Maus über einem Gesicht steht",
+                )
+                .changed()
+            {
+                let _ = self.settings.save();
+            }
+        });
         ui.horizontal(|ui| {
             let loading = self.tasks.iter().any(|task| task.kind == "faces");
             if ui
@@ -118,6 +130,43 @@ impl PhotoApp {
                 {
                     ui.scroll_with_delta(egui::vec2(0.0, advance.top - top));
                 }
+            });
+        self.hover_photo_preview(ui.ctx());
+    }
+    /// Das ganze Foto zum Gesicht unter der Maus, am Zeiger geführt. Es gibt nur
+    /// `hover_face` aus diesem Frame, daher höchstens eine Vorschau; sie
+    /// verschwindet, sobald die Maus das Gesicht verlässt.
+    fn hover_photo_preview(&mut self, ctx: &egui::Context) {
+        let (Some(face), Some(pointer)) = (self.hover_face.clone(), ctx.pointer_hover_pos()) else {
+            return;
+        };
+        if !self.settings.hover_preview {
+            return;
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        let size = egui::vec2(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
+        let position = preview_position(pointer, size + egui::vec2(12.0, 12.0), ctx.content_rect());
+        egui::Area::new(egui::Id::new("face-hover-photo"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(position)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    self.thumbnails.image(
+                        ui,
+                        PreviewRequest {
+                            root: Some(PathBuf::from(&root)),
+                            path: Path::new(&root).join(&face.source),
+                            orientation: 1,
+                            crop: None,
+                            edge: 800,
+                            generation: 0,
+                        },
+                        &exiftool,
+                        size,
+                    );
+                });
             });
     }
     pub(super) fn prepare_group_advance(&mut self, undo: &Undo) {
@@ -218,6 +267,7 @@ impl PhotoApp {
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
         let key = draft_key(group);
         let busy = self.busy();
+        let hover_enabled = self.settings.hover_preview;
         let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
         let draft = self.drafts.entry(key.clone()).or_insert_with(|| {
@@ -346,6 +396,9 @@ impl PhotoApp {
                                     &exiftool,
                                     egui::vec2(size, size),
                                 );
+                                if hover_enabled && response.hovered() {
+                                    self.hover_face = Some(face.clone());
+                                }
                                 let mut included = !draft.excluded.contains(&face.id);
                                 if response.clicked() {
                                     included = !included;
@@ -625,5 +678,44 @@ mod draft_tests {
         let suggested = [face(1, Some(7)), face(2, Some(7))];
         assert_eq!(draft_key(&unnamed), "1,2");
         assert_ne!(draft_key(&unnamed), draft_key(&suggested));
+    }
+}
+
+const PREVIEW_SIZE: (f32, f32) = (520.0, 390.0);
+
+/// Ecke links oben der Vorschau: rechts unterhalb des Zeigers, bei Platzmangel
+/// links bzw. oberhalb, immer innerhalb des Fensters.
+fn preview_position(pointer: egui::Pos2, size: egui::Vec2, screen: egui::Rect) -> egui::Pos2 {
+    let gap = 18.0;
+    let x = if pointer.x + gap + size.x <= screen.right() {
+        pointer.x + gap
+    } else {
+        pointer.x - gap - size.x
+    };
+    let y = if pointer.y + gap + size.y <= screen.bottom() {
+        pointer.y + gap
+    } else {
+        pointer.y - gap - size.y
+    };
+    egui::pos2(
+        x.clamp(screen.left(), (screen.right() - size.x).max(screen.left())),
+        y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top())),
+    )
+}
+#[cfg(test)]
+mod hover_tests {
+    use super::*;
+    #[test]
+    fn preview_follows_the_pointer_and_stays_inside_the_window() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let size = egui::vec2(532.0, 402.0);
+        let near = preview_position(egui::pos2(100.0, 100.0), size, screen);
+        assert_eq!(near, egui::pos2(118.0, 118.0));
+        let corner = preview_position(egui::pos2(1250.0, 780.0), size, screen);
+        assert!(corner.x + size.x <= 1280.0 && corner.y + size.y <= 800.0);
+        assert!(
+            corner.x < 1250.0 && corner.y < 780.0,
+            "weicht zum Zeiger hin aus"
+        );
     }
 }

@@ -169,6 +169,8 @@ pub struct PhotoApp {
     name_suggestions: Vec<(i64, String, f32)>,
     name_suggestions_by_model: bool,
     name_portraits: BTreeMap<i64, Face>,
+    /// Gesicht unter der Maus in diesem Frame (höchstens eines).
+    hover_face: Option<Face>,
     relation_from: Option<i64>,
     relation_to: Option<i64>,
     relation_kind: String,
@@ -252,6 +254,7 @@ impl PhotoApp {
             name_suggestions: Vec::new(),
             name_suggestions_by_model: false,
             name_portraits: BTreeMap::new(),
+            hover_face: None,
             relation_from: None,
             relation_to: None,
             relation_kind: "parent".into(),

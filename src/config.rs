@@ -49,6 +49,8 @@ pub struct Settings {
     pub model_dir: String,
     pub onnx_runtime: String,
     pub dark: bool,
+    /// Im Personenbereich das ganze Foto unter der Maus zeigen.
+    pub hover_preview: bool,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -65,6 +67,7 @@ impl Default for Settings {
             skip_imported: true,
             auto_metadata: false,
             dark: true,
+            hover_preview: true,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
