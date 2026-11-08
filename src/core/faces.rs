@@ -66,6 +66,8 @@ pub struct FacePage {
     pub suggestions: BTreeMap<i64, super::recognition::Suggestions>,
     /// Gruppen insgesamt im gewählten Reiter (für die Seitenzahl).
     pub total_groups: usize,
+    /// Alle gespeicherten Beziehungen, kanonisch (für die Personenübersicht).
+    pub relations: Vec<super::relations::Edge>,
 }
 
 pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
@@ -278,6 +280,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             status,
             suggestions: BTreeMap::new(),
             total_groups: 0,
+            relations: super::relations::load_edges(collection)?,
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -332,6 +335,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
         status,
         suggestions,
         total_groups,
+        relations: super::relations::load_edges(collection)?,
     })
 }
 
@@ -1003,50 +1007,18 @@ pub fn delete_face(collection: &mut Collection, photo: i64, id: i64) -> Result<(
     Ok(())
 }
 
+/// Speichert "`source` ist `kind` von `target`" kanonisch und einmalig.
+/// `kind`: parent, child, partner, sibling, cousin, friend, acquaintance (ADR 0060).
 pub fn add_relation(
     collection: &mut Collection,
     source: i64,
     kind: &str,
     target: i64,
 ) -> Result<()> {
-    collection.writable()?;
-    if source == target {
-        bail!("Eine Person kann keine Beziehung zu sich selbst haben");
-    }
-    for person in [source, target] {
-        let valid: bool = collection.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM persons WHERE id=? AND merged_into IS NULL)",
-            [person],
-            |r| r.get(0),
-        )?;
-        if !valid {
-            bail!("Person nicht verfügbar");
-        }
-    }
-    let (mut from, mut to) = (source, target);
-    let id = match kind {
-        "parent" => 1,
-        "child" => {
-            std::mem::swap(&mut from, &mut to);
-            1
-        }
-        "partner" => 3,
-        "sibling" => 4,
-        _ => bail!("Unbekannter Beziehungstyp"),
+    let Some(role) = super::relations::Role::from_key(kind) else {
+        bail!("Unbekannter Beziehungstyp");
     };
-    if id == 1 {
-        let cycle:bool=collection.db.query_row("WITH RECURSIVE descendants(id) AS (SELECT to_person FROM relations WHERE type_id=1 AND from_person=? UNION SELECT r.to_person FROM relations r JOIN descendants d ON r.from_person=d.id WHERE r.type_id=1) SELECT EXISTS(SELECT 1 FROM descendants WHERE id=?)",params![to,from],|r|r.get(0))?;
-        if cycle {
-            bail!("Diese Beziehung würde einen Abstammungszyklus erzeugen");
-        }
-    }
-    if id == 3 || id == 4 {
-        (from, to) = (from.min(to), from.max(to));
-    }
-    collection.db.execute(
-        "INSERT OR IGNORE INTO relations VALUES(?,?,?)",
-        params![from, id, to],
-    )?;
+    super::relations::add(collection, source, role, target)?;
     Ok(())
 }
 pub fn remove_relation(
@@ -1055,24 +1027,8 @@ pub fn remove_relation(
     kind: &str,
     target: i64,
 ) -> Result<()> {
-    collection.writable()?;
-    let (mut source, mut target) = (source, target);
-    let id = match kind {
-        "parent" => 1,
-        "child" => {
-            std::mem::swap(&mut source, &mut target);
-            1
-        }
-        "partner" => 3,
-        "sibling" => 4,
-        _ => bail!("Unbekannter Beziehungstyp"),
+    let Some(role) = super::relations::Role::from_key(kind) else {
+        bail!("Unbekannter Beziehungstyp");
     };
-    if id == 3 || id == 4 {
-        (source, target) = (source.min(target), source.max(target));
-    }
-    collection.db.execute(
-        "DELETE FROM relations WHERE from_person=? AND type_id=? AND to_person=?",
-        params![source, id, target],
-    )?;
-    Ok(())
+    super::relations::remove(collection, source, role, target)
 }

@@ -31,6 +31,13 @@ impl PhotoApp {
                     ui.text_edit_singleline(&mut person.birth);
                     ui.label("Geschlecht");
                     ui.text_edit_singleline(&mut person.gender);
+                    ui.label(
+                        RichText::new(
+                            "„weiblich“ oder „männlich“ steuert die Beschriftung von Beziehungen; sonst neutral.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                     ui.label("Notiz");
                     ui.text_edit_multiline(&mut person.note);
                     if theme::primary(

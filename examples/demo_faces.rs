@@ -232,6 +232,42 @@ fn main() -> anyhow::Result<()> {
             params![id, name],
         )?;
     }
+    // Beispiel-Familie für die Beziehungsübersicht (Personen-IDs: Anna 1, Ben 2,
+    // Clara 3, Dora 4, Gast n = 4 + n).
+    for (id, gender) in [
+        (1, "weiblich"),
+        (2, "männlich"),
+        (3, "weiblich"),
+        (4, "weiblich"),
+        (5, "männlich"),
+        (6, "weiblich"),
+        (7, "männlich"),
+        (9, "männlich"),
+        (10, "weiblich"),
+        (11, "männlich"),
+    ] {
+        collection.db.execute(
+            "INSERT OR REPLACE INTO person_attrs VALUES(?,'gender',?)",
+            params![id, gender],
+        )?;
+    }
+    for (subject, kind, object) in [
+        (1, "partner", 2),
+        (1, "parent", 3),
+        (2, "parent", 3),
+        (5, "child", 1),
+        (5, "child", 2),
+        (9, "parent", 1),
+        (10, "parent", 1),
+        (9, "parent", 6),
+        (10, "parent", 6),
+        (7, "child", 6),
+        (4, "friend", 3),
+        (8, "acquaintance", 1),
+        (11, "cousin", 2),
+    ] {
+        faces::add_relation(&mut collection, subject, kind, object)?;
+    }
     let embedder = "demo-embedder";
     collection.db.execute_batch(&format!(
         "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key','\"{embedder}\"'),

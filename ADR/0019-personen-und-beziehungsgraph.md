@@ -19,6 +19,16 @@ Gespeichert werden kanonische Elternbeziehungen sowie symmetrische Partner- und
 bei Bedarf explizite Geschwisterbeziehungen. Kindbeziehungen werden invertiert,
 weitere Verwandtschaft wird daraus abgeleitet. Geschlechtsspezifische Begriffe gehören zur Anzeige.
 
+## Ergänzung durch ADR 0060
+
+[ADR 0060](0060-beziehungstypen-und-ableitung.md) erweitert diese Entscheidung um
+Cousin-, Freund- und Bekanntenbeziehungen, kanonische Speicherung auch der
+symmetrischen Typen, Geschlechtsformen in der Anzeige, strengere
+Widerspruchsregeln und eine tabellarische Ableitung. Unverändert bleiben stabile
+IDs, kanonische Elternkanten, das Ableiten statt Speichern von Großeltern, Onkeln,
+Cousins und die Zyklus-/Selbstbezugsprüfung. „Mehr als zwei Eltern erzeugen eine
+Warnung“ ist weiterhin nicht umgesetzt.
+
 ## Alternativen
 
 Namen als Schlüssel würden Umbenennungen und Gleichnamigkeit verwechseln. Separate
