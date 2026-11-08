@@ -1,4 +1,5 @@
 mod collection_view;
+mod folder_tree;
 mod import_view;
 mod people_view;
 mod recognition_view;
@@ -15,6 +16,7 @@ use crate::{
         collection::{Collection, CollectionStatus},
         faces::{self, Face, FacePage, Undo},
         files::{self, Scan, SourceFile},
+        folders::{FolderPage, FolderTree},
         jobs::{Control, FacePhase, Task},
         metadata::{self, Photo, Rule, Search, SearchPage},
         previews::PreviewRequest,
@@ -55,6 +57,7 @@ enum Pick {
 enum Outcome {
     Scan(u64, Scan),
     Search(u64, CollectionStatus, SearchPage, Search),
+    Folders(u64, Vec<(String, usize, FolderPage)>),
     Faces(u64, usize, FacePage),
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
@@ -136,6 +139,13 @@ pub struct PhotoApp {
     filters: Search,
     applied: Search,
     query_revision: u64,
+    folder_tree: FolderTree,
+    /// Revisionsprüfung für Ordnerbaum-Antworten; Wechsel der Sammlung oder ihres Inhalts erhöht sie.
+    folder_revision: u64,
+    /// Sammlung und Bestand, für die der Baum geladen wurde.
+    folder_key: (String, usize, usize),
+    /// Zuletzt im Baum aufgeklappter Ordnerfilter.
+    folder_revealed: Option<String>,
     page: SearchPage,
     status: CollectionStatus,
     face_revision: u64,
@@ -221,6 +231,10 @@ impl PhotoApp {
             filters: Search::default(),
             applied: Search::default(),
             query_revision: 0,
+            folder_tree: FolderTree::default(),
+            folder_revision: 0,
+            folder_key: Default::default(),
+            folder_revealed: None,
             page: SearchPage::default(),
             status: CollectionStatus::default(),
             face_revision: 0,
@@ -287,6 +301,10 @@ impl PhotoApp {
             && ["unknown", "review", "confirmed", "ignored", "persons"].contains(&mode.as_str())
         {
             app.face_mode = mode;
+        }
+        // Nur für Sichtprüfungen: Ordnerfilter vor dem ersten Laden setzen.
+        if let Ok(folder) = std::env::var("FOTO_IMPORTER_FOLDER") {
+            app.filters.folder = Some(folder).filter(|f| !f.is_empty());
         }
         if !app.settings.collection.is_empty() {
             app.refresh_collection();
@@ -654,6 +672,10 @@ impl PhotoApp {
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
             match result {
+                Err(_) if running.kind == "folders" => {
+                    // Never retry a failing or cancelled level in a loop; "Aktualisieren" retries.
+                    self.folder_tree.fail();
+                }
                 Err(e) => {
                     if (running.is_face_matching() || running.kind == "face-analysis")
                         && running.collection == self.settings.collection
@@ -707,7 +729,6 @@ impl PhotoApp {
                     self.page = page;
                     self.filters.folder.clone_from(&filters.folder);
                     self.filters.page = filters.page;
-                    self.filters.folder_page = filters.folder_page;
                     self.applied = filters;
                     if !self.large
                         && self.selected_photo.as_ref().is_some_and(|selected| {
@@ -717,6 +738,9 @@ impl PhotoApp {
                         self.selected_photo = None;
                         self.detail_revision += 1;
                     }
+                }
+                Ok(Outcome::Folders(revision, levels)) if revision == self.folder_revision => {
+                    self.folder_tree.apply(levels);
                 }
                 Ok(Outcome::Faces(revision, index, page)) if revision == self.face_revision => {
                     if self.view != View::Settings
@@ -921,6 +945,9 @@ impl PhotoApp {
                             self.query_revision += 1;
                             self.face_revision += 1;
                             self.detail_revision += 1;
+                            self.folder_tree = FolderTree::default();
+                            self.folder_revision += 1;
+                            self.folder_revealed = None;
                             self.page = SearchPage::default();
                             self.selected_photo = None;
                             self.face_page = FacePage::default();

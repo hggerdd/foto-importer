@@ -10,10 +10,20 @@ fn main() -> anyhow::Result<()> {
     let root = Path::new("tmp/demo");
     std::fs::create_dir_all(root.join("Quelle"))?;
     std::fs::create_dir_all(root.join("Importziel"))?;
+    // Verschachtelte Ordner für die Sichtprüfung des Ordnerbaums.
+    const FOLDERS: [&str; 7] = [
+        "Herbst",
+        "Herbst/Laub",
+        "Herbst/Pilze",
+        "Berge/Wanderung/Gipfel",
+        "Berge/Wanderung/Hütte",
+        "Berge/See",
+        "Familie",
+    ];
     for i in 0u32..30 {
         let folder = root
             .join("Quelle")
-            .join(if i % 2 == 0 { "Herbst" } else { "Berge" });
+            .join(FOLDERS[i as usize % FOLDERS.len()]);
         std::fs::create_dir_all(&folder)?;
         let path = folder.join(format!("IMG_{:04}.jpg", i + 1));
         if path.exists() {
