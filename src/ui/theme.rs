@@ -22,6 +22,23 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         style.visuals.override_text_color = Some(Color32::from_rgb(222, 230, 239));
         style.visuals.weak_text_color = Some(MUTED);
     }
+    if dark {
+        // Sekundäre Schaltflächen: ruhige Fläche mit feiner Kante, Hover mit Akzent.
+        let border = egui::Stroke::new(1.0_f32, Color32::from_rgb(55, 69, 85));
+        let widgets = &mut style.visuals.widgets;
+        widgets.inactive.weak_bg_fill = Color32::from_rgb(33, 43, 55);
+        widgets.inactive.bg_fill = Color32::from_rgb(33, 43, 55);
+        widgets.inactive.bg_stroke = border;
+        widgets.hovered.weak_bg_fill = Color32::from_rgb(42, 56, 71);
+        widgets.hovered.bg_fill = Color32::from_rgb(42, 56, 71);
+        for state in [
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+        ] {
+            state.corner_radius = egui::CornerRadius::same(8);
+        }
+    }
     style.visuals.selection.bg_fill = Color32::from_rgb(24, 92, 85);
     style.visuals.selection.stroke = egui::Stroke::new(1.5_f32, ACCENT);
     style.visuals.widgets.active.bg_fill = Color32::from_rgb(30, 111, 101);
@@ -63,6 +80,39 @@ pub fn primary(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
         .min_size(egui::vec2(150.0, 40.0)),
     )
     .clicked()
+}
+/// Eintrag der Seitenleiste: flach, der gewählte Bereich mit Akzentbalken.
+pub fn nav_item(ui: &mut egui::Ui, text: &str, selected: bool, width: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, text)
+    });
+    if ui.is_rect_visible(rect) {
+        let fill = if selected {
+            Color32::from_rgb(24, 92, 85)
+        } else if response.hovered() || response.has_focus() {
+            Color32::from_rgb(30, 41, 53)
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, 8, fill);
+        if selected {
+            let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+            ui.painter().rect_filled(bar, 2, ACCENT);
+        }
+        ui.painter().text(
+            egui::pos2(rect.left() + 14.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            text,
+            egui::FontId::proportional(15.0),
+            if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(200, 210, 222)
+            },
+        );
+    }
+    response
 }
 pub fn card(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()

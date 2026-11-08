@@ -1029,13 +1029,8 @@ impl PhotoApp {
                     (View::People, "03  Personen", "Namen & Beziehungen"),
                     (View::Tasks, "04  Aufgaben", "Fortschritt & Verlauf"),
                 ] {
-                    let response = ui
-                        .add_sized(
-                            [150.0, 42.0],
-                            egui::Button::new(RichText::new(title).strong())
-                                .selected(self.view == view),
-                        )
-                        .on_hover_text(hint);
+                    let response =
+                        theme::nav_item(ui, title, self.view == view, 150.0).on_hover_text(hint);
                     if response.clicked() {
                         self.view = view;
                         if view == View::Collection {
@@ -1048,8 +1043,7 @@ impl PhotoApp {
                 }
                 ui.add_space(30.0);
                 ui.separator();
-                if ui
-                    .selectable_label(self.view == View::Settings, "Einstellungen")
+                if theme::nav_item(ui, "Einstellungen", self.view == View::Settings, 150.0)
                     .clicked()
                 {
                     self.view = View::Settings;
