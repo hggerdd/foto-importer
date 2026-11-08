@@ -61,7 +61,7 @@ enum Outcome {
     Imported(files::ImportReport),
     Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
-    RelationshipGraph(u64, crate::core::relationship_graph::Graph),
+    RelationshipGraph(u64, crate::core::relationship_graph::Network),
     RuntimeDownloaded(PathBuf),
     ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
     DngUpdate(
@@ -284,9 +284,23 @@ impl PhotoApp {
         }
         // Nur für Sichtprüfungen: Reiter vor dem ersten Laden wählen.
         if let Ok(mode) = std::env::var("FOTO_IMPORTER_FACE_MODE")
-            && ["unknown", "review", "confirmed", "ignored", "persons"].contains(&mode.as_str())
+            && [
+                "unknown",
+                "review",
+                "confirmed",
+                "ignored",
+                "persons",
+                "graph",
+            ]
+            .contains(&mode.as_str())
         {
             app.face_mode = mode;
+        }
+        // Nur für Sichtprüfungen: Person im Graph vorauswählen.
+        if let Ok(person) = std::env::var("FOTO_IMPORTER_GRAPH_PERSON")
+            && let Ok(person) = person.parse()
+        {
+            app.relationship_graph.selected = Some(person);
         }
         if !app.settings.collection.is_empty() {
             app.refresh_collection();
@@ -779,6 +793,7 @@ impl PhotoApp {
                     }
                     self.message(message, false);
                     if running.write && running.collection == self.settings.collection {
+                        self.relationship_graph.stale = true;
                         self.query_collection(self.applied.clone());
                         self.refresh_faces();
                         if let Some(photo) = self.selected_photo.clone() {
@@ -788,6 +803,7 @@ impl PhotoApp {
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
                     self.naming = None;
+                    self.relationship_graph.stale = true;
                     self.prepare_group_advance(&undo);
                     self.undo.push(undo);
                     if self.undo.len() > 20 {
@@ -804,7 +820,7 @@ impl PhotoApp {
                     if running.collection == self.settings.collection
                         && revision == self.relationship_graph.revision =>
                 {
-                    self.relationship_graph.data = Some(graph);
+                    self.relationship_graph.accept(graph);
                 }
                 Ok(Outcome::RuntimeDownloaded(path)) => {
                     let previous = std::mem::replace(

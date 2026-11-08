@@ -84,3 +84,223 @@ pub fn for_person(collection: &Collection, focus: i64) -> Result<Graph> {
         truncated,
     })
 }
+
+/// Höchstzahl gleichzeitig dargestellter Personen (das Layout ist O(n²)).
+pub const MAX_NODES: usize = 600;
+/// Höchstzahl gezeichneter Kanten; eingetragene Beziehungen haben Vorrang.
+pub const MAX_EDGES: usize = 6000;
+
+/// Eingetragene Beziehung aus Sicht der ersten Person einer Kante.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Recorded {
+    /// Die erste Person ist Elternteil der zweiten.
+    Parent,
+    /// Die erste Person ist Kind der zweiten.
+    Child,
+    Partner,
+    Sibling,
+    /// Weitere Typen aus `relation_types` (Name, Name der Umkehrung), neutral dargestellt.
+    Other(String, String),
+}
+
+impl Recorded {
+    fn from_type(name: &str, inverse: &str) -> Self {
+        match name {
+            "elternteil_von" => Self::Parent,
+            "kind_von" => Self::Child,
+            "partner_von" => Self::Partner,
+            "geschwister_von" => Self::Sibling,
+            _ => Self::Other(name.to_owned(), inverse.to_owned()),
+        }
+    }
+    pub fn reversed(&self) -> Self {
+        match self {
+            Self::Parent => Self::Child,
+            Self::Child => Self::Parent,
+            Self::Other(name, inverse) => Self::Other(inverse.clone(), name.clone()),
+            other => other.clone(),
+        }
+    }
+}
+
+pub struct Node {
+    pub person: i64,
+    pub name: String,
+    /// Eindeutige Fotos mit bestätigter Zuordnung (wie in der Sammlungssuche).
+    pub photos: usize,
+}
+
+pub struct Edge {
+    /// Indizes in `Network::nodes`, `a < b`.
+    pub a: usize,
+    pub b: usize,
+    /// Gemeinsame Fotos, 0 bei rein eingetragener Beziehung.
+    pub photos: usize,
+    /// Eingetragene Beziehungen aus Sicht von `a`.
+    pub recorded: Vec<Recorded>,
+}
+
+pub struct Network {
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    /// Weltkoordinaten je Knoten, Einheit ist der Sollabstand verbundener Knoten.
+    pub positions: Vec<[f32; 2]>,
+    /// Personen, die wegen `MAX_NODES` nicht dargestellt werden (wenigste Fotos).
+    pub hidden_people: usize,
+    pub hidden_edges: usize,
+}
+
+impl Network {
+    pub fn index_of(&self, person: i64) -> Option<usize> {
+        self.nodes.iter().position(|n| n.person == person)
+    }
+}
+
+/// Bestätigte, eindeutige Paare aus Foto und Person wie in `for_person`.
+fn photo_people() -> String {
+    format!(
+        "photo_people AS MATERIALIZED (
+            SELECT DISTINCT f.photo_id AS photo, f.person_id AS person
+            FROM faces f JOIN metadata_photos p ON p.photo_id=f.photo_id
+            JOIN persons x ON x.id=f.person_id
+            WHERE f.retained=0 AND f.assignment='user' AND x.merged_into IS NULL AND {PHOTO_FORMATS}
+        )"
+    )
+}
+
+/// Alle Personen mit gemeinsamen Fotos und eingetragenen Beziehungen samt Layout.
+/// Zählregeln wie in `for_person`: eindeutige Fotos, bestätigte Zuordnungen,
+/// keine historischen Gesichter, keine zusammengeführten Personen.
+pub fn network(collection: &Collection) -> Result<Network> {
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    let people: Vec<(i64, String)> = collection
+        .db
+        .prepare(
+            "SELECT x.id, coalesce(n.value,'Unbenannt') FROM persons x
+             LEFT JOIN person_attrs n ON n.person_id=x.id AND n.key='name'
+             WHERE x.merged_into IS NULL",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let counts: HashMap<i64, usize> = collection
+        .db
+        .prepare(&format!(
+            "WITH {} SELECT person, count(*) FROM photo_people GROUP BY person",
+            photo_people()
+        ))?
+        .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as usize)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let shared: Vec<(i64, i64, usize)> = collection
+        .db
+        .prepare(&format!(
+            "WITH {} SELECT a.person, b.person, count(*) FROM photo_people a
+             JOIN photo_people b ON a.photo=b.photo AND a.person<b.person
+             GROUP BY a.person, b.person",
+            photo_people()
+        ))?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as usize))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let relations: Vec<(i64, String, String, i64)> = collection
+        .db
+        .prepare(
+            "SELECT r.from_person, t.name, coalesce(i.name,t.name), r.to_person FROM relations r
+             JOIN relation_types t ON t.id=r.type_id
+             LEFT JOIN relation_types i ON i.id=t.inverse_id",
+        )?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    // Kanten je Personenpaar (kleinere ID zuerst) zusammenführen.
+    let mut pairs: BTreeMap<(i64, i64), (usize, BTreeSet<Recorded>)> = BTreeMap::new();
+    for (a, b, photos) in shared {
+        pairs.entry((a, b)).or_default().0 = photos;
+    }
+    for (from, kind, inverse, to) in relations {
+        let kind = Recorded::from_type(&kind, &inverse);
+        if from == to {
+            continue;
+        }
+        let (key, kind) = if from < to {
+            ((from, to), kind)
+        } else {
+            ((to, from), kind.reversed())
+        };
+        pairs.entry(key).or_default().1.insert(kind);
+    }
+
+    // Wichtigste Personen zuerst: Fotos, Beziehungen, Name, ID. Das ist auch die
+    // Startreihenfolge des Layouts und damit Teil der Determinismus.
+    let mut degree: HashMap<i64, usize> = HashMap::new();
+    for (a, b) in pairs.keys() {
+        *degree.entry(*a).or_default() += 1;
+        *degree.entry(*b).or_default() += 1;
+    }
+    let mut nodes: Vec<Node> = people
+        .into_iter()
+        .map(|(person, name)| Node {
+            photos: counts.get(&person).copied().unwrap_or(0),
+            person,
+            name,
+        })
+        .collect();
+    nodes.sort_by_cached_key(|n| {
+        (
+            std::cmp::Reverse(n.photos),
+            std::cmp::Reverse(degree.get(&n.person).copied().unwrap_or(0)),
+            super::files::fold(&n.name),
+            n.person,
+        )
+    });
+    let hidden_people = nodes.len().saturating_sub(MAX_NODES);
+    nodes.truncate(MAX_NODES);
+    let index: HashMap<i64, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.person, i))
+        .collect();
+    let mut edges: Vec<Edge> = pairs
+        .into_iter()
+        .filter_map(|((a, b), (photos, recorded))| {
+            let (a, b) = (*index.get(&a)?, *index.get(&b)?);
+            let (a, b, recorded) = if a < b {
+                (a, b, recorded.into_iter().collect::<Vec<_>>())
+            } else {
+                (b, a, recorded.iter().map(Recorded::reversed).collect())
+            };
+            Some(Edge {
+                a,
+                b,
+                photos,
+                recorded,
+            })
+        })
+        .collect();
+    edges.sort_by_key(|e| (e.recorded.is_empty(), std::cmp::Reverse(e.photos), e.a, e.b));
+    let hidden_edges = edges.len().saturating_sub(MAX_EDGES);
+    edges.truncate(MAX_EDGES);
+
+    let layout_edges: Vec<_> = edges
+        .iter()
+        .map(|e| super::graph_layout::LayoutEdge {
+            a: e.a,
+            b: e.b,
+            weight: if e.photos > 0 {
+                1.0 + (e.photos as f32).ln()
+            } else {
+                0.0
+            } + if e.recorded.is_empty() { 0.0 } else { 1.5 },
+        })
+        .collect();
+    let positions = super::graph_layout::layout(nodes.len(), &layout_edges);
+    Ok(Network {
+        nodes,
+        edges,
+        positions,
+        hidden_people,
+        hidden_edges,
+    })
+}
