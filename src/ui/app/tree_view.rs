@@ -30,6 +30,8 @@ pub(super) struct FamilyUi {
     pub(super) just_added: Option<i64>,
     quick_other: Option<i64>,
     snoozed: BTreeSet<String>,
+    /// Behelf (Geschwister/Cousin) in der Rollenliste anzeigen.
+    pub(super) show_shortcuts: bool,
 }
 
 impl Default for FamilyUi {
@@ -47,6 +49,7 @@ impl Default for FamilyUi {
             just_added: None,
             quick_other: None,
             snoozed: BTreeSet::new(),
+            show_shortcuts: false,
         }
     }
 }
@@ -154,6 +157,17 @@ impl PhotoApp {
             Self::person_combo(ui, "check-a", "Person A", &people, &mut ui_state.check_a);
             Self::person_combo(ui, "check-b", "Person B", &people, &mut ui_state.check_b);
         });
+        let open_questions = self.open_questions();
+        if open_questions > 0 {
+            ui.horizontal(|ui| {
+                ui.label(format!(
+                    "{open_questions} vorgeschlagene Beziehungen warten auf deine Bestätigung."
+                ));
+                if ui.small_button("Zu den Rückfragen").clicked() {
+                    self.face_mode = "persons".into();
+                }
+            });
+        }
         let family = &self.face_page.family;
         let name = |id: i64| {
             people

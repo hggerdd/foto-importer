@@ -385,3 +385,22 @@ fn former_partners_roundtrip_and_never_create_in_laws() -> anyhow::Result<()> {
     assert!(faces::add_relation(&mut c, 2, "partner", 1).is_err());
     Ok(())
 }
+
+#[test]
+fn shortcuts_are_only_needed_when_the_tree_cannot_tell() {
+    use foto_importer::core::kinship::Family;
+    let edges = [parent(1, 4), parent(1, 5), parent(2, 6), parent(3, 7)];
+    let family = Family::new(&edges, &Default::default());
+    assert!(
+        !relations::shortcut_needed(&family, 4, 5),
+        "Geschwister berechenbar"
+    );
+    assert!(
+        relations::shortcut_needed(&family, 6, 7),
+        "Eltern nicht verwandt: Behelf nötig"
+    );
+    // Cousins berechenbar, sobald die Linien definiert sind.
+    let line = [parent(1, 2), parent(1, 3), parent(2, 4), parent(3, 5)];
+    let family = Family::new(&line, &Default::default());
+    assert!(!relations::shortcut_needed(&family, 4, 5));
+}

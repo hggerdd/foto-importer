@@ -413,6 +413,12 @@ pub fn load_edges(collection: &Collection) -> Result<Vec<Edge>> {
     Ok(normalize(&rows))
 }
 
+/// Geschwister/Cousin dürfen nur im Notfall direkt erfasst werden: nur wenn sich die
+/// Beziehung der beiden nicht aus dem Stammbaum berechnen lässt (ADR 0061).
+pub fn shortcut_needed(family: &super::kinship::Family, a: i64, b: i64) -> bool {
+    family.tree_relation(a, b).is_none()
+}
+
 /// Geschlechter aller Personen aus dem Attribut `gender`.
 pub fn load_genders(collection: &Collection) -> Result<BTreeMap<i64, Gender>> {
     let rows: Vec<(i64, String)> = collection
