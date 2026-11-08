@@ -114,6 +114,113 @@ pub fn nav_item(ui: &mut egui::Ui, text: &str, selected: bool, width: f32) -> eg
     }
     response
 }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PagerStep {
+    First,
+    Previous,
+    Next,
+    Last,
+}
+/// Zielseite (ab 0) eines Pager-Schritts, immer innerhalb von `0..pages`.
+pub fn pager_target(page: usize, pages: usize, step: PagerStep) -> usize {
+    let last = pages.max(1) - 1;
+    match step {
+        PagerStep::First => 0,
+        PagerStep::Previous => page.min(last).saturating_sub(1),
+        PagerStep::Next => (page + 1).min(last),
+        PagerStep::Last => last,
+    }
+}
+fn pager_button(ui: &mut egui::Ui, step: PagerStep, enabled: bool, label: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(36.0, 36.0),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let widget = if enabled && response.hovered() {
+            &visuals.widgets.hovered
+        } else {
+            &visuals.widgets.inactive
+        };
+        ui.painter().rect(
+            rect,
+            8,
+            widget.weak_bg_fill,
+            widget.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let colour = if enabled {
+            visuals.text_color()
+        } else {
+            visuals.weak_text_color().gamma_multiply(0.45)
+        };
+        let (cx, cy) = (rect.center().x, rect.center().y);
+        let forward = matches!(step, PagerStep::Next | PagerStep::Last);
+        let sign = if forward { 1.0_f32 } else { -1.0_f32 };
+        let double = matches!(step, PagerStep::First | PagerStep::Last);
+        // Dreieck; bei erste/letzte Seite zusätzlich ein Balken am Rand.
+        let shift = if double { 2.0 * sign } else { 0.0 };
+        let tip = cx + shift + 5.0 * sign;
+        let base = cx + shift - 4.0 * sign;
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(tip, cy),
+                egui::pos2(base, cy - 6.0),
+                egui::pos2(base, cy + 6.0),
+            ],
+            colour,
+            egui::Stroke::NONE,
+        ));
+        if double {
+            let bar_x = cx + 7.0 * sign;
+            ui.painter().rect_filled(
+                egui::Rect::from_center_size(egui::pos2(bar_x, cy), egui::vec2(2.5, 12.0)),
+                1,
+                colour,
+            );
+        }
+    }
+    if enabled && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let clicked = enabled && response.clicked();
+    response.on_hover_text(label);
+    clicked
+}
+/// Übliche Seitennavigation: erste, zurück, Seite X von Y, weiter, letzte.
+/// Gibt die neue Seite (ab 0) zurück, wenn gewählt wurde.
+pub fn pager(ui: &mut egui::Ui, page: usize, pages: usize, enabled: bool) -> Option<usize> {
+    let pages = pages.max(1);
+    let page = page.min(pages - 1);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (step, label, available) in [
+            (PagerStep::First, "Erste Seite", page > 0),
+            (PagerStep::Previous, "Vorherige Seite", page > 0),
+        ] {
+            if pager_button(ui, step, enabled && available, label) {
+                chosen = Some(pager_target(page, pages, step));
+            }
+        }
+        ui.label(RichText::new(format!("Seite {} von {pages}", page + 1)).strong());
+        for (step, label, available) in [
+            (PagerStep::Next, "Nächste Seite", page + 1 < pages),
+            (PagerStep::Last, "Letzte Seite", page + 1 < pages),
+        ] {
+            if pager_button(ui, step, enabled && available, label) {
+                chosen = Some(pager_target(page, pages, step));
+            }
+        }
+    });
+    chosen
+}
 pub fn card(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(if ui.visuals().dark_mode {
@@ -142,6 +249,22 @@ mod tests {
     fn contrast(a: Color32, b: Color32) -> f32 {
         let (x, y) = (luminance(a), luminance(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+    #[test]
+    fn pager_steps_stay_inside_the_page_range() {
+        use PagerStep::*;
+        assert_eq!(pager_target(4, 10, First), 0);
+        assert_eq!(pager_target(4, 10, Previous), 3);
+        assert_eq!(pager_target(4, 10, Next), 5);
+        assert_eq!(pager_target(4, 10, Last), 9);
+        assert_eq!(pager_target(0, 10, Previous), 0);
+        assert_eq!(pager_target(9, 10, Next), 9);
+        assert_eq!(pager_target(0, 0, Last), 0, "leere Liste hat eine Seite");
+        assert_eq!(
+            pager_target(50, 10, Previous),
+            8,
+            "veraltete Seite wird begrenzt"
+        );
     }
     #[test]
     fn muted_and_accent_text_stay_readable_on_every_dark_surface() {

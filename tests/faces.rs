@@ -122,6 +122,7 @@ fn review_groups_are_size_sorted_globally_and_do_not_mix_people() -> anyhow::Res
         page.groups.iter().map(Vec::len).collect::<Vec<_>>(),
         vec![28, 20, 2, 1]
     );
+    assert_eq!(page.total_groups, 4, "Seitenzahl kennt alle Gruppen");
     for group in &page.groups {
         assert!(group.iter().all(|f| f.person == group[0].person));
     }

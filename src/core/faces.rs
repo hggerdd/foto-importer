@@ -63,6 +63,8 @@ pub struct FacePage {
     pub status: Status,
     /// Namensvorschläge je Gruppe, Schlüssel ist die ID des ersten Gesichts.
     pub suggestions: BTreeMap<i64, super::recognition::Suggestions>,
+    /// Gruppen insgesamt im gewählten Reiter (für die Seitenzahl).
+    pub total_groups: usize,
 }
 
 pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
@@ -264,18 +266,26 @@ pub fn active_detector_key(collection: &Collection) -> Result<Option<String>> {
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     let max = crate::config::GROUP_MAX as i64;
     let over = max + 1;
+    let per_page = crate::config::FACE_GROUPS_PER_PAGE as i64;
     let status = status(collection)?;
     let mut groups = Vec::new();
+    let total_groups: usize;
     if mode == "unknown" && status.embedder.is_empty() {
         return Ok(FacePage {
             groups,
             people: people(collection)?,
             status,
             suggestions: BTreeMap::new(),
+            total_groups: 0,
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
-        let ids=collection.db.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id LIMIT 8 OFFSET ?")?.query_map(params![status.embedder,(page*8) as i64],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        total_groups = collection.db.query_row(
+            "SELECT count(*) FROM face_group_catalog WHERE embedder_id=? AND members>0",
+            [&status.embedder],
+            |r| r.get::<_, i64>(0),
+        )? as usize;
+        let ids=collection.db.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id LIMIT ? OFFSET ?")?.query_map(params![status.embedder,per_page,(page as i64)*per_page],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for id in ids {
             let group=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN face_group_members g ON g.face_id=f.id WHERE g.group_id=? AND f.retained=0 AND f.ignored=0 AND f.person_id IS NULL ORDER BY f.id LIMIT {over}"))?.query_map([id],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !group.is_empty() && group.len() <= crate::config::GROUP_MAX {
@@ -289,7 +299,12 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             "confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
         };
-        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT 8 OFFSET ?"))?.query_map([(page*8) as i64],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        total_groups = collection.db.query_row(
+            &format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT count(*) FROM (SELECT 1 FROM ranked GROUP BY person_id,part)"),
+            [],
+            |r| r.get::<_, i64>(0),
+        )? as usize;
+        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT {per_page} OFFSET ?"))?.query_map([(page as i64)*per_page],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (person, part) in parts {
             let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate}) r ON r.id=f.id WHERE r.rn>? AND r.rn<=? ORDER BY r.rn LIMIT {max}"))?.query_map(params![person,part*max,(part+1)*max],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !rows.is_empty() {
@@ -315,6 +330,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
         people: people(collection)?,
         status,
         suggestions,
+        total_groups,
     })
 }
 

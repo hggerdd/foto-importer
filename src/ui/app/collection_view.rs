@@ -237,28 +237,14 @@ impl PhotoApp {
             let pages = self.page.total.div_ceil(config::PAGE_SIZE).max(1);
             let loading = self.tasks.iter().any(|task| task.kind == "search");
             ui.label(RichText::new(format!("{} Fotos", self.page.total)).strong());
-            if pages > 1 {
-                if ui
-                    .add_enabled(page > 0 && !loading, egui::Button::new("Zurück"))
-                    .clicked()
-                {
-                    self.navigate_collection(
-                        page - 1,
-                        self.applied.folder.clone(),
-                        self.applied.folder_page,
-                    );
-                }
-                ui.label(format!("{} / {pages}", page + 1));
-                if ui
-                    .add_enabled(page + 1 < pages && !loading, egui::Button::new("Weiter"))
-                    .clicked()
-                {
-                    self.navigate_collection(
-                        page + 1,
-                        self.applied.folder.clone(),
-                        self.applied.folder_page,
-                    );
-                }
+            if pages > 1
+                && let Some(target) = theme::pager(ui, page, pages, !loading)
+            {
+                self.navigate_collection(
+                    target,
+                    self.applied.folder.clone(),
+                    self.applied.folder_page,
+                );
             }
         });
     }

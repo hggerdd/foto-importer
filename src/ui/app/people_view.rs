@@ -52,24 +52,12 @@ impl PhotoApp {
         });
         ui.horizontal(|ui| {
             let loading = self.tasks.iter().any(|task| task.kind == "faces");
-            if ui
-                .add_enabled(!loading && self.face_index > 0, egui::Button::new("Zurück"))
-                .clicked()
-            {
-                self.face_index -= 1;
-                self.face_advance = None;
-                self.face_row_tops.clear();
-                self.refresh_faces();
-            }
-            ui.label(format!("Seite {}", self.face_index + 1));
-            if ui
-                .add_enabled(
-                    !loading && !self.face_page.groups.is_empty(),
-                    egui::Button::new("Weiter"),
-                )
-                .clicked()
-            {
-                self.face_index += 1;
+            let pages = self
+                .face_page
+                .total_groups
+                .div_ceil(config::FACE_GROUPS_PER_PAGE);
+            if let Some(target) = theme::pager(ui, self.face_index, pages, !loading) {
+                self.face_index = target;
                 self.face_advance = None;
                 self.face_row_tops.clear();
                 self.refresh_faces();
