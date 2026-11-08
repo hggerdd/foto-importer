@@ -31,7 +31,11 @@ fn noise(state: &mut u64) -> f32 {
 
 fn vector(person: usize, spread: f32, state: &mut u64) -> Vec<f32> {
     let mut v = vec![0.0f32; 16];
-    let axes = PEOPLE[person].3;
+    let axes = if person < PEOPLE.len() {
+        PEOPLE[person].3
+    } else {
+        [person * 2 % 16, (person * 2 + 1) % 16]
+    };
     v[axes[0]] = 1.0;
     v[axes[1]] = 0.55;
     for x in v.iter_mut() {
@@ -41,7 +45,7 @@ fn vector(person: usize, spread: f32, state: &mut u64) -> Vec<f32> {
 }
 
 fn draw_face(image: &mut RgbImage, center: (f32, f32), radius: f32, person: usize) {
-    let (_, skin, hair, _) = PEOPLE[person];
+    let (_, skin, hair, _) = PEOPLE[person % PEOPLE.len()];
     for y in 0..image.height() {
         for x in 0..image.width() {
             let (dx, dy) = (x as f32 - center.0, y as f32 - center.1);
@@ -73,14 +77,18 @@ fn main() -> anyhow::Result<()> {
     let source = root.join("Quelle");
     std::fs::create_dir_all(&source)?;
     // Plan: (Person, Anzahl, bestätigt?, Streuung)
-    let plan: [(usize, usize, bool, f32); 6] = [
-        (0, 8, true, 0.25),
-        (1, 7, true, 0.25),
-        (2, 5, true, 0.25),
-        (0, 4, false, 0.35),
-        (1, 3, false, 0.35),
-        (3, 3, false, 0.25),
+    let mut plan: Vec<(usize, usize, bool, f32)> = vec![
+        (0, 16, true, 0.25),
+        (1, 12, true, 0.25),
+        (2, 10, true, 0.25),
+        (0, 6, false, 0.35),
+        (1, 4, false, 0.35),
+        (3, 4, false, 0.25),
     ];
+    // Weitere Personen mit je drei bestätigten Gesichtern: mehrere Seiten im Reiter „Bestätigt“.
+    for guest in 4..14 {
+        plan.push((guest, 3, true, 0.25));
+    }
     let mut sources = Vec::new();
     for folder in std::fs::read_dir("tmp/demo/Quelle")? {
         let folder = folder?.path();
@@ -94,6 +102,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
     sources.sort();
+    // Zusätzliche Fotos ohne Gesichter, damit die Sammlung mehrere Seiten hat.
+    for k in 0..60 {
+        let from = &sources[k % sources.len()];
+        let to = source.join(format!("KOPIE_{k:02}.jpg"));
+        if !to.exists() {
+            std::fs::copy(from, to)?;
+        }
+    }
     let mut state = 11u64;
     let mut slots = Vec::new();
     for (person, count, confirmed, spread) in plan {
@@ -106,8 +122,9 @@ fn main() -> anyhow::Result<()> {
         let from = &sources[index % sources.len()];
         let to = source.join(from.file_name().unwrap_or_default());
         let mut image = image::open(if to.exists() { &to } else { from })?.to_rgb8();
+        // Bis zu drei Gesichter je Foto nebeneinander.
         let center = (
-            180.0 + (index % 5) as f32 * 110.0,
+            140.0 + (index / sources.len()) as f32 * 260.0 + noise(&mut state) * 30.0,
             200.0 + noise(&mut state) * 60.0,
         );
         let radius = 44.0 + (index % 4) as f32 * 7.0;
@@ -118,7 +135,12 @@ fn main() -> anyhow::Result<()> {
     let source = source.canonicalize()?;
     let mut collection = Collection::open(&source, true)?;
     collection.quick_scan(false, &Control::default())?;
-    for (person, (name, _, _, _)) in PEOPLE.iter().enumerate() {
+    let names: Vec<String> = PEOPLE
+        .iter()
+        .map(|look| look.0.to_string())
+        .chain((1..=10).map(|n| format!("Gast {n}")))
+        .collect();
+    for (person, name) in names.iter().enumerate() {
         let id = person as i64 + 1;
         collection
             .db
