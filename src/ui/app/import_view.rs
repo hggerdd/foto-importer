@@ -8,6 +8,9 @@ pub(super) fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Breite der rechten Planspalte im Import einschließlich Kartenrand.
+const PLAN_WIDTH: f32 = 300.0;
+
 impl PhotoApp {
     pub(super) fn refresh_import_cache(&mut self) {
         let cache = &mut self.import_cache;
@@ -56,6 +59,7 @@ impl PhotoApp {
             "Quelle wählen, Aufnahmetage sichten und das Ziel vor dem Kopieren prüfen.",
         );
         theme::card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new("01  QUELLE").color(theme::ACCENT).strong());
                 if ui.button("Ordner wählen …").clicked() {
@@ -141,8 +145,8 @@ impl PhotoApp {
         self.refresh_import_cache();
         let selected_files = std::sync::Arc::clone(&self.import_cache.selection);
         let focused_files = std::sync::Arc::clone(&self.import_cache.focus_files);
-        let right_width = 280.0;
-        let width = (ui.available_width() - right_width - 20.0).max(300.0);
+        let right_width = PLAN_WIDTH;
+        let width = (ui.available_width() - right_width - ui.spacing().item_spacing.x).max(300.0);
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(width, ui.available_height()),
@@ -179,7 +183,7 @@ impl PhotoApp {
     fn import_plan(&mut self, ui: &mut egui::Ui, selected_files: &[SourceFile]) {
         let options_height = (ui.available_height() - 100.0).max(24.0);
         theme::card(ui).show(ui, |ui| {
-            ui.set_max_width(248.0);
+            ui.set_width(PLAN_WIDTH - 32.0);
             egui::ScrollArea::vertical()
                 .id_salt("import-plan")
                 .max_height(options_height)
@@ -302,11 +306,17 @@ impl PhotoApp {
         }
     }
     pub(super) fn source_gallery(&mut self, ui: &mut egui::Ui, files: &[SourceFile]) {
-        let columns = (ui.available_width() / (self.zoom + 12.0)).floor().max(1.0) as usize;
+        // Abstand und Scrollleiste einrechnen, sonst wird die letzte Spalte abgeschnitten.
+        let gap = ui.spacing().item_spacing.x;
+        let usable = ui.available_width() - ui.spacing().scroll.allocated_width();
+        let columns = ((usable + gap) / (self.zoom + gap)).floor().max(1.0) as usize;
+        // Die Kacheln nehmen die Restbreite auf; `zoom` ist die Mindestbreite.
+        let tile = ((usable + gap) / columns as f32 - gap).max(self.zoom);
         let rows = files.len().div_ceil(columns);
-        let height = self.zoom * 0.72 + 45.0;
+        let height = tile * 0.72 + 45.0;
         egui::ScrollArea::vertical()
             .id_salt("source-gallery")
+            .auto_shrink([false, false])
             .show_rows(ui, height, rows, |ui, range| {
                 for row in range {
                     ui.horizontal(|ui| {
@@ -324,7 +334,7 @@ impl PhotoApp {
                                     ui,
                                     request,
                                     &self.settings.exiftool,
-                                    egui::vec2(self.zoom, self.zoom * 0.72),
+                                    egui::vec2(tile, tile * 0.72),
                                 );
                                 if response.clicked() {
                                     self.source_preview = Some(file.path.clone());
@@ -332,7 +342,7 @@ impl PhotoApp {
                                 }
                                 response.on_hover_text(file.path.display().to_string());
                                 ui.add_sized(
-                                    [self.zoom, 25.0],
+                                    [tile, 25.0],
                                     egui::Label::new(
                                         file.path.file_name().unwrap_or_default().to_string_lossy(),
                                     )
