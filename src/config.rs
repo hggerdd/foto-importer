@@ -54,6 +54,8 @@ pub struct Settings {
     pub dark: bool,
     /// Im Personenbereich das ganze Foto unter der Maus zeigen.
     pub hover_preview: bool,
+    /// Reglerstellung für die Kachelgröße der Gesichtsgruppen (0 bis 1, Mitte = Standard).
+    pub face_tile_scale: f32,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -71,6 +73,7 @@ impl Default for Settings {
             auto_metadata: false,
             dark: true,
             hover_preview: true,
+            face_tile_scale: 0.5,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),

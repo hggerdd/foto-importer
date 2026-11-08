@@ -66,6 +66,18 @@ impl PhotoApp {
             if ui.button("Aktualisieren").clicked() {
                 self.refresh_faces();
             }
+            ui.add_space(12.0);
+            ui.spacing_mut().slider_width = 200.0;
+            let slider = ui
+                .add(
+                    egui::Slider::new(&mut self.settings.face_tile_scale, 0.0..=1.0)
+                        .show_value(false)
+                        .text("Größe"),
+                )
+                .on_hover_text("Größe der Gesichter. Mitte ist die Standardgröße.");
+            if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+                let _ = self.settings.save();
+            }
         });
         if self.face_page.groups.is_empty() {
             if self.analysing_current_collection() {
@@ -256,6 +268,7 @@ impl PhotoApp {
         let key = draft_key(group);
         let busy = self.busy();
         let hover_enabled = self.settings.hover_preview;
+        let tile_pref = tile_size_for(self.settings.face_tile_scale);
         let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
         let draft = self.drafts.entry(key.clone()).or_insert_with(|| {
@@ -371,6 +384,7 @@ impl PhotoApp {
                     ui.available_width(),
                     ui.spacing().item_spacing.x,
                     group.len(),
+                    tile_pref,
                 );
                 for chunk in group.chunks(columns) {
                     ui.horizontal(|ui| {
@@ -714,33 +728,67 @@ mod hover_tests {
     }
 }
 
-/// Spaltenzahl und Kachelgröße einer Gruppe: so viele Spalten, wie bei
-/// mindestens 96 Pixeln Breite passen (7 bis 14), und die Kacheln füllen die
-/// verfügbare Breite. Kleine Gruppen bekommen größere Kacheln (bis 220 Pixel).
+/// Kachelbreite in Punkten zur Reglerstellung: links deutlich kleiner (60), Mitte
+/// ist der bisherige Standard (150), rechts die größte Stufe (220).
+pub(super) fn tile_size_for(scale: f32) -> f32 {
+    let t = scale.clamp(0.0, 1.0);
+    if t <= 0.5 {
+        60.0 + (150.0 - 60.0) * (t / 0.5)
+    } else {
+        150.0 + (MAX_TILE - 150.0) * ((t - 0.5) / 0.5)
+    }
+}
 const MAX_TILE: f32 = 220.0;
-fn tile_layout(width: f32, gap: f32, faces: usize) -> (usize, f32) {
-    let fit = ((width + gap) / (96.0 + gap)).floor() as usize;
-    let columns = fit.clamp(7, 14).min(faces.max(1));
-    let size = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, MAX_TILE);
-    (columns, size)
+/// Spaltenzahl und Kachelgröße einer Gruppe bei gewünschter Größe `size`: so viele
+/// Spalten, wie bei höchstens 96 Punkten (oder kleinerer Wunschgröße) passen; die
+/// Kacheln füllen die Breite, werden aber nie größer als `size`.
+fn tile_layout(width: f32, gap: f32, faces: usize, size: f32) -> (usize, f32) {
+    let minimum = size.min(96.0);
+    let fit = ((width + gap) / (minimum + gap)).floor() as usize;
+    let columns = fit.clamp(1, crate::config::GROUP_MAX).min(faces.max(1));
+    let tile = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, size);
+    (columns, tile)
 }
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+    const WIDTH: f32 = 1360.0;
+    const GAP: f32 = 8.0;
     #[test]
-    fn wide_windows_use_more_columns_and_fill_the_width() {
-        let (columns, size) = tile_layout(1800.0, 8.0, 28);
-        assert_eq!(columns, 14);
-        assert!(columns as f32 * (size + 8.0) > 1500.0);
-        // Schmale Fenster behalten sieben Spalten und umbrechen in weitere Reihen.
-        assert_eq!(tile_layout(700.0, 8.0, 28).0, 7);
-        // Zwei Gesichter belegen nur zwei Spalten, aber größere Kacheln.
-        let (columns, size) = tile_layout(1800.0, 8.0, 2);
-        assert_eq!(columns, 2);
-        assert_eq!(size, MAX_TILE);
-        // Sechs Gesichter füllen die Breite, statt in der linken Hälfte zu stehen.
-        let (columns, size) = tile_layout(1300.0, 8.0, 6);
+    fn slider_middle_is_the_previous_size_and_the_ends_are_smaller_and_larger() {
+        assert_eq!(tile_size_for(0.5), 150.0);
+        assert_eq!(tile_size_for(1.0), MAX_TILE);
+        assert_eq!(tile_size_for(0.0), 60.0);
+        assert!(tile_size_for(0.25) > 60.0 && tile_size_for(0.25) < 150.0);
+        assert_eq!(
+            tile_size_for(7.0),
+            MAX_TILE,
+            "Werte außerhalb werden begrenzt"
+        );
+    }
+    #[test]
+    fn default_keeps_small_groups_at_the_previous_size() {
+        let (columns, size) = tile_layout(WIDTH, GAP, 6, tile_size_for(0.5));
+        assert_eq!((columns, size), (6, 150.0));
+        // Große Gruppen füllen die Breite mit mehr, kleineren Kacheln.
+        let (columns, size) = tile_layout(WIDTH, GAP, 28, tile_size_for(0.5));
+        assert!(columns >= 12 && size < 150.0);
+        assert!(columns as f32 * size + (columns as f32 - 1.0) * GAP <= WIDTH + 0.5);
+    }
+    #[test]
+    fn largest_step_fills_the_row_and_smallest_packs_more_columns() {
+        let (columns, size) = tile_layout(WIDTH, GAP, 6, tile_size_for(1.0));
         assert_eq!(columns, 6);
-        assert!(columns as f32 * size + 5.0 * 8.0 > 1300.0 * 0.95);
+        assert!(columns as f32 * size + 5.0 * GAP > WIDTH * 0.95);
+        let (small_columns, small) = tile_layout(WIDTH, GAP, 28, tile_size_for(0.0));
+        let (default_columns, _) = tile_layout(WIDTH, GAP, 28, tile_size_for(0.5));
+        assert!(small_columns > default_columns && small <= 60.0 + 0.5);
+    }
+    #[test]
+    fn narrow_windows_and_single_faces_stay_valid() {
+        let (columns, size) = tile_layout(300.0, GAP, 28, tile_size_for(1.0));
+        assert!(columns >= 1 && size >= 42.0);
+        assert_eq!(tile_layout(WIDTH, GAP, 1, tile_size_for(1.0)).0, 1);
+        assert_eq!(tile_layout(WIDTH, GAP, 0, tile_size_for(0.5)).0, 1);
     }
 }
