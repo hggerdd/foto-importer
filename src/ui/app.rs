@@ -1012,7 +1012,11 @@ impl PhotoApp {
                         .color(theme::ACCENT),
                 );
                 ui.label(RichText::new("FOTO-IMPORTER").size(13.0).strong());
-                ui.label(RichText::new("Raum für Erinnerungen").size(11.0).weak());
+                ui.label(
+                    RichText::new("Raum für Erinnerungen")
+                        .size(theme::MIN_TEXT)
+                        .weak(),
+                );
                 ui.add_space(40.0);
                 theme::eyebrow(ui, "ARBEITSBEREICH");
                 for (view, title, hint) in [
@@ -1053,12 +1057,12 @@ impl PhotoApp {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.label(
                         RichText::new("Rust · lokal · deine Fotos")
-                            .size(11.0)
+                            .size(theme::MIN_TEXT)
                             .weak(),
                     );
                     ui.label(
-                        RichText::new("ORIGINALE BLEIBEN ERHALTEN")
-                            .size(10.0)
+                        RichText::new("Originale bleiben erhalten")
+                            .size(theme::MIN_TEXT)
                             .color(theme::ACCENT),
                     );
                 });
