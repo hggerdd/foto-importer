@@ -85,6 +85,85 @@ fn collect_jpg(folder: &Path, found: &mut Vec<std::path::PathBuf>) -> anyhow::Re
     Ok(())
 }
 
+/// Ergänzt für den Personengraphen 26 weitere Personen in vier Familien/Freundeskreisen,
+/// eingetragene Beziehungen und bestätigte Gesichter ohne Merkmale auf gemeinsamen Fotos.
+/// Rein synthetisch; die Zusatzgesichter haben keine Embeddings.
+fn seed_graph(collection: &Collection) -> anyhow::Result<()> {
+    let first_new = 15i64;
+    for k in 0..26i64 {
+        let id = first_new + k;
+        collection
+            .db
+            .execute("INSERT OR IGNORE INTO persons(id) VALUES(?)", [id])?;
+        collection.db.execute(
+            "INSERT OR REPLACE INTO person_attrs VALUES(?,'name',?)",
+            params![id, format!("Demo Person {}", k + 1)],
+        )?;
+    }
+    // Familien: Anna/Ben/Clara/Dora (1-4) mit Gästen 5-14 und neuen Personen.
+    // Typen: 1 Elternteil von, 3 Partner, 4 Geschwister.
+    let relations: [(i64, i64, i64); 15] = [
+        (1, 3, 2),
+        (1, 1, 3),
+        (2, 1, 3),
+        (3, 4, 4),
+        (5, 3, 6),
+        (5, 1, 7),
+        (6, 1, 7),
+        (7, 4, 8),
+        (15, 3, 16),
+        (15, 1, 17),
+        (16, 1, 17),
+        (17, 4, 18),
+        (19, 3, 20),
+        (19, 1, 21),
+        (20, 1, 21),
+    ];
+    for (from, kind, to) in relations {
+        collection.db.execute(
+            "INSERT OR IGNORE INTO relations VALUES(?,?,?)",
+            params![from, kind, to],
+        )?;
+    }
+    let photos: Vec<(i64, i64, String)> = collection
+        .db
+        .prepare(
+            "SELECT photo_id, min(id), relpath FROM files
+             WHERE photo_id IS NOT NULL GROUP BY photo_id ORDER BY photo_id",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    // Gruppen, die gemeinsam auf Fotos erscheinen; Häufigkeit nach Gruppengröße.
+    let circles: [&[i64]; 6] = [
+        &[1, 2, 3, 4],
+        &[5, 6, 7, 8, 9],
+        &[15, 16, 17, 18, 19],
+        &[19, 20, 21, 22, 23],
+        &[24, 25, 26, 27, 28],
+        &[10, 11, 12, 1, 29],
+    ];
+    for (index, (photo, file, relpath)) in photos.iter().enumerate() {
+        let circle = circles[index % circles.len()];
+        let take = 2 + index / circles.len() % 3;
+        let start = index / circles.len() % circle.len();
+        for step in 0..take {
+            let person = circle[(start + step) % circle.len()];
+            collection.db.execute(
+                "INSERT INTO faces(photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,det_score,quality,person_id,assignment,captured_at) VALUES(?,?,?,'demo-detector',?,0.05,?,0.2,0.9,0.4,?,'user','2026:10:20 12:00:00')",
+                params![
+                    photo,
+                    file,
+                    relpath,
+                    0.05 + step as f64 * 0.12,
+                    0.15 + step as f64 * 0.12,
+                    person
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let root = Path::new("tmp/demo-faces");
     let source = root.join("Quelle");
@@ -200,6 +279,7 @@ fn main() -> anyhow::Result<()> {
             ],
         )?;
     }
+    seed_graph(&collection)?;
     recognition::apply_knowledge(&mut collection, &Control::default())?;
     let settings = Settings {
         source: source.to_string_lossy().into_owned(),

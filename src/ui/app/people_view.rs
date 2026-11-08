@@ -19,6 +19,7 @@ impl PhotoApp {
             ("confirmed", format!("Bestätigt · {}", status.confirmed)),
             ("ignored", format!("Ignoriert · {}", status.ignored)),
             ("persons", "Personen & Beziehungen".into()),
+            ("graph", "Graph".into()),
         ];
         ui.horizontal_wrapped(|ui| {
             for (mode, label) in tabs {
@@ -36,7 +37,10 @@ impl PhotoApp {
             egui::ScrollArea::vertical()
                 .id_salt("person-management")
                 .show(ui, |ui| self.person_manager(ui));
-            self.show_relationship_graph(ui.ctx());
+            return;
+        }
+        if self.face_mode == "graph" {
+            self.relationship_graph_tab(ui);
             return;
         }
         egui::TopBottomPanel::bottom("people-footer").show_inside(ui, |ui| {

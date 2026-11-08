@@ -5,6 +5,7 @@ pub mod face_models;
 pub mod faces;
 pub mod files;
 pub mod folders;
+pub mod graph_layout;
 pub mod grouping;
 pub mod import_service;
 pub mod inference;

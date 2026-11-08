@@ -115,7 +115,7 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0046](0046-gesichtsmodelle-installieren.md) | Standard-Gesichtsmodelle auf Klick im Benutzerprofil installieren | Akzeptiert |
 | [0047](0047-gesichter-als-suchmetadaten.md) | Gesichter und Personen als Fotometadaten anzeigen und suchen | Akzeptiert |
 | [0048](0048-erkennungsablauf-im-personenbereich.md) | Analyse, Referenzauswahl und Abgleich sichtbar trennen | Akzeptiert |
-| [0049](0049-gewichteter-beziehungsgraph.md) | Beziehungsgraph nach Anzahl gemeinsamer Fotos gewichten | Akzeptiert |
+| [0049](0049-gewichteter-beziehungsgraph.md) | Beziehungsgraph nach Anzahl gemeinsamer Fotos gewichten | Akzeptiert; Darstellung teilweise abgelöst durch 0058 |
 | [0050](0050-empfindlichere-gesichtspraesenz.md) | Kleine und schwache Gesichter für die Präsenzsuche erfassen | Akzeptiert |
 | [0051](0051-trainierter-namensklassifikator.md) | Trainierter Softmax-Klassifikator für die Top-3-Namensvorschläge | Akzeptiert |
 | [0052](0052-stabile-bildtexturen.md) | Bildtexturen stabil im Cache halten; ergänzt 0011/0025 | Akzeptiert |
@@ -124,4 +124,5 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0055](0055-foto-vorschau-unter-der-maus.md) | Ganzes Foto als Vorschau unter der Maus im Personenbereich | Akzeptiert |
 | [0056](0056-breite-gruppen-nutzen-die-fensterbreite.md) | Gruppen bis 28 Gesichter, Kacheln nach Fensterbreite | Akzeptiert |
 | [0057](0057-ordnerbaum-in-der-sammlung.md) | Lazy geladener Ordnerbaum als Seitenfeld der Sammlung | Akzeptiert |
+| [0058](0058-personengraph-als-netzwerk.md) | Personengraph als Netzwerk im Reiter „Graph“; ergänzt 0049 | Akzeptiert |
 | [0059](0059-arbeitsportionen-neueste-zuerst.md) | Analyse und Metadaten in Portionen, neueste zuerst | Akzeptiert |

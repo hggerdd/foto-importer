@@ -1,6 +1,6 @@
 # ADR-0049: Beziehungsgraph mit gemeinsamen Fotos
 
-- **Status:** Akzeptiert
+- **Status:** Akzeptiert; Darstellung (Ego-Graph, Modalfenster) teilweise abgelöst durch [0058](0058-personengraph-als-netzwerk.md)
 - **Erfasst am und entschieden am:** 2026-11-06
 - **Art:** Neue Entscheidung
 - **Bezieht sich auf:** [0019](0019-personen-und-beziehungsgraph.md), [0028](0028-kombinierte-bildsuche.md), [0047](0047-gesichter-als-suchmetadaten.md), [0048](0048-erkennungsablauf-im-personenbereich.md)
