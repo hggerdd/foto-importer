@@ -68,6 +68,24 @@ pub struct FacePage {
     pub total_groups: usize,
     /// Alle gespeicherten Beziehungen, kanonisch (für die Personenübersicht).
     pub relations: Vec<super::relations::Edge>,
+    /// Stammbaum für Verwandtschaftsrechner und Stammbaumansicht (ADR 0061).
+    pub family: Box<super::kinship::Family>,
+    /// Offene Rückfragen zu wahrscheinlich fehlenden Eltern (ADR 0061).
+    pub questions: Vec<super::gaps::Suggestion>,
+}
+
+/// Kanten, Stammbaum und Rückfragen in einem Zug laden.
+fn tree_state(
+    collection: &Collection,
+) -> Result<(
+    Vec<super::relations::Edge>,
+    super::kinship::Family,
+    Vec<super::gaps::Suggestion>,
+)> {
+    let edges = super::relations::load_edges(collection)?;
+    let family = super::kinship::Family::new(&edges, &super::relations::load_genders(collection)?);
+    let questions = super::gaps::suggestions(&edges, &super::gaps::load_decisions(collection)?);
+    Ok((edges, family, questions))
 }
 
 pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
@@ -274,13 +292,16 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
     let mut groups = Vec::new();
     let total_groups: usize;
     if mode == "unknown" && status.embedder.is_empty() {
+        let (relations, family, questions) = tree_state(collection)?;
         return Ok(FacePage {
             groups,
             people: people(collection)?,
             status,
             suggestions: BTreeMap::new(),
             total_groups: 0,
-            relations: super::relations::load_edges(collection)?,
+            relations,
+            family: Box::new(family),
+            questions,
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -329,13 +350,16 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             }
         }
     }
+    let (relations, family, questions) = tree_state(collection)?;
     Ok(FacePage {
         groups,
         people: people(collection)?,
         status,
         suggestions,
         total_groups,
-        relations: super::relations::load_edges(collection)?,
+        relations,
+        family: Box::new(family),
+        questions,
     })
 }
 
@@ -1031,4 +1055,82 @@ pub fn remove_relation(
         bail!("Unbekannter Beziehungstyp");
     };
     super::relations::remove(collection, source, role, target)
+}
+
+/// Längenbegrenzungen für manuell angelegte Personen.
+pub const MAX_NAME_CHARS: usize = 120;
+pub const MAX_NOTE_CHARS: usize = 500;
+
+/// Eingaben für eine Person ohne Gesichtsbezug (z. B. verstorbene Großeltern).
+#[derive(Clone, Debug, Default)]
+pub struct NewPerson {
+    pub name: String,
+    /// "weiblich", "männlich" oder leer (divers/unbekannt).
+    pub gender: String,
+    pub birth_year: Option<i32>,
+    pub note: String,
+}
+
+/// Prüft die Eingaben und liefert den bereinigten Namen.
+pub fn validate_new_person(new: &NewPerson) -> Result<String> {
+    let name = new.name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        bail!("Bitte einen Namen eingeben");
+    }
+    if name.chars().count() > MAX_NAME_CHARS {
+        bail!("Der Name darf höchstens {MAX_NAME_CHARS} Zeichen lang sein");
+    }
+    if new.note.chars().count() > MAX_NOTE_CHARS {
+        bail!("Die Notiz darf höchstens {MAX_NOTE_CHARS} Zeichen lang sein");
+    }
+    if !matches!(new.gender.as_str(), "" | "weiblich" | "männlich") {
+        bail!("Unbekanntes Geschlecht");
+    }
+    if let Some(year) = new.birth_year
+        && !(1000..=3000).contains(&year)
+    {
+        bail!("Das Geburtsjahr muss zwischen 1000 und 3000 liegen");
+    }
+    Ok(name)
+}
+
+/// Legt eine Person ohne Gesichter an. Namensdubletten sind erlaubt (die Oberfläche
+/// warnt; siehe [`people_named`]). Gesichtszuordnungen bleiben unberührt.
+pub fn add_person(collection: &mut Collection, new: &NewPerson) -> Result<i64> {
+    collection.writable()?;
+    let name = validate_new_person(new)?;
+    let tx = collection.db.transaction()?;
+    tx.execute("INSERT INTO persons DEFAULT VALUES", [])?;
+    let id = tx.last_insert_rowid();
+    let mut attrs = vec![("name", name)];
+    if !new.gender.is_empty() {
+        attrs.push(("gender", new.gender.clone()));
+    }
+    if let Some(year) = new.birth_year {
+        attrs.push(("birth_year", year.to_string()));
+    }
+    let note = new.note.trim();
+    if !note.is_empty() {
+        attrs.push(("note", note.to_string()));
+    }
+    for (key, value) in attrs {
+        tx.execute(
+            "INSERT INTO person_attrs VALUES(?,?,?)",
+            params![id, key, value],
+        )?;
+    }
+    tx.commit()?;
+    Ok(id)
+}
+
+/// Aktive Personen mit diesem Namen (ohne Groß-/Kleinschreibung), für die Dublettenwarnung.
+pub fn people_named(people: &[Person], name: &str) -> Vec<i64> {
+    let normal =
+        |text: &str| super::files::fold(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+    let wanted = normal(name);
+    people
+        .iter()
+        .filter(|p| normal(&p.name) == wanted)
+        .map(|p| p.id)
+        .collect()
 }

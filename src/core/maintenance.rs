@@ -366,58 +366,96 @@ pub fn reference_action(collection: &Collection, face: i64, action: &str) -> Res
     result
 }
 
-/// Direkte und abgeleitete Beziehungen einer Person als Schlüssel -> Personen-IDs
-/// (Kompatibilitätssicht; die gruppierte Übersicht nutzt [`super::relations`]).
+/// Direkte und berechnete Beziehungen einer Person als Schlüssel -> Personen-IDs
+/// (Kompatibilitätssicht; die gruppierte Übersicht nutzt [`super::kinship`]).
 pub fn relations(collection: &Collection, person: i64) -> Result<BTreeMap<String, Vec<i64>>> {
-    use super::relations::{DerivedRole as D, Role as R, derive, direct, load_edges};
+    use super::kinship::Relation as K;
+    use super::relations::{Role as R, direct, load_edges, load_genders};
     let edges = load_edges(collection)?;
+    let family = super::kinship::Family::new(&edges, &load_genders(collection)?);
     let direct_roles = direct(&edges, person);
-    let derived = derive(&edges, person);
-    let by_role = |role: R, extra: &[D]| -> Vec<i64> {
-        let mut ids: Vec<i64> = direct_roles
+    let found = family.find(person, &|_| true);
+    let by_tree = |wanted: &dyn Fn(K) -> bool| -> Vec<i64> {
+        let mut ids: Vec<i64> = found
             .iter()
-            .filter(|(r, _)| *r == role)
-            .map(|(_, id)| *id)
-            .chain(
-                derived
-                    .iter()
-                    .filter(|x| extra.contains(&x.role))
-                    .map(|x| x.person),
-            )
+            .filter(|m| wanted(m.relation))
+            .map(|m| m.person)
             .collect();
         ids.sort_unstable();
         ids.dedup();
         ids
     };
+    let blood = |a: u8, b: u8| move |r: K| matches!(r, K::Blood { a_gen, b_gen, .. } if a_gen == a && b_gen == b);
+    let roles = |role: R| -> Vec<i64> {
+        direct_roles
+            .iter()
+            .filter(|(r, _)| *r == role)
+            .map(|(_, id)| *id)
+            .collect()
+    };
+    let merged = |mut ids: Vec<i64>, more: Vec<i64>| {
+        ids.extend(more);
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
     let mut result: BTreeMap<String, Vec<i64>> = BTreeMap::new();
-    for (key, role, extra) in [
-        ("eltern", R::Parent, &[][..]),
-        ("kinder", R::Child, &[]),
-        ("partner", R::Partner, &[]),
-        ("freunde", R::Friend, &[]),
-        ("bekannte", R::Acquaintance, &[]),
-        ("geschwister", R::Sibling, &[D::Sibling, D::HalfSibling]),
-        ("cousins", R::Cousin, &[D::Cousin]),
-    ] {
-        result.insert(key.into(), by_role(role, extra));
-    }
-    for (key, role) in [
-        ("grosseltern", D::Grandparent),
-        ("enkel", D::Grandchild),
-        ("onkel_tanten", D::UncleAunt),
-        ("nichten_neffen", D::NieceNephew),
-        ("schwiegereltern", D::ParentInLaw),
-        ("schwiegerkinder", D::ChildInLaw),
-    ] {
-        result.insert(
-            key.into(),
-            derived
-                .iter()
-                .filter(|d| d.role == role)
-                .map(|d| d.person)
-                .collect(),
-        );
-    }
+    result.insert("eltern".into(), by_tree(&blood(0, 1)));
+    result.insert("kinder".into(), by_tree(&blood(1, 0)));
+    result.insert("partner".into(), roles(R::Partner));
+    result.insert("ehemalige_partner".into(), roles(R::FormerPartner));
+    result.insert("freunde".into(), roles(R::Friend));
+    result.insert("bekannte".into(), roles(R::Acquaintance));
+    result.insert(
+        "geschwister".into(),
+        merged(by_tree(&blood(1, 1)), by_tree(&|r| r == K::RecordedSibling)),
+    );
+    result.insert(
+        "cousins".into(),
+        merged(
+            by_tree(&|r| r.is_cousin()),
+            by_tree(&|r| r == K::RecordedCousin),
+        ),
+    );
+    result.insert("grosseltern".into(), by_tree(&blood(0, 2)));
+    result.insert("urgrosseltern".into(), by_tree(&blood(0, 3)));
+    result.insert("enkel".into(), by_tree(&blood(2, 0)));
+    result.insert("urenkel".into(), by_tree(&blood(3, 0)));
+    result.insert(
+        "onkel_tanten".into(),
+        by_tree(&|r| matches!(r, K::Blood { a_gen: 1, b_gen, .. } if b_gen >= 2)),
+    );
+    result.insert(
+        "nichten_neffen".into(),
+        by_tree(&|r| matches!(r, K::Blood { a_gen, b_gen: 1, .. } if a_gen >= 2)),
+    );
+    result.insert(
+        "schwiegereltern".into(),
+        by_tree(&|r| r == K::ThroughPartnerOfB { a_gen: 0, p_gen: 1 }),
+    );
+    result.insert(
+        "schwiegerkinder".into(),
+        by_tree(&|r| r == K::ThroughPartnerOfA { p_gen: 1, b_gen: 0 }),
+    );
+    result.insert(
+        "stiefkinder".into(),
+        by_tree(&|r| r == K::ThroughPartnerOfB { a_gen: 1, p_gen: 0 }),
+    );
+    result.insert(
+        "stiefeltern".into(),
+        by_tree(&|r| r == K::ThroughPartnerOfA { p_gen: 0, b_gen: 1 }),
+    );
+    result.insert("stiefgeschwister".into(), by_tree(&|r| r == K::StepSibling));
+    result.insert(
+        "schwaeger".into(),
+        by_tree(&|r| {
+            matches!(
+                r,
+                K::ThroughPartnerOfB { a_gen: 1, p_gen: 1 }
+                    | K::ThroughPartnerOfA { p_gen: 1, b_gen: 1 }
+            )
+        }),
+    );
     Ok(result)
 }
 pub fn merge_people(collection: &mut Collection, source: i64, target: i64) -> Result<()> {

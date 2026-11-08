@@ -126,4 +126,5 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0057](0057-ordnerbaum-in-der-sammlung.md) | Lazy geladener Ordnerbaum als Seitenfeld der Sammlung | Akzeptiert |
 | [0058](0058-personengraph-als-netzwerk.md) | Personengraph als Netzwerk im Reiter „Graph“; ergänzt 0049 | Akzeptiert |
 | [0059](0059-arbeitsportionen-neueste-zuerst.md) | Analyse und Metadaten in Portionen, neueste zuerst | Akzeptiert |
-| [0060](0060-beziehungstypen-und-ableitung.md) | Beziehungstypen, Richtungsunabhängigkeit und Ableitung; ergänzt 0019 | Akzeptiert |
+| [0060](0060-beziehungstypen-und-ableitung.md) | Beziehungstypen, Richtungsunabhängigkeit und Ableitung; ergänzt 0019 | Akzeptiert; Ableitung und Geschwister/Cousin teilweise abgelöst durch 0061 |
+| [0061](0061-stammbaum-als-normalisiertes-modell.md) | Stammbaum: nur Basisfakten gespeichert, Verwandtschaft berechnet, Rückfragen, Stammbaumansicht | Akzeptiert |

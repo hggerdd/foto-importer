@@ -7,6 +7,7 @@ mod relationship_view;
 mod settings_view;
 #[cfg(test)]
 mod tests;
+mod tree_view;
 mod windows;
 
 use super::{theme, thumbnails::Thumbnails};
@@ -65,6 +66,7 @@ enum Outcome {
     Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
     RelationshipGraph(u64, crate::core::relationship_graph::Network),
+    PersonAdded(i64),
     RuntimeDownloaded(PathBuf),
     ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
     DngUpdate(
@@ -184,6 +186,7 @@ pub struct PhotoApp {
     relation_from: Option<i64>,
     relation_to: Option<i64>,
     relation_kind: String,
+    family_ui: tree_view::FamilyUi,
     person_edit: Option<faces::Person>,
     relationship_graph: relationship_view::RelationshipView,
     report: Option<String>,
@@ -272,6 +275,7 @@ impl PhotoApp {
             relation_from: None,
             relation_to: None,
             relation_kind: "parent".into(),
+            family_ui: Default::default(),
             person_edit: None,
             relationship_graph: Default::default(),
             report: None,
@@ -304,6 +308,7 @@ impl PhotoApp {
                 "confirmed",
                 "ignored",
                 "persons",
+                "tree",
                 "graph",
             ]
             .contains(&mode.as_str())
@@ -319,6 +324,22 @@ impl PhotoApp {
             && let Ok(person) = person.parse()
         {
             app.relationship_graph.selected = Some(person);
+        }
+        // Nur für Sichtprüfungen: Fokus-Person und Generationen im Stammbaum.
+        if let Ok(person) = std::env::var("FOTO_IMPORTER_TREE_PERSON")
+            && let Ok(person) = person.parse()
+        {
+            app.family_ui.focus = Some(person);
+        }
+        if let Ok(up) = std::env::var("FOTO_IMPORTER_TREE_UP")
+            && let Ok(up) = up.parse()
+        {
+            app.family_ui.up = up;
+        }
+        if let Ok(down) = std::env::var("FOTO_IMPORTER_TREE_DOWN")
+            && let Ok(down) = down.parse()
+        {
+            app.family_ui.down = down;
         }
         if !app.settings.collection.is_empty() {
             app.refresh_collection();
@@ -838,6 +859,14 @@ impl PhotoApp {
                         if let Some(photo) = self.selected_photo.clone() {
                             self.choose_photo(photo);
                         }
+                    }
+                }
+                Ok(Outcome::PersonAdded(id)) => {
+                    self.message("Person angelegt".into(), false);
+                    if running.collection == self.settings.collection {
+                        self.family_ui.just_added = Some(id);
+                        self.relationship_graph.stale = true;
+                        self.refresh_faces();
                     }
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
