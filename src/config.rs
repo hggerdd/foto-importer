@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub const PAGE_SIZE: usize = 48;
+/// Zulässige Breite des Ordnerbaums (Minimum, Maximum) in Punkten.
+pub const FOLDER_TREE_WIDTH: (f32, f32) = (170.0, 380.0);
 pub const COPY_CHUNK: usize = 1024 * 1024;
 pub const CACHE_BYTES: usize = 192 * 1024 * 1024;
 pub const CACHE_ENTRIES: usize = 512;
@@ -60,6 +62,10 @@ pub struct Settings {
     pub work_portion: usize,
     /// Läufe nur für den in der Sammlung gewählten Ordner ausführen.
     pub work_in_folder: bool,
+    /// Ordnerbaum links neben der Galerie sichtbar.
+    pub folder_tree_open: bool,
+    /// Breite des Ordnerbaums in Punkten, begrenzt auf [`FOLDER_TREE_WIDTH`].
+    pub folder_tree_width: f32,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -80,6 +86,8 @@ impl Default for Settings {
             face_tile_scale: 0.5,
             work_portion: 500,
             work_in_folder: false,
+            folder_tree_open: true,
+            folder_tree_width: 230.0,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),

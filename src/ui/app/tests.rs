@@ -25,6 +25,52 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
 }
 
 #[test]
+fn folder_tree_loads_levels_lazily_on_a_worker_and_reveals_the_selection() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    {
+        let c = Collection::open(root.path(), true)?;
+        for (id, dir) in [(1, "2024/05"), (2, "2024/06"), (3, "2025")] {
+            let rel = format!("{dir}/{id}.jpg");
+            c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+            c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(?,?,?,?,?,?,'jpg',1,1,?,'present')", rusqlite::params![id, rel, rel, dir, format!("{id}.jpg"), id.to_string(), id])?;
+        }
+    }
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.status.files = 3;
+    app.status.photos = 3;
+    app.applied.folder = Some("2024/05".into());
+    let settle = |app: &mut PhotoApp| {
+        for _ in 0..2000 {
+            app.sync_folder_tree();
+            app.poll(&ctx);
+            if app.tasks.is_empty() && app.folder_tree.wanted().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    settle(&mut app);
+    let names = |app: &PhotoApp| {
+        app.folder_tree
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                crate::core::folders::Row::Node { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Root and the path to the selected folder are loaded, siblings stay collapsed.
+    assert_eq!(names(&app), ["2024", "2024/05", "2024/06", "2025"]);
+    app.folder_tree.collapse("2024");
+    assert_eq!(names(&app), ["2024", "2025"]);
+    Ok(())
+}
+
+#[test]
 fn confirming_a_group_brings_its_successor_to_the_same_viewport_position() {
     let ctx = egui::Context::default();
     let creation = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -142,7 +188,10 @@ fn collection_keeps_preview_and_metadata_visible_when_filters_open() {
                 metadata.bottom() <= size.y - 35.0,
                 "{metadata:?} at {size:?}"
             );
-            assert!(image.right() <= size.x && metadata.right() <= size.x);
+            assert!(
+                image.right() <= size.x && metadata.right() <= size.x,
+                "{image:?} {metadata:?} {size:?}"
+            );
             assert!(
                 image.right() >= size.x - 60.0,
                 "inspector lost its right edge: {image:?}"

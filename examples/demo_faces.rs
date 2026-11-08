@@ -72,6 +72,19 @@ fn draw_face(image: &mut RgbImage, center: (f32, f32), radius: f32, person: usiz
     }
 }
 
+/// Alle JPEGs unterhalb eines Ordners, auch aus verschachtelten Demo-Ordnern.
+fn collect_jpg(folder: &Path, found: &mut Vec<std::path::PathBuf>) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(folder)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_jpg(&path, found)?;
+        } else if path.extension().is_some_and(|e| e == "jpg") {
+            found.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let root = Path::new("tmp/demo-faces");
     let source = root.join("Quelle");
@@ -90,17 +103,7 @@ fn main() -> anyhow::Result<()> {
         plan.push((guest, 3, true, 0.25));
     }
     let mut sources = Vec::new();
-    for folder in std::fs::read_dir("tmp/demo/Quelle")? {
-        let folder = folder?.path();
-        if folder.is_dir() {
-            for file in std::fs::read_dir(&folder)? {
-                let file = file?.path();
-                if file.extension().is_some_and(|e| e == "jpg") {
-                    sources.push(file);
-                }
-            }
-        }
-    }
+    collect_jpg(Path::new("tmp/demo/Quelle"), &mut sources)?;
     sources.sort();
     // Zusätzliche Fotos ohne Gesichter, damit die Sammlung mehrere Seiten hat.
     for k in 0..60 {

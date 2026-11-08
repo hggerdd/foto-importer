@@ -20,8 +20,24 @@ impl PhotoApp {
             ui.separator();
             let width = ui.available_width();
             let gap = ui.spacing().item_spacing.x;
-            let detail_width = (width * 0.48).clamp(320.0, 720.0);
             let inspect = self.inspector && width >= 610.0;
+            // The tree yields before the gallery (at least 340) and the inspector (at least 320).
+            let (tree_min, tree_max) = config::FOLDER_TREE_WIDTH;
+            let room = width - 6.0 - 2.0 * gap - 340.0 - if inspect { 320.0 + gap } else { 0.0 };
+            let tree = self.settings.folder_tree_open && room >= tree_min;
+            let tree_width = if tree {
+                self.settings
+                    .folder_tree_width
+                    .clamp(tree_min, tree_max)
+                    .min(room)
+            } else {
+                0.0
+            };
+            let handle = if tree { 6.0 + 2.0 * gap } else { 0.0 };
+            if tree {
+                self.sync_folder_tree();
+            }
+            let detail_width = ((width - tree_width - handle) * 0.48).clamp(320.0, 720.0);
             if inspect
                 && self.selected_photo.is_none()
                 && let Some(photo) = self.page.photos.first().cloned()
@@ -29,12 +45,16 @@ impl PhotoApp {
                 self.choose_photo(photo);
             }
             let gallery_width = if inspect {
-                width - detail_width - gap
+                width - tree_width - handle - detail_width - gap
             } else {
-                width
+                width - tree_width - handle
             };
             let height = ui.available_height();
             ui.horizontal_top(|ui| {
+                if tree {
+                    self.folder_panel(ui, tree_width, height);
+                    self.folder_tree_handle(ui, height);
+                }
                 ui.allocate_ui_with_layout(
                     egui::vec2(gallery_width, height),
                     egui::Layout::top_down(egui::Align::Min),
@@ -92,6 +112,14 @@ impl PhotoApp {
                     if ui.selectable_label(self.inspector, "Bilddetails").clicked() {
                         self.inspector = !self.inspector;
                     }
+                    if ui
+                        .selectable_label(self.settings.folder_tree_open, "Ordnerbaum")
+                        .on_hover_text("Ordner der Sammlung als Baum ein- oder ausblenden")
+                        .clicked()
+                    {
+                        self.settings.folder_tree_open = !self.settings.folder_tree_open;
+                        self.save();
+                    }
                 });
             }
         });
@@ -130,7 +158,6 @@ impl PhotoApp {
             let mut draft = self.filters.clone();
             draft.page = self.applied.page;
             draft.folder = self.applied.folder.clone();
-            draft.folder_page = self.applied.folder_page;
             let filter_label = if draft != self.applied {
                 "Filter · Entwurf"
             } else if Self::has_advanced_filters(&self.applied) {
@@ -141,7 +168,6 @@ impl PhotoApp {
             if ui.button(filter_label).clicked() {
                 self.collection_dialog = Some(CollectionDialog::Filters);
             }
-            self.collection_folders(ui);
         });
     }
 
@@ -150,7 +176,6 @@ impl PhotoApp {
         criteria.text.clear();
         criteria.folder = None;
         criteria.page = 0;
-        criteria.folder_page = 0;
         if criteria.face_state == "any" {
             criteria.face_state.clear();
         }
@@ -160,75 +185,14 @@ impl PhotoApp {
     fn apply_collection_search(&mut self) {
         self.filters.folder = self.applied.folder.clone();
         self.filters.page = 0;
-        self.filters.folder_page = 0;
         self.refresh_collection();
     }
 
-    fn navigate_collection(&mut self, page: usize, folder: Option<String>, folder_page: usize) {
+    pub(super) fn navigate_collection(&mut self, page: usize, folder: Option<String>) {
         let mut filters = self.applied.clone();
         filters.page = page;
         filters.folder = folder;
-        filters.folder_page = folder_page;
         self.query_collection(filters);
-    }
-
-    fn collection_folders(&mut self, ui: &mut egui::Ui) {
-        let active = self.applied.folder.clone();
-        let name = active
-            .as_deref()
-            .and_then(|p| p.rsplit('/').next())
-            .unwrap_or("Alle");
-        let caption: String = name.chars().take(16).collect();
-        let caption = if name.chars().count() > 16 {
-            format!("{caption}…")
-        } else {
-            caption
-        };
-        let loading = self.tasks.iter().any(|task| task.kind == "search");
-        ui.menu_button(format!("Ordner · {caption}"), |ui| {
-            ui.set_min_width(230.0);
-            ui.label(active.as_deref().unwrap_or("Gesamte Sammlung"));
-            ui.add_enabled_ui(!loading, |ui| {
-                if ui.button("Gesamte Sammlung").clicked() {
-                    self.navigate_collection(0, None, 0);
-                    ui.close();
-                }
-                if let Some(folder) = &active
-                    && ui.button("Übergeordneter Ordner").clicked()
-                {
-                    self.navigate_collection(
-                        0,
-                        folder.rsplit_once('/').map(|(p, _)| p.to_owned()),
-                        0,
-                    );
-                    ui.close();
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(260.0)
-                    .show(ui, |ui| {
-                        for folder in self.page.folders.clone() {
-                            if ui.button(format!("{folder}/")).clicked() {
-                                let path = active
-                                    .as_ref()
-                                    .map_or_else(|| folder.clone(), |p| format!("{p}/{folder}"));
-                                self.navigate_collection(0, Some(path), 0);
-                                ui.close();
-                            }
-                        }
-                    });
-                ui.horizontal(|ui| {
-                    let page = self.applied.folder_page;
-                    if page > 0 && ui.small_button("Vorherige Ordner").clicked() {
-                        self.navigate_collection(0, active.clone(), page - 1);
-                    }
-                    if self.page.folders_more && ui.small_button("Weitere Ordner").clicked() {
-                        self.navigate_collection(0, active.clone(), page + 1);
-                    }
-                });
-            });
-        })
-        .response
-        .on_hover_text(active.as_deref().unwrap_or("Gesamte Sammlung"));
     }
 
     fn collection_pagination(&mut self, ui: &mut egui::Ui) {
@@ -240,11 +204,7 @@ impl PhotoApp {
             if pages > 1
                 && let Some(target) = theme::pager(ui, page, pages, !loading)
             {
-                self.navigate_collection(
-                    target,
-                    self.applied.folder.clone(),
-                    self.applied.folder_page,
-                );
+                self.navigate_collection(target, self.applied.folder.clone());
             }
         });
     }
