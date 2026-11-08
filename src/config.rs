@@ -56,6 +56,10 @@ pub struct Settings {
     pub hover_preview: bool,
     /// Reglerstellung für die Kachelgröße der Gesichtsgruppen (0 bis 1, Mitte = Standard).
     pub face_tile_scale: f32,
+    /// Fotos je Analyse- oder Metadatenlauf, neueste zuerst; 0 bedeutet alle (ADR 0059).
+    pub work_portion: usize,
+    /// Läufe nur für den in der Sammlung gewählten Ordner ausführen.
+    pub work_in_folder: bool,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -74,6 +78,8 @@ impl Default for Settings {
             dark: true,
             hover_preview: true,
             face_tile_scale: 0.5,
+            work_portion: 500,
+            work_in_folder: false,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),

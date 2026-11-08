@@ -31,3 +31,40 @@ fn small_but_clear_faces_get_name_features_from_the_larger_image() -> anyhow::Re
     assert!(after >= before);
     Ok(())
 }
+
+#[test]
+#[ignore = "Requires a private collection copy, local models and ONNX Runtime"]
+fn portion_analyses_the_newest_unanalysed_photos_first() -> anyhow::Result<()> {
+    use foto_importer::core::scope::{self, Scope};
+    let var = |name: &str| std::env::var(name).map_err(|_| anyhow::anyhow!("{name} fehlt"));
+    let mut c = Collection::open(Path::new(&var("FOTO_REAL_ROOT")?), true)?;
+    let order = scope::analysis_order(&c, &Scope::default())?;
+    anyhow::ensure!(order.len() >= 30, "zu wenige Fotos");
+    let newest: Vec<i64> = order[..30].to_vec();
+    for photo in &newest {
+        c.db.execute("DELETE FROM face_jobs WHERE photo_id=?", [photo])?;
+    }
+    let report = faces::analyze_scoped(
+        &mut c,
+        Path::new(&var("FOTO_MODEL_DIR")?),
+        Path::new(&var("FOTO_ORT_DLL")?),
+        "yunet",
+        "sface",
+        &var("FOTO_EXIFTOOL")?,
+        &Control::default(),
+        &Scope::new(Some(10), None),
+    )?;
+    println!("{report}");
+    let analysed = |photo: &i64| -> anyhow::Result<bool> {
+        Ok(c.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM face_jobs WHERE photo_id=? AND stage='detect' AND status='done')",
+            [photo],
+            |r| r.get(0),
+        )?)
+    };
+    for (index, photo) in newest.iter().enumerate() {
+        assert_eq!(analysed(photo)?, index < 10, "Foto {index} der neuesten");
+    }
+    assert!(report.contains("10 davon neu analysiert"), "{report}");
+    Ok(())
+}

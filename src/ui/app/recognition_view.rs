@@ -57,11 +57,19 @@ impl PhotoApp {
                     if ui.button("Einrichten …").clicked() {
                         self.recognition_tools_open = true;
                     }
-                } else if ui.add_enabled(!self.busy(), egui::Button::new("Fotos analysieren"))
-                    .on_hover_text("Erkennt Gesichter, berechnet Merkmale und bildet Gruppen. Bereits analysierte Fotos werden bei unverändertem Stand übersprungen.")
-                    .clicked()
-                {
-                    self.collection_action("analyze");
+                } else {
+                    let label = if self.settings.work_portion == 0 {
+                        "Alle Fotos analysieren".to_string()
+                    } else {
+                        format!("Nächste {} Fotos analysieren", self.settings.work_portion)
+                    };
+                    if ui.add_enabled(!self.busy(), egui::Button::new(label))
+                        .on_hover_text("Beginnt mit den neuesten Fotos, erkennt Gesichter, berechnet Merkmale und bildet Gruppen. Bereits analysierte Fotos werden übersprungen und zählen nicht zur Portion.")
+                        .clicked()
+                    {
+                        self.collection_action("analyze");
+                    }
+                    self.portion_controls(ui);
                 }
             });
             Self::recognition_step(&mut columns[1], "2  Aus Namen lernen", |ui| {
@@ -286,6 +294,50 @@ impl PhotoApp {
                     Ok(Outcome::Done("Gruppenentscheidung zurückgenommen".into()))
                 },
             );
+        }
+    }
+}
+
+impl PhotoApp {
+    /// Portionsgröße und Ordnerbezug für Analyse und Metadaten.
+    fn portion_controls(&mut self, ui: &mut egui::Ui) {
+        let folder = self.applied.folder.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Portion").small().weak());
+            egui::ComboBox::from_id_salt("work-portion")
+                .selected_text(match self.settings.work_portion {
+                    0 => "Alle".to_string(),
+                    n => format!("{n} Fotos"),
+                })
+                .show_ui(ui, |ui| {
+                    for n in [100usize, 500, 2000, 10000, 0] {
+                        let text = if n == 0 {
+                            "Alle".to_string()
+                        } else {
+                            format!("{n} Fotos")
+                        };
+                        if ui
+                            .selectable_value(&mut self.settings.work_portion, n, text)
+                            .changed()
+                        {
+                            let _ = self.settings.save();
+                        }
+                    }
+                });
+        });
+        let has_folder = folder.is_some();
+        let text = match &folder {
+            Some(folder) => format!("Nur Ordner {folder}"),
+            None => "Nur gewählter Ordner (in der Sammlung wählen)".to_string(),
+        };
+        if ui
+            .add_enabled(
+                has_folder,
+                egui::Checkbox::new(&mut self.settings.work_in_folder, text),
+            )
+            .changed()
+        {
+            let _ = self.settings.save();
         }
     }
 }

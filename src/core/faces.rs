@@ -4,6 +4,7 @@ use super::{
     inference::{self, Models},
     jobs::Control,
     previews,
+    scope::Scope,
 };
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
@@ -343,6 +344,29 @@ pub fn analyze(
     exiftool: &str,
     control: &Control,
 ) -> Result<String> {
+    analyze_scoped(
+        collection,
+        model_dir,
+        dll,
+        detector,
+        embedder,
+        exiftool,
+        control,
+        &Scope::default(),
+    )
+}
+/// Analyse neuester Fotos zuerst, optional nur eine Portion oder ein Ordner (ADR 0059).
+#[allow(clippy::too_many_arguments)]
+pub fn analyze_scoped(
+    collection: &mut Collection,
+    model_dir: &Path,
+    dll: &Path,
+    detector: &str,
+    embedder: &str,
+    exiftool: &str,
+    control: &Control,
+    scope: &Scope,
+) -> Result<String> {
     collection.writable()?;
     control.set_face_phase(super::jobs::FacePhase::Analysis);
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
@@ -378,21 +402,30 @@ pub fn analyze(
     save_setting(&collection.db, "rust.embedder_key", &embedder_key)?;
     save_setting(&collection.db, "active_detector", detector)?;
     save_setting(&collection.db, "active_embedder", embedder)?;
-    let total: usize = collection
-        .db
-        .query_row("SELECT count(*) FROM face_sources", [], |r| r.get(0))?;
-    let (mut cursor, mut done, mut found, mut failed, mut without_vector) = (0, 0, 0, 0, 0);
+    let order = super::scope::analysis_order(collection, scope)?;
+    let total = scope.limit.map_or(order.len(), |l| l.min(order.len()));
+    let (mut position, mut done, mut worked) = (0usize, 0usize, 0usize);
+    let (mut found, mut failed, mut without_vector) = (0, 0, 0);
+    let mut portion_full = false;
     loop {
         control.checkpoint()?;
-        let rows=collection.db.prepare("SELECT f.photo_id,f.id,f.relpath,f.size,f.mtime_ns,coalesce(m.orientation,1),coalesce(m.dt_original,'') FROM face_sources s JOIN files f ON f.id=s.file_id LEFT JOIN meta m ON m.file_id=f.id WHERE f.photo_id>? AND f.status='present' ORDER BY f.photo_id LIMIT 32")?.query_map([cursor],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?,r.get::<_,u32>(5)?,r.get::<_,String>(6)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        if rows.is_empty() {
+        let ids = &order[position..(position + 32).min(order.len())];
+        if ids.is_empty() || portion_full {
             break;
         }
+        position += ids.len();
+        let rows = analysis_rows(collection, ids)?;
         for (photo, file, relative, size, mtime, orientation, date) in rows {
             control.checkpoint()?;
-            cursor = photo;
             let fingerprint = format!("rust-v1:{file}:{size}:{mtime}:{orientation}:{embedder_key}");
             let complete:bool=collection.db.query_row("SELECT EXISTS(SELECT 1 FROM face_jobs WHERE photo_id=? AND stage='detect' AND model_id=? AND status='done' AND fingerprint=?)",params![photo,detector_key,fingerprint],|r|r.get(0))?;
+            if !complete && scope.limit.is_some_and(|l| worked >= l) {
+                portion_full = true;
+                break;
+            }
+            if !complete {
+                worked += 1;
+            }
             if !complete {
                 let result = (|| -> Result<(usize, usize)> {
                     let image = previews::load(
@@ -542,15 +575,44 @@ pub fn analyze(
                 control.checkpoint()?;
             }
             done += 1;
-            control.progress(done, total);
+            control.progress(if scope.limit.is_some() { worked } else { done }, total);
         }
         prepare_groups(collection, &embedder_key, control)?;
     }
     super::grouping::rebuild_groups(collection, &embedder_key, control)?;
-    collection.backup()?;
+    // Die Sicherung kostet bei großen Sammlungen spürbar Zeit: nur nach neuer Arbeit.
+    if worked > 0 {
+        collection.backup()?;
+    }
     Ok(format!(
-        "{done} Fotos geprüft · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"
+        "{done} Fotos geprüft, {worked} davon neu analysiert · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"
     ))
+}
+type AnalysisRow = (i64, i64, String, i64, i64, u32, String);
+/// Einzelheiten der Fotos mit diesen IDs, in der Reihenfolge von `ids`.
+fn analysis_rows(collection: &Collection, ids: &[i64]) -> Result<Vec<AnalysisRow>> {
+    let marks = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT f.photo_id,f.id,f.relpath,f.size,f.mtime_ns,coalesce(m.orientation,1),coalesce(m.dt_original,'') FROM face_sources s JOIN files f ON f.id=s.file_id LEFT JOIN meta m ON m.file_id=f.id WHERE f.photo_id IN ({marks}) AND f.status='present'"
+    );
+    let mut rows: Vec<AnalysisRow> = collection
+        .db
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let rank: BTreeMap<i64, usize> = ids.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    rows.sort_by_key(|r| rank.get(&r.0).copied().unwrap_or(usize::MAX));
+    Ok(rows)
 }
 /// Längere Bildkante für die Nachberechnung kleiner, klar erkannter Gesichter.
 const HIRES_EDGE: u32 = 3200;

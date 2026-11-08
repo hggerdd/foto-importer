@@ -2,6 +2,7 @@ use super::{
     collection::Collection,
     files,
     jobs::{Control, command, wait_child},
+    scope::Scope,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params, types::Value};
@@ -109,18 +110,42 @@ pub fn identity(raw: &Json) -> Option<String> {
 }
 
 pub fn enrich(collection: &mut Collection, executable: &str, control: &Control) -> Result<String> {
+    enrich_scoped(collection, executable, control, &Scope::default())
+}
+/// Metadaten neuester Dateien zuerst, optional nur eine Portion oder ein Ordner (ADR 0059).
+pub fn enrich_scoped(
+    collection: &mut Collection,
+    executable: &str,
+    control: &Control,
+    scope: &Scope,
+) -> Result<String> {
     collection.writable()?;
-    let total: usize = collection.db.query_row(
-        "SELECT count(*) FROM files WHERE status='present' AND meta_state!='done'",
-        [],
-        |r| r.get(0),
-    )?;
+    let order = super::scope::metadata_order(collection, scope)?;
+    let total = order.len();
     let mut done = 0;
-    let mut cursor = 0;
+    let mut position = 0;
     loop {
         control.checkpoint()?;
-        let rows=collection.db.prepare("SELECT id,relpath,photo_id FROM files WHERE status='present' AND meta_state!='done' AND id>? ORDER BY id LIMIT 128")?
-            .query_map([cursor],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let ids = &order[position..(position + 128).min(total)];
+        if ids.is_empty() {
+            break;
+        }
+        position += ids.len();
+        let marks = vec!["?"; ids.len()].join(",");
+        let mut rows = collection
+            .db
+            .prepare(&format!(
+                "SELECT id,relpath,photo_id FROM files WHERE id IN ({marks})"
+            ))?
+            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.sort_by_key(|r| ids.iter().position(|id| *id == r.0));
         if rows.is_empty() {
             break;
         }
@@ -137,7 +162,6 @@ pub fn enrich(collection: &mut Collection, executable: &str, control: &Control) 
         let tx = collection.db.transaction()?;
         for ((id, rel, photo), path) in rows.iter().zip(&paths) {
             control.checkpoint()?;
-            cursor = *id;
             let key = files::fold(&path.to_string_lossy().replace('\\', "/"));
             let found = raw
                 .iter()

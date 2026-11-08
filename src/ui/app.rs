@@ -504,6 +504,16 @@ impl PhotoApp {
             },
         );
     }
+    /// Arbeitsumfang für Analyse und Metadaten: Portion und optional der gewählte Ordner.
+    fn work_scope(&self) -> crate::core::scope::Scope {
+        crate::core::scope::Scope::new(
+            Some(self.settings.work_portion),
+            self.settings
+                .work_in_folder
+                .then(|| self.applied.folder.clone())
+                .flatten(),
+        )
+    }
     fn collection_action(&mut self, action: &str) {
         if self.busy() || self.settings.collection.is_empty() {
             return;
@@ -526,6 +536,7 @@ impl PhotoApp {
             self.undo.clear();
         }
         let settings = self.settings.clone();
+        let scope = self.work_scope();
         let action = action.to_string();
         let detector = self.detector.clone();
         let embedder = self.embedder.clone();
@@ -559,13 +570,15 @@ impl PhotoApp {
                 "confirm_missing" => c.quick_scan(true, &control)?,
                 "purge" => c.purge_missing(age as i64)?,
                 "resolve" => c.resolve_move(&old, &new, &control)?,
-                "metadata" => metadata::enrich(&mut c, &settings.exiftool, &control)?,
+                "metadata" => {
+                    metadata::enrich_scoped(&mut c, &settings.exiftool, &control, &scope)?
+                }
                 "automatic" | "nightly" => {
                     if settings.auto_metadata {
-                        metadata::enrich(&mut c, &settings.exiftool, &control)?;
+                        metadata::enrich_scoped(&mut c, &settings.exiftool, &control, &scope)?;
                     }
                     if action == "automatic" || faces::status(&c)?.nightly {
-                        faces::analyze(
+                        faces::analyze_scoped(
                             &mut c,
                             Path::new(&settings.model_dir),
                             Path::new(&settings.onnx_runtime),
@@ -573,6 +586,7 @@ impl PhotoApp {
                             &embedder,
                             &settings.exiftool,
                             &control,
+                            &scope,
                         )?
                     } else {
                         "Nächtliche Metadatenanreicherung abgeschlossen".into()
@@ -586,7 +600,7 @@ impl PhotoApp {
                         &crate::core::maintenance::calibrate(&c, &control)?,
                     )?));
                 }
-                "analyze" => faces::analyze(
+                "analyze" => faces::analyze_scoped(
                     &mut c,
                     Path::new(&settings.model_dir),
                     Path::new(&settings.onnx_runtime),
@@ -594,6 +608,7 @@ impl PhotoApp {
                     &embedder,
                     &settings.exiftool,
                     &control,
+                    &scope,
                 )?,
                 "knowledge" => faces::apply_knowledge(&mut c, &control)?,
                 _ => "Sammlung geöffnet".into(),
