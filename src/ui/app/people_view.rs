@@ -452,6 +452,15 @@ impl PhotoApp {
     pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
         let mut photos = None;
         let mut graph_from = None;
+        if self.relation_from.is_none() {
+            // Die Übersicht soll sofort etwas zeigen: Standard ist die Person mit den meisten Gesichtern.
+            self.relation_from = self
+                .face_page
+                .people
+                .iter()
+                .max_by_key(|person| person.count)
+                .map(|person| person.id);
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -499,7 +508,7 @@ impl PhotoApp {
         );
         egui::ScrollArea::vertical()
             .id_salt("persons")
-            .max_height(280.0)
+            .max_height(130.0)
             .show(ui, |ui| {
                 for person in &self.face_page.people {
                     ui.horizontal(|ui| {

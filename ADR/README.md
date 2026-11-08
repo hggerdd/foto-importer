@@ -123,3 +123,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0054](0054-namensmerkmale-aus-hoher-aufloesung.md) | Namensmerkmale kleiner, klar erkannter Gesichter aus höherer Auflösung | Akzeptiert |
 | [0055](0055-foto-vorschau-unter-der-maus.md) | Ganzes Foto als Vorschau unter der Maus im Personenbereich | Akzeptiert |
 | [0056](0056-breite-gruppen-nutzen-die-fensterbreite.md) | Gruppen bis 28 Gesichter, Kacheln nach Fensterbreite | Akzeptiert |
+| [0060](0060-beziehungstypen-und-ableitung.md) | Beziehungstypen, Richtungsunabhängigkeit und Ableitung; ergänzt 0019 | Akzeptiert |
