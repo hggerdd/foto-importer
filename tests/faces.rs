@@ -250,3 +250,29 @@ fn small_groups_join_similar_groups_but_not_dissimilar_or_same_photo() -> anyhow
     assert!(largest <= foto_importer::config::GROUP_MAX as i64);
     Ok(())
 }
+#[test]
+fn a_group_of_the_maximum_size_can_be_named_and_larger_ones_are_rejected() -> anyhow::Result<()> {
+    use foto_importer::config::GROUP_MAX;
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    seed(&c, GROUP_MAX as i64 + 1)?;
+    let all: Vec<i64> = (1..=GROUP_MAX as i64).collect();
+    // Regression: die Obergrenze der Anzeige (28) muss auch beim Speichern gelten, nicht nur 14.
+    let selected: BTreeSet<i64> = all.iter().copied().collect();
+    let undo = faces::name_group(&mut c, &all, &selected, None, "Alex", false)?;
+    let named: i64 = c.db.query_row(
+        "SELECT count(*) FROM faces WHERE assignment='user' AND person_id IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(named, GROUP_MAX as i64);
+    faces::undo(&mut c, &undo)?;
+    let too_many: Vec<i64> = (1..=GROUP_MAX as i64 + 1).collect();
+    let selected: BTreeSet<i64> = too_many.iter().copied().collect();
+    let message = match faces::name_group(&mut c, &too_many, &selected, None, "Alex", false) {
+        Ok(_) => anyhow::bail!("zu große Gruppe wurde akzeptiert"),
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains(&GROUP_MAX.to_string()), "{message}");
+    Ok(())
+}

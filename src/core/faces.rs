@@ -934,8 +934,10 @@ pub fn name_group(
     ignore: bool,
 ) -> Result<Undo> {
     collection.writable()?;
-    if ids.is_empty() || ids.len() > 14 {
-        bail!("Gruppe muss 1 bis 14 sichtbare Gesichter enthalten");
+    // Dieselbe Obergrenze wie bei der Gruppenbildung und der Anzeige (ADR 0056).
+    let max = crate::config::GROUP_MAX;
+    if ids.is_empty() || ids.len() > max {
+        bail!("Gruppe muss 1 bis {max} sichtbare Gesichter enthalten");
     }
     if !ignore && selected.is_empty() {
         bail!("Bitte mindestens ein Gesicht auswählen");
