@@ -105,3 +105,20 @@ synthetische Demodaten aus `examples/demo_faces.rs`, 40 Personen, 154 Verbindung
 Nicht geprüft: Hell-Design, Mausrad/Ziehen/Doppelklick (Screenshot ist statisch),
 Bedienung per Screenreader, Sammlungen mit mehreren hundert echten Personen,
 Porträts statt Initialen (nicht umgesetzt).
+
+## Stammbaum und berechnete Verwandtschaft (ADR 0061)
+
+Regressionen: Fixture-Familie mit vier Generationen (Halbgeschwister von beiden Eltern,
+Patchwork, Cousins beider Seiten, Großonkel, Schwager/Schwägerin, frühere Partner,
+unbekannte Geschlechter), Eigenschaftstest mit 40 zufälligen zyklenfreien Bäumen gegen eine
+naive Referenzdefinition (Blutsverwandtschaft stimmt überein, `relationship(a,b)` und
+`relationship(b,a)` sind zueinander invers), Grenzen (8 Generationen, 100 je Gruppe), Altzeilen und
+Zusammenführung mitten im Baum, Rückfragen (erscheinen, Ja legt Kanten an, Nein unterdrückt die
+Wiederholung, keine Zyklen oder Widersprüche), Person ohne Foto anlegen (Validierung, `people()`,
+Personengraph), Layout (keine Überlappung, deterministisch, endliche Koordinaten, über 1000 Personen
+unter der Zeitgrenze). Sichtprüfung am 08.11.2026 (Debug-Build, synthetische Familie aus
+`examples/demo_faces.rs`, `FOTO_IMPORTER_FACE_MODE=tree`, `FOTO_IMPORTER_TREE_PERSON=<ID von Mia>`,
+`FOTO_IMPORTER_TREE_UP`, `FOTO_IMPORTER_TREE_DOWN`): [Stammbaum](screenshots/stammbaum.png),
+[Rückfragen](screenshots/personen-rueckfragen.png). Nicht geprüft: Hell-Design, Bedienung per
+Maus (Klick auf Personen, Auswahlfelder, „Person anlegen“), Screenreader, Sammlungen mit
+echten Familien, Layout bei Pedigree-Collapse (Ahnenschwund) in der Zeichnung.

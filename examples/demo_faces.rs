@@ -7,7 +7,14 @@
 //! FOTO_IMPORTER_FACE_MODE=unknown cargo run --release`.
 use foto_importer::{
     config::Settings,
-    core::{collection::Collection, faces, inference::normalize, jobs::Control, recognition},
+    core::{
+        collection::Collection,
+        faces::{self, NewPerson},
+        inference::normalize,
+        jobs::Control,
+        recognition,
+        relations::{self, Role},
+    },
 };
 use image::{Rgb, RgbImage};
 use rusqlite::params;
@@ -164,6 +171,83 @@ fn seed_graph(collection: &Collection) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Mehrgenerationenfamilie ohne Fotos für den Stammbaum (rein synthetisch):
+/// vier Generationen, Onkel/Tante, Cousins beider Seiten, Halbgeschwister von beiden
+/// Eltern, frühere Partner. Zwei Geschwister haben bewusst nur einen erfassten
+/// Elternteil, damit die Rückfragen sichtbar werden. Gibt die ID von Mia zurück.
+fn seed_family(collection: &mut Collection) -> anyhow::Result<i64> {
+    let mut ids = std::collections::BTreeMap::new();
+    for (key, name, gender, year) in [
+        ("heinrich", "Heinrich Brandt", "männlich", 1931),
+        ("gerda", "Gerda Brandt", "weiblich", 1934),
+        ("walter", "Walter Hoffmann", "männlich", 1929),
+        ("ingrid", "Ingrid Hoffmann", "weiblich", 1933),
+        ("peter", "Peter Brandt", "männlich", 1958),
+        ("susanne", "Susanne Keller", "weiblich", 1961),
+        ("thomas", "Thomas Keller", "männlich", 1959),
+        ("claudia", "Claudia Brandt", "weiblich", 1960),
+        ("markus", "Markus Hoffmann", "männlich", 1963),
+        ("eva", "Eva Hoffmann", "weiblich", 1965),
+        ("birgit", "Birgit Neumann", "weiblich", 1957),
+        ("frank", "Frank Schulz", "männlich", 1956),
+        ("mia", "Mia Brandt", "weiblich", 1988),
+        ("ben", "Ben Brandt", "männlich", 1991),
+        ("noah", "Noah Brandt", "männlich", 1983),
+        ("jana", "Jana Schulz", "weiblich", 1982),
+        ("lukas", "Lukas Keller", "männlich", 1987),
+        ("lena", "Lena Keller", "weiblich", 1990),
+        ("felix", "Felix Hoffmann", "männlich", 1992),
+        ("tim", "Tim Vogel", "männlich", 1986),
+        ("emil", "Emil Vogel", "männlich", 2016),
+    ] {
+        let id = faces::add_person(
+            collection,
+            &NewPerson {
+                name: name.into(),
+                gender: gender.into(),
+                birth_year: Some(year),
+                note: String::new(),
+            },
+        )?;
+        ids.insert(key, id);
+    }
+    for (subject, role, object) in [
+        ("heinrich", Role::Partner, "gerda"),
+        ("walter", Role::Partner, "ingrid"),
+        ("heinrich", Role::Parent, "peter"),
+        ("gerda", Role::Parent, "peter"),
+        ("heinrich", Role::Parent, "susanne"),
+        ("gerda", Role::Parent, "susanne"),
+        ("walter", Role::Parent, "claudia"),
+        ("ingrid", Role::Parent, "claudia"),
+        ("walter", Role::Parent, "markus"),
+        ("ingrid", Role::Parent, "markus"),
+        ("susanne", Role::Partner, "thomas"),
+        ("markus", Role::Partner, "eva"),
+        ("peter", Role::Partner, "claudia"),
+        ("peter", Role::FormerPartner, "birgit"),
+        ("claudia", Role::FormerPartner, "frank"),
+        ("peter", Role::Parent, "mia"),
+        ("claudia", Role::Parent, "mia"),
+        ("peter", Role::Parent, "ben"),
+        ("peter", Role::Parent, "noah"),
+        ("birgit", Role::Parent, "noah"),
+        ("claudia", Role::Parent, "jana"),
+        ("frank", Role::Parent, "jana"),
+        ("susanne", Role::Parent, "lukas"),
+        ("thomas", Role::Parent, "lukas"),
+        ("susanne", Role::Parent, "lena"),
+        ("markus", Role::Parent, "felix"),
+        ("eva", Role::Parent, "felix"),
+        ("mia", Role::Partner, "tim"),
+        ("mia", Role::Parent, "emil"),
+        ("tim", Role::Parent, "emil"),
+    ] {
+        relations::add(collection, ids[subject], role, ids[object])?;
+    }
+    Ok(ids["mia"])
+}
+
 fn main() -> anyhow::Result<()> {
     let root = Path::new("tmp/demo-faces");
     let source = root.join("Quelle");
@@ -316,6 +400,7 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
     seed_graph(&collection)?;
+    let mia = seed_family(&mut collection)?;
     recognition::apply_knowledge(&mut collection, &Control::default())?;
     let settings = Settings {
         source: source.to_string_lossy().into_owned(),
@@ -327,6 +412,7 @@ fn main() -> anyhow::Result<()> {
     let path = root.join("settings.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&settings)?)?;
     let status = faces::status(&collection)?;
+    println!("Stammbaum: FOTO_IMPORTER_FACE_MODE=tree FOTO_IMPORTER_TREE_PERSON={mia}");
     println!(
         "{} · bestätigt {} · unbekannt {} · Vorschläge {} · Modell: {}",
         path.canonicalize()?.display(),

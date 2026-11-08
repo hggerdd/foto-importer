@@ -1,6 +1,6 @@
 # ADR-0060: Beziehungstypen, Richtungsunabhängigkeit und Ableitung
 
-- **Status:** Akzeptiert
+- **Status:** Akzeptiert; die Ableitung und die Rolle von Geschwister/Cousin sind teilweise abgelöst durch [ADR-0061](0061-stammbaum-als-normalisiertes-modell.md)
 - **Erfasst am:** 2026-11-08
 - **Art:** Neue Entscheidung
 - **Entscheidungsdatum:** 2026-11-08
@@ -65,6 +65,11 @@ Direction, Gender)` und `Role::label` bilden das ab.
 
 Nicht geprüft werden weitere Genealogie-Widersprüche (z. B. mehr als zwei
 Eltern, Altersangaben); mehr als zwei Eltern bleiben erlaubt.
+
+> Abgelöst durch ADR 0061: `derive` und die Zwei-Schritte-Tabelle entfallen; ein allgemeiner
+> Verwandtschaftsrechner (`kinship`) berechnet alle Grade. Bestehen bleiben Katalog 1–7 (ID 8 neu),
+> Freund/Bekannter, Eingabe aus beiden Richtungen, Merge-Regeln, Beschriftung nach Geschlecht des Subjekts.
+> Geschwister und Cousin sind nur noch Behelf.
 
 **Ableitung** (`derive`, nicht gespeichert, tiefenbegrenzt auf zwei Schritte,
 höchstens 50 Einträge je Rolle, sortiert nach Rolle, dann ID):

@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::relations::{self, Gender, Role};
+use crate::core::relations::{Gender, Role};
 
 impl PhotoApp {
     pub(super) fn people_view(&mut self, ui: &mut egui::Ui) {
@@ -19,7 +19,15 @@ impl PhotoApp {
             ("review", format!("Vorschläge prüfen · {}", status.review)),
             ("confirmed", format!("Bestätigt · {}", status.confirmed)),
             ("ignored", format!("Ignoriert · {}", status.ignored)),
-            ("persons", "Personen & Beziehungen".into()),
+            ("persons", {
+                let questions = self.open_questions();
+                if questions > 0 {
+                    format!("Personen & Beziehungen · {questions} Rückfragen")
+                } else {
+                    "Personen & Beziehungen".to_string()
+                }
+            }),
+            ("tree", "Stammbaum".into()),
             ("graph", "Graph".into()),
         ];
         ui.horizontal_wrapped(|ui| {
@@ -38,6 +46,10 @@ impl PhotoApp {
             egui::ScrollArea::vertical()
                 .id_salt("person-management")
                 .show(ui, |ui| self.person_manager(ui));
+            return;
+        }
+        if self.face_mode == "tree" {
+            self.tree_tab(ui);
             return;
         }
         if self.face_mode == "graph" {
@@ -545,6 +557,8 @@ impl PhotoApp {
             self.view = View::Collection;
             self.refresh_collection();
         }
+        self.questions_list(ui);
+        self.add_person_form(ui);
         ui.label(RichText::new("Beziehung zwischen Personen").strong());
         self.relation_form(ui);
         ui.add_space(6.0);
@@ -569,14 +583,37 @@ impl PhotoApp {
             egui::ComboBox::from_id_salt("relation-kind")
                 .selected_text(role.label(gender_of(a)))
                 .show_ui(ui, |ui| {
-                    for option in Role::ALL {
-                        ui.selectable_value(&mut chosen, option, option.label(gender_of(a)));
+                    for option in [
+                        Role::Child,
+                        Role::Parent,
+                        Role::Partner,
+                        Role::FormerPartner,
+                        Role::Friend,
+                        Role::Acquaintance,
+                        Role::Sibling,
+                        Role::Cousin,
+                    ] {
+                        let text = option.label(gender_of(a));
+                        let text = if matches!(option, Role::Sibling | Role::Cousin) {
+                            format!("{text} (Behelf)")
+                        } else {
+                            text.to_string()
+                        };
+                        ui.selectable_value(&mut chosen, option, text);
                     }
                 });
             ui.label("von");
             Self::relationship_person(ui, "Person B", people, &mut self.relation_to);
         });
         self.relation_kind = chosen.key().into();
+        if matches!(chosen, Role::Sibling | Role::Cousin) {
+            ui.label(
+                RichText::new(
+                    "Behelf: nur nötig, solange die Eltern nicht erfasst sind. Mit erfassten Eltern ergeben sich Geschwister und Cousins automatisch aus dem Stammbaum.",
+                )
+                .weak(),
+            );
+        }
         let ready = a.is_some() && b.is_some() && a != b;
         if ready {
             let name = |id: Option<i64>| {
@@ -623,124 +660,6 @@ impl PhotoApp {
                 });
             }
         });
-    }
-
-    /// Gruppierte Übersicht der direkten Beziehungen von Person A, darunter getrennt
-    /// die berechneten (abgeleiteten) Beziehungen. Nur Direktes ist bearbeitbar.
-    fn relation_overview(&mut self, ui: &mut egui::Ui) {
-        let Some(person) = self.relation_from else {
-            ui.label(RichText::new("Person A wählen, um ihre Beziehungen zu sehen.").weak());
-            return;
-        };
-        let busy = self.busy();
-        let people = &self.face_page.people;
-        let Some(me) = people.iter().find(|p| p.id == person) else {
-            return;
-        };
-        let info = |id: i64| {
-            people.iter().find(|p| p.id == id).map_or_else(
-                || (format!("#{id}"), Gender::Unknown),
-                |p| (p.name.clone(), Gender::parse(&p.gender)),
-            )
-        };
-        let direct = relations::direct(&self.face_page.relations, person);
-        let derived = relations::derive(&self.face_page.relations, person);
-        let mut action: Option<(i64, Role, i64, bool)> = None;
-        let mut select = None;
-        ui.label(RichText::new(format!("Beziehungen von {}", me.name)).strong());
-        if direct.is_empty() {
-            ui.label(RichText::new("Keine Beziehungen eingetragen.").weak());
-        }
-        for role in Role::ALL {
-            let items: Vec<_> = direct.iter().filter(|(r, _)| *r == role).collect();
-            if items.is_empty() {
-                continue;
-            }
-            ui.label(role.group_label());
-            for (_, other) in items {
-                ui.horizontal(|ui| {
-                    let (name, gender) = info(*other);
-                    ui.add_space(12.0);
-                    if ui.link(name).clicked() {
-                        select = Some(*other);
-                    }
-                    ui.label(RichText::new(format!("{} · #{other}", role.label(gender))).weak());
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Entfernen").small())
-                        .clicked()
-                    {
-                        action = Some((*other, role, person, false));
-                    }
-                });
-            }
-        }
-        if !derived.is_empty() {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Abgeleitet (berechnet, nicht gespeichert)").strong());
-            for role in relations::DerivedRole::ALL {
-                let items: Vec<_> = derived.iter().filter(|d| d.role == role).collect();
-                if items.is_empty() {
-                    continue;
-                }
-                ui.label(role.group_label());
-                for item in items {
-                    ui.horizontal(|ui| {
-                        let (name, gender) = info(item.person);
-                        ui.add_space(12.0);
-                        if ui.link(name).clicked() {
-                            select = Some(item.person);
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "abgeleitet: {} · #{}",
-                                role.label(gender),
-                                item.person
-                            ))
-                            .italics()
-                            .weak(),
-                        );
-                        if let Some(direct_role) = role.adoptable()
-                            && ui
-                                .add_enabled(
-                                    !busy,
-                                    egui::Button::new("Als direkte Beziehung übernehmen").small(),
-                                )
-                                .clicked()
-                        {
-                            action = Some((item.person, direct_role, person, true));
-                        }
-                    });
-                }
-            }
-        }
-        if select.is_some() {
-            self.relation_from = select;
-        }
-        if let Some((subject, role, object, add)) = action {
-            let root = self.settings.collection.clone();
-            self.undo.clear();
-            let title = if add {
-                "Beziehung übernehmen"
-            } else {
-                "Beziehung entfernen"
-            };
-            self.launch(title, true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                if add {
-                    relations::add(&mut c, subject, role, object)?;
-                } else {
-                    relations::remove(&c, subject, role, object)?;
-                }
-                Ok(Outcome::Done(
-                    if add {
-                        "Beziehung übernommen"
-                    } else {
-                        "Beziehung entfernt"
-                    }
-                    .into(),
-                ))
-            });
-        }
     }
 
     fn relationship_person(

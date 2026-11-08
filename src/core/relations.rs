@@ -1,5 +1,6 @@
-//! Beziehungen zwischen Personen: Typkatalog, Beschriftungen, Validierung und
-//! Ableitung (ADR 0060).
+//! Beziehungen zwischen Personen: Typkatalog, Beschriftungen und Validierung
+//! (ADR 0060, ADR 0061). Die Ableitung (Großeltern, Cousins, Schwäger ...) steht im
+//! Verwandtschaftsrechner [`super::kinship`].
 //!
 //! Alles Fachliche steht hier als reine Funktionen ohne Datenbankzugriff. Nur
 //! `load_edges`, `add` und `remove` berühren die Sammlung. Gespeichert wird jede
@@ -10,9 +11,6 @@ use anyhow::{Result, bail};
 use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-
-/// Grenze je abgeleiteter Rolle; schützt Ansicht und Berechnung bei fehlerhaften Daten.
-pub const MAX_DERIVED_PER_ROLE: usize = 50;
 
 /// Grammatisches Geschlecht aus dem Personenattribut `gender` (Freitext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,7 +37,12 @@ pub enum Kind {
     /// `from` ist Elternteil von `to`.
     Parent,
     Partner,
+    /// Frühere Partnerschaft (ID 8, ADR 0061): bleibt sichtbar, begründet aber
+    /// keine Verschwägerung.
+    FormerPartner,
+    /// Behelf (ADR 0061): nur solange die Eltern nicht erfasst sind.
     Sibling,
+    /// Behelf (ADR 0061).
     Cousin,
     Friend,
     Acquaintance,
@@ -55,7 +58,7 @@ pub struct TypeRow {
 
 /// Einzige Quelle der Wahrheit für `relation_types`. Die IDs 1–4 sind
 /// unveränderlich; ID 2 ist der Umkehrtyp von 1 und wird nie neu gespeichert.
-pub const CATALOG: [TypeRow; 7] = [
+pub const CATALOG: [TypeRow; 8] = [
     TypeRow {
         id: 1,
         name: "elternteil_von",
@@ -98,6 +101,12 @@ pub const CATALOG: [TypeRow; 7] = [
         inverse_id: 7,
         symmetric: true,
     },
+    TypeRow {
+        id: 8,
+        name: "ehemaliger_partner_von",
+        inverse_id: 8,
+        symmetric: true,
+    },
 ];
 
 /// SQL, das fehlende Katalogzeilen ergänzt, ohne vorhandene zu ändern.
@@ -118,9 +127,10 @@ pub fn seed_sql() -> String {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Parent,
         Kind::Partner,
+        Kind::FormerPartner,
         Kind::Sibling,
         Kind::Cousin,
         Kind::Friend,
@@ -134,6 +144,7 @@ impl Kind {
             Kind::Cousin => 5,
             Kind::Friend => 6,
             Kind::Acquaintance => 7,
+            Kind::FormerPartner => 8,
         }
     }
     /// Typ zu einer gespeicherten ID. ID 2 (`kind_von`) liefert `Parent`; dann
@@ -146,6 +157,7 @@ impl Kind {
             5 => Kind::Cousin,
             6 => Kind::Friend,
             7 => Kind::Acquaintance,
+            8 => Kind::FormerPartner,
             _ => return None,
         })
     }
@@ -164,6 +176,7 @@ impl Kind {
         match self {
             Kind::Parent => "Eltern-Kind",
             Kind::Partner => "Partner",
+            Kind::FormerPartner => "Frühere Partner",
             Kind::Sibling => "Geschwister",
             Kind::Cousin => "Cousin/Cousine",
             Kind::Friend => "Freunde",
@@ -187,6 +200,7 @@ pub enum Role {
     Parent,
     Child,
     Partner,
+    FormerPartner,
     Sibling,
     Cousin,
     Friend,
@@ -194,10 +208,11 @@ pub enum Role {
 }
 
 impl Role {
-    pub const ALL: [Role; 7] = [
+    pub const ALL: [Role; 8] = [
         Role::Parent,
         Role::Child,
         Role::Partner,
+        Role::FormerPartner,
         Role::Sibling,
         Role::Cousin,
         Role::Friend,
@@ -209,6 +224,7 @@ impl Role {
             Role::Parent => "parent",
             Role::Child => "child",
             Role::Partner => "partner",
+            Role::FormerPartner => "former_partner",
             Role::Sibling => "sibling",
             Role::Cousin => "cousin",
             Role::Friend => "friend",
@@ -230,6 +246,7 @@ impl Role {
         match self {
             Role::Parent | Role::Child => Kind::Parent,
             Role::Partner => Kind::Partner,
+            Role::FormerPartner => Kind::FormerPartner,
             Role::Sibling => Kind::Sibling,
             Role::Cousin => Kind::Cousin,
             Role::Friend => Kind::Friend,
@@ -243,6 +260,7 @@ impl Role {
             Role::Parent => ("Mutter", "Vater", "Elternteil"),
             Role::Child => ("Tochter", "Sohn", "Kind"),
             Role::Partner => ("Partnerin", "Partner", "Partner/in"),
+            Role::FormerPartner => ("Ex-Partnerin", "Ex-Partner", "Ex-Partner/in"),
             Role::Sibling => ("Schwester", "Bruder", "Geschwisterteil"),
             Role::Cousin => ("Cousine", "Cousin", "Cousin/Cousine"),
             Role::Friend => ("Freundin", "Freund", "Freund/in"),
@@ -260,8 +278,9 @@ impl Role {
             Role::Parent => "Eltern",
             Role::Child => "Kinder",
             Role::Partner => "Partner",
-            Role::Sibling => "Geschwister",
-            Role::Cousin => "Cousins und Cousinen",
+            Role::FormerPartner => "Frühere Partner",
+            Role::Sibling => "Geschwister (direkt erfasst)",
+            Role::Cousin => "Cousins und Cousinen (direkt erfasst)",
             Role::Friend => "Freunde",
             Role::Acquaintance => "Bekannte",
         }
@@ -285,6 +304,7 @@ pub fn stored_role(type_id: i64, side: Direction) -> Option<Role> {
         }
         (Kind::Parent, _, _) => Role::Child,
         (Kind::Partner, _, _) => Role::Partner,
+        (Kind::FormerPartner, _, _) => Role::FormerPartner,
         (Kind::Sibling, _, _) => Role::Sibling,
         (Kind::Cousin, _, _) => Role::Cousin,
         (Kind::Friend, _, _) => Role::Friend,
@@ -350,6 +370,7 @@ impl Edge {
 fn role_of_symmetric(kind: Kind) -> Role {
     match kind {
         Kind::Partner => Role::Partner,
+        Kind::FormerPartner => Role::FormerPartner,
         Kind::Sibling => Role::Sibling,
         Kind::Cousin => Role::Cousin,
         Kind::Friend => Role::Friend,
@@ -392,6 +413,27 @@ pub fn load_edges(collection: &Collection) -> Result<Vec<Edge>> {
     Ok(normalize(&rows))
 }
 
+/// Geschlechter aller Personen aus dem Attribut `gender`.
+pub fn load_genders(collection: &Collection) -> Result<BTreeMap<i64, Gender>> {
+    let rows: Vec<(i64, String)> = collection
+        .db
+        .prepare("SELECT person_id,value FROM person_attrs WHERE key='gender'")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, text)| (id, Gender::parse(&text)))
+        .collect())
+}
+
+/// Stammbaum der Sammlung für den Verwandtschaftsrechner.
+pub fn load_family(collection: &Collection) -> Result<super::kinship::Family> {
+    Ok(
+        super::kinship::Family::new(&load_edges(collection)?, &load_genders(collection)?)
+            .with_declined(super::gaps::load_decisions(collection)?.declined),
+    )
+}
+
 /// Direkte Beziehungen einer Person: (Rolle der anderen Person, andere Person),
 /// sortiert nach Rolle und ID.
 pub fn direct(edges: &[Edge], person: i64) -> Vec<(Role, i64)> {
@@ -413,7 +455,9 @@ pub enum Conflict {
     Cycle,
     Pair(Kind, Kind),
     Lineage(Kind),
-    Derived(Kind, &'static str),
+    Derived(Kind, String),
+    /// Ergibt sich bereits aus dem Stammbaum (nur für Behelfsverbindungen).
+    Redundant(Kind),
     Merge(Box<Conflict>),
 }
 
@@ -440,6 +484,11 @@ impl fmt::Display for Conflict {
                 "„{}“ widerspricht der abgeleiteten Beziehung „{derived}“",
                 kind.title()
             ),
+            Conflict::Redundant(kind) => write!(
+                f,
+                "„{}“ ergibt sich bereits aus dem Stammbaum und wird deshalb nicht zusätzlich gespeichert",
+                kind.title()
+            ),
             Conflict::Merge(inner) => {
                 write!(
                     f,
@@ -454,7 +503,7 @@ impl std::error::Error for Conflict {}
 
 fn kinds_conflict(a: Kind, b: Kind) -> bool {
     use Kind::*;
-    let family = |k| matches!(k, Parent | Partner | Sibling | Cousin);
+    let family = |k| matches!(k, Parent | Partner | FormerPartner | Sibling | Cousin);
     if (a == Friend && b == Acquaintance) || (a == Acquaintance && b == Friend) {
         return true;
     }
@@ -462,7 +511,10 @@ fn kinds_conflict(a: Kind, b: Kind) -> bool {
         return false;
     }
     // Einzig erlaubte Kombination innerhalb der Familie: Partner und Cousin.
-    !matches!((a, b), (Partner, Cousin) | (Cousin, Partner))
+    !matches!(
+        (a, b),
+        (Partner | FormerPartner, Cousin) | (Cousin, Partner | FormerPartner)
+    )
 }
 
 fn parents_of(edges: &[Edge], person: i64) -> BTreeSet<i64> {
@@ -499,8 +551,48 @@ fn reach(edges: &[Edge], start: i64, up: bool) -> BTreeSet<i64> {
     seen
 }
 
+fn is_family_symmetric(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Partner | Kind::FormerPartner | Kind::Sibling | Kind::Cousin
+    )
+}
+
+fn is_sibling_relation(rel: super::kinship::Relation) -> bool {
+    matches!(
+        rel,
+        super::kinship::Relation::Blood {
+            a_gen: 1,
+            b_gen: 1,
+            ..
+        }
+    )
+}
+
+/// Behelfsverbindungen (Geschwister/Cousin), die dem Baum widersprechen.
+fn inconsistent_shortcuts(edges: &[Edge]) -> BTreeMap<Edge, String> {
+    let family = super::kinship::Family::new(edges, &BTreeMap::new());
+    let mut out = BTreeMap::new();
+    for e in edges
+        .iter()
+        .filter(|e| matches!(e.kind, Kind::Sibling | Kind::Cousin))
+    {
+        if let Some(rel) = family.tree_relation(e.from, e.to) {
+            let fine = match e.kind {
+                Kind::Sibling => is_sibling_relation(rel),
+                _ => rel.is_cousin(),
+            };
+            if !fine {
+                out.insert(*e, rel.group_title());
+            }
+        }
+    }
+    out
+}
+
 /// Prüft eine neue Beziehung gegen den vorhandenen Bestand.
 /// `Ok(true)`: neu und widerspruchsfrei; `Ok(false)`: bereits vorhanden.
+/// `Err(Conflict::Redundant)`: Behelfsverbindung, die schon aus dem Baum folgt.
 pub fn validate_add(edges: &[Edge], new: Edge) -> Result<bool, Conflict> {
     if new.from == new.to {
         return Err(Conflict::SelfRelation);
@@ -519,24 +611,25 @@ pub fn validate_add(edges: &[Edge], new: Edge) -> Result<bool, Conflict> {
             return Err(Conflict::Pair(e.kind, new.kind));
         }
     }
-    let family_symmetric = |k: Kind| matches!(k, Kind::Partner | Kind::Sibling | Kind::Cousin);
-    if family_symmetric(new.kind) {
+    if is_family_symmetric(new.kind) {
         let lineage = reach(edges, new.from, true).contains(&new.to)
             || reach(edges, new.to, true).contains(&new.from);
         if lineage {
             return Err(Conflict::Lineage(new.kind));
         }
-        if new.kind == Kind::Cousin || new.kind == Kind::Sibling {
-            let wanted = if new.kind == Kind::Cousin {
-                [DerivedRole::Sibling, DerivedRole::HalfSibling]
-            } else {
-                [DerivedRole::Cousin, DerivedRole::Cousin]
-            };
-            // Gegen den Bestand ohne die neue Kante prüfen.
-            for d in derive(edges, new.from) {
-                if d.person == new.to && wanted.contains(&d.role) {
-                    return Err(Conflict::Derived(new.kind, d.role.group_label()));
-                }
+        if matches!(new.kind, Kind::Cousin | Kind::Sibling) {
+            let family = super::kinship::Family::new(edges, &BTreeMap::new());
+            if let Some(rel) = family.tree_relation(new.from, new.to) {
+                let same = if new.kind == Kind::Sibling {
+                    is_sibling_relation(rel)
+                } else {
+                    rel.is_cousin()
+                };
+                return Err(if same {
+                    Conflict::Redundant(new.kind)
+                } else {
+                    Conflict::Derived(new.kind, rel.group_title())
+                });
             }
         }
     }
@@ -547,12 +640,24 @@ pub fn validate_add(edges: &[Edge], new: Edge) -> Result<bool, Conflict> {
         ancestors.insert(new.from);
         let mut descendants = reach(edges, new.to, false);
         descendants.insert(new.to);
-        for e in edges.iter().filter(|e| family_symmetric(e.kind)) {
+        for e in edges.iter().filter(|e| is_family_symmetric(e.kind)) {
             let hit = (ancestors.contains(&e.from) && descendants.contains(&e.to))
                 || (ancestors.contains(&e.to) && descendants.contains(&e.from));
             if hit {
                 return Err(Conflict::Lineage(e.kind));
             }
+        }
+        // Und sie darf keine Behelfsverbindung (Geschwister/Cousin) in einen
+        // Widerspruch zum Baum bringen. Schon vorher widersprüchliche Altdaten
+        // blockieren dabei nichts.
+        let before = inconsistent_shortcuts(edges);
+        let mut with = edges.to_vec();
+        with.push(new);
+        if let Some((edge, title)) = inconsistent_shortcuts(&with)
+            .into_iter()
+            .find(|(e, _)| !before.contains_key(e))
+        {
+            return Err(Conflict::Derived(edge.kind, title));
         }
     }
     Ok(true)
@@ -624,225 +729,18 @@ pub fn plan_merge(edges: &[Edge], source: i64, target: i64) -> Result<MergePlan,
         {
             continue;
         }
-        if validate_add(&set, edge).map_err(|c| Conflict::Merge(Box::new(c)))? {
+        let fresh = match validate_add(&set, edge) {
+            Ok(fresh) => fresh,
+            // Bereits erfasste Behelfsverbindungen gehen nie verloren (ADR 0061).
+            Err(Conflict::Redundant(_)) => true,
+            Err(c) => return Err(Conflict::Merge(Box::new(c))),
+        };
+        if fresh {
             set.push(edge);
             add.push(edge);
         }
     }
     Ok(MergePlan { add, drop: dropped })
-}
-
-// ------------------------------------------------------------------ Ableitung
-
-/// Abgeleitete Rolle: "other ist <Rolle> von person". Nicht gespeichert.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DerivedRole {
-    Grandparent,
-    Grandchild,
-    Sibling,
-    HalfSibling,
-    UncleAunt,
-    NieceNephew,
-    Cousin,
-    ParentInLaw,
-    ChildInLaw,
-}
-
-impl DerivedRole {
-    pub const ALL: [DerivedRole; 9] = [
-        DerivedRole::Grandparent,
-        DerivedRole::Grandchild,
-        DerivedRole::Sibling,
-        DerivedRole::HalfSibling,
-        DerivedRole::UncleAunt,
-        DerivedRole::NieceNephew,
-        DerivedRole::Cousin,
-        DerivedRole::ParentInLaw,
-        DerivedRole::ChildInLaw,
-    ];
-    pub fn label(self, gender: Gender) -> &'static str {
-        use Gender::*;
-        let (f, m, n) = match self {
-            DerivedRole::Grandparent => ("Großmutter", "Großvater", "Großelternteil"),
-            DerivedRole::Grandchild => ("Enkelin", "Enkel", "Enkelkind"),
-            DerivedRole::Sibling => ("Schwester", "Bruder", "Geschwisterteil"),
-            DerivedRole::HalfSibling => ("Halbschwester", "Halbbruder", "Halbgeschwisterteil"),
-            DerivedRole::UncleAunt => ("Tante", "Onkel", "Onkel/Tante"),
-            DerivedRole::NieceNephew => ("Nichte", "Neffe", "Nichte/Neffe"),
-            DerivedRole::Cousin => ("Cousine", "Cousin", "Cousin/Cousine"),
-            DerivedRole::ParentInLaw => {
-                ("Schwiegermutter", "Schwiegervater", "Schwiegerelternteil")
-            }
-            DerivedRole::ChildInLaw => ("Schwiegertochter", "Schwiegersohn", "Schwiegerkind"),
-        };
-        match gender {
-            Female => f,
-            Male => m,
-            Unknown => n,
-        }
-    }
-    pub fn group_label(self) -> &'static str {
-        match self {
-            DerivedRole::Grandparent => "Großeltern",
-            DerivedRole::Grandchild => "Enkel",
-            DerivedRole::Sibling => "Geschwister",
-            DerivedRole::HalfSibling => "Halbgeschwister",
-            DerivedRole::UncleAunt => "Onkel und Tanten",
-            DerivedRole::NieceNephew => "Nichten und Neffen",
-            DerivedRole::Cousin => "Cousins und Cousinen",
-            DerivedRole::ParentInLaw => "Schwiegereltern",
-            DerivedRole::ChildInLaw => "Schwiegerkinder",
-        }
-    }
-    /// Direkte Rolle, als die sich diese Ableitung übernehmen lässt. Halbgeschwister
-    /// und Verschwägerte sind bewusst nicht übernehmbar: der Typkatalog
-    /// kann den Unterschied nicht ausdrücken.
-    pub fn adoptable(self) -> Option<Role> {
-        match self {
-            DerivedRole::Sibling => Some(Role::Sibling),
-            DerivedRole::Cousin => Some(Role::Cousin),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Derived {
-    pub role: DerivedRole,
-    pub person: i64,
-}
-
-/// Geschwister einer Person mit Kennzeichnung Halbgeschwister.
-/// Direkt gespeicherte Geschwister zählen als vollbürtig.
-fn siblings(edges: &[Edge], person: i64) -> BTreeMap<i64, bool> {
-    let mine = parents_of(edges, person);
-    let mut out = BTreeMap::new();
-    for parent in &mine {
-        for other in children_of(edges, *parent) {
-            if other == person || out.contains_key(&other) {
-                continue;
-            }
-            let theirs = parents_of(edges, other);
-            let shared = mine.intersection(&theirs).count();
-            let own_extra = mine.difference(&theirs).count() > 0;
-            let their_extra = theirs.difference(&mine).count() > 0;
-            let half = shared >= 1 && own_extra && their_extra;
-            out.insert(other, half);
-        }
-    }
-    for e in edges.iter().filter(|e| e.kind == Kind::Sibling) {
-        if let Some((_, other)) = e.role_of_other(person) {
-            out.insert(other, false);
-        }
-    }
-    out
-}
-
-/// Berechnet alle abgeleiteten Beziehungen einer Person.
-///
-/// Regeltabelle (ADR 0060), `P` ist die Person, Tiefe höchstens zwei Schritte:
-/// - Großeltern: Eltern der Eltern; Enkel: Kinder der Kinder
-/// - Geschwister: gemeinsamer Elternteil; Halbgeschwister: gemeinsamer Elternteil,
-///   aber beide haben einen weiteren, nicht gemeinsamen Elternteil
-/// - Onkel/Tante: (Halb-)Geschwister der Eltern; Nichte/Neffe: Kinder der (Halb-)Geschwister
-/// - Cousins: Kinder von Onkel/Tante
-/// - Schwiegereltern: Eltern der Partner; Schwiegerkinder: Partner der Kinder
-///
-/// Direkt gespeicherte Geschwister und Cousins werden nicht doppelt abgeleitet.
-/// Ergebnis: sortiert nach Rolle, dann ID; je Rolle höchstens [`MAX_DERIVED_PER_ROLE`].
-pub fn derive(edges: &[Edge], person: i64) -> Vec<Derived> {
-    let mut out: BTreeSet<Derived> = BTreeSet::new();
-    let mut add = |role: DerivedRole, other: i64| {
-        if other != person {
-            out.insert(Derived {
-                role,
-                person: other,
-            });
-        }
-    };
-    let parents = parents_of(edges, person);
-    let children = children_of(edges, person);
-    let partners: BTreeSet<i64> = edges
-        .iter()
-        .filter(|e| e.kind == Kind::Partner)
-        .filter_map(|e| e.role_of_other(person).map(|(_, id)| id))
-        .collect();
-    for p in &parents {
-        for g in parents_of(edges, *p) {
-            add(DerivedRole::Grandparent, g);
-        }
-    }
-    for c in &children {
-        for g in children_of(edges, *c) {
-            add(DerivedRole::Grandchild, g);
-        }
-    }
-    let direct_sibling: BTreeSet<i64> = edges
-        .iter()
-        .filter(|e| e.kind == Kind::Sibling)
-        .filter_map(|e| e.role_of_other(person).map(|(_, id)| id))
-        .collect();
-    let mine = siblings(edges, person);
-    for (other, half) in &mine {
-        if !direct_sibling.contains(other) {
-            add(
-                if *half {
-                    DerivedRole::HalfSibling
-                } else {
-                    DerivedRole::Sibling
-                },
-                *other,
-            );
-        }
-    }
-    let mut uncles = BTreeSet::new();
-    for p in &parents {
-        for s in siblings(edges, *p).into_keys() {
-            if !parents.contains(&s) {
-                uncles.insert(s);
-            }
-        }
-    }
-    for u in &uncles {
-        add(DerivedRole::UncleAunt, *u);
-    }
-    for s in mine.keys() {
-        for c in children_of(edges, *s) {
-            add(DerivedRole::NieceNephew, c);
-        }
-    }
-    let direct_cousin: BTreeSet<i64> = edges
-        .iter()
-        .filter(|e| e.kind == Kind::Cousin)
-        .filter_map(|e| e.role_of_other(person).map(|(_, id)| id))
-        .collect();
-    for u in &uncles {
-        for c in children_of(edges, *u) {
-            if !mine.contains_key(&c) && !direct_cousin.contains(&c) {
-                add(DerivedRole::Cousin, c);
-            }
-        }
-    }
-    for partner in &partners {
-        for g in parents_of(edges, *partner) {
-            add(DerivedRole::ParentInLaw, g);
-        }
-    }
-    for c in &children {
-        for e in edges.iter().filter(|e| e.kind == Kind::Partner) {
-            if let Some((_, other)) = e.role_of_other(*c) {
-                add(DerivedRole::ChildInLaw, other);
-            }
-        }
-    }
-    let mut counts: BTreeMap<DerivedRole, usize> = BTreeMap::new();
-    out.into_iter()
-        .filter(|d| {
-            let n = counts.entry(d.role).or_default();
-            *n += 1;
-            *n <= MAX_DERIVED_PER_ROLE
-        })
-        .collect()
 }
 
 // ------------------------------------------------------------- Sammlung (DB)
@@ -943,6 +841,7 @@ mod tests {
             }
         }
         assert!(seed_sql().contains("(5,'cousin_von',5,1)"));
+        assert!(seed_sql().contains("(8,'ehemaliger_partner_von',8,1)"));
     }
 
     #[test]
@@ -983,6 +882,7 @@ mod tests {
             match kind {
                 Kind::Parent => Role::Parent,
                 Kind::Partner => Role::Partner,
+                Kind::FormerPartner => Role::FormerPartner,
                 Kind::Sibling => Role::Sibling,
                 Kind::Cousin => Role::Cousin,
                 Kind::Friend => Role::Friend,
@@ -990,14 +890,6 @@ mod tests {
             },
             to,
         )
-    }
-
-    fn roles(edges: &[Edge], person: i64, role: DerivedRole) -> Vec<i64> {
-        derive(edges, person)
-            .into_iter()
-            .filter(|d| d.role == role)
-            .map(|d| d.person)
-            .collect()
     }
 
     #[test]
@@ -1014,75 +906,6 @@ mod tests {
             normalize(&rows),
             vec![e(1, Kind::Parent, 2), e(4, Kind::Partner, 9)]
         );
-    }
-
-    #[test]
-    fn derivation_rules() {
-        // 1,2 Großeltern; 3 (Kind von 1) und 4 (Kind von 1) Geschwister;
-        // 5 Kind von 3, 6 Kind von 4: Cousins; 7 Kind von 5.
-        let g = [
-            e(1, Kind::Parent, 3),
-            e(1, Kind::Parent, 4),
-            e(2, Kind::Parent, 3),
-            e(2, Kind::Parent, 4),
-            e(3, Kind::Parent, 5),
-            e(4, Kind::Parent, 6),
-            e(5, Kind::Parent, 7),
-        ];
-        assert_eq!(roles(&g, 5, DerivedRole::Grandparent), vec![1, 2]);
-        assert_eq!(roles(&g, 1, DerivedRole::Grandchild), vec![5, 6]);
-        assert_eq!(roles(&g, 3, DerivedRole::Sibling), vec![4]);
-        assert_eq!(roles(&g, 5, DerivedRole::UncleAunt), vec![4]);
-        assert_eq!(roles(&g, 4, DerivedRole::NieceNephew), vec![5]);
-        assert_eq!(roles(&g, 5, DerivedRole::Cousin), vec![6]);
-        assert_eq!(roles(&g, 6, DerivedRole::Cousin), vec![5]);
-        assert!(roles(&g, 7, DerivedRole::Cousin).is_empty());
-        // Tiefe ist begrenzt: keine Urgroßeltern.
-        assert!(roles(&g, 7, DerivedRole::Grandparent) == vec![3]);
-    }
-
-    #[test]
-    fn half_siblings_need_a_differing_parent_on_both_sides() {
-        let g = [
-            e(1, Kind::Parent, 10),
-            e(2, Kind::Parent, 10),
-            e(1, Kind::Parent, 11),
-            e(3, Kind::Parent, 11),
-            e(1, Kind::Parent, 12),
-            e(2, Kind::Parent, 12),
-            e(1, Kind::Parent, 13),
-        ];
-        assert_eq!(roles(&g, 10, DerivedRole::HalfSibling), vec![11]);
-        assert_eq!(roles(&g, 10, DerivedRole::Sibling), vec![12, 13]);
-    }
-
-    #[test]
-    fn direct_siblings_and_cousins_are_not_derived_twice() {
-        let g = [
-            e(1, Kind::Parent, 3),
-            e(1, Kind::Parent, 4),
-            e(3, Kind::Parent, 5),
-            e(4, Kind::Parent, 6),
-            e(5, Kind::Cousin, 6),
-            e(3, Kind::Sibling, 4),
-        ];
-        assert!(roles(&g, 5, DerivedRole::Cousin).is_empty());
-        assert!(roles(&g, 3, DerivedRole::Sibling).is_empty());
-        // Direkte Geschwister zählen trotzdem für Onkel/Tante.
-        assert_eq!(roles(&g, 5, DerivedRole::UncleAunt), vec![4]);
-    }
-
-    #[test]
-    fn in_laws_follow_partners() {
-        let g = [
-            e(1, Kind::Parent, 2),
-            e(2, Kind::Partner, 3),
-            e(3, Kind::Parent, 4),
-            e(4, Kind::Partner, 5),
-        ];
-        assert_eq!(roles(&g, 3, DerivedRole::ParentInLaw), vec![1]);
-        assert!(roles(&g, 2, DerivedRole::ParentInLaw).is_empty());
-        assert_eq!(roles(&g, 3, DerivedRole::ChildInLaw), vec![5]);
     }
 
     #[test]
