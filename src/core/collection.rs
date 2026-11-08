@@ -69,7 +69,7 @@ impl Collection {
                     [uuid::Uuid::new_v4().to_string()],
                 )?;
                 db.execute("INSERT INTO projection_revision VALUES(0)", [])?;
-                db.execute_batch("INSERT INTO relation_types VALUES(1,'elternteil_von',2,0),(2,'kind_von',1,0),(3,'partner_von',3,1),(4,'geschwister_von',4,1); COMMIT;")?;
+                db.execute_batch(&format!("{} COMMIT;", super::relations::seed_sql()))?;
             } else if write && (1..=5).contains(&version) {
                 super::migrations::upgrade(&db, &root, version)?;
             } else if version != 6 && !(!write && (4..=5).contains(&version)) {
@@ -79,6 +79,9 @@ impl Collection {
             }
             if write {
                 db.execute_batch("PRAGMA journal_mode=WAL;")?;
+                // Neue Beziehungstypen sind nur Zeilen; ältere Sammlungen erhalten sie beim
+                // Öffnen mit Schreibrecht. Schreibgeschützt bleibt alles unverändert.
+                db.execute_batch(&super::relations::seed_sql())?;
             }
             let flags = rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
                 | rusqlite::functions::FunctionFlags::SQLITE_UTF8;

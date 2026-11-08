@@ -366,84 +366,57 @@ pub fn reference_action(collection: &Collection, face: i64, action: &str) -> Res
     result
 }
 
+/// Direkte und abgeleitete Beziehungen einer Person als Schlüssel -> Personen-IDs
+/// (Kompatibilitätssicht; die gruppierte Übersicht nutzt [`super::relations`]).
 pub fn relations(collection: &Collection, person: i64) -> Result<BTreeMap<String, Vec<i64>>> {
-    let edges: Vec<(i64, i64, i64)> = collection
-        .db
-        .prepare("SELECT from_person,type_id,to_person FROM relations")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    let parents: BTreeSet<_> = edges
-        .iter()
-        .filter(|e| e.1 == 1 && e.2 == person)
-        .map(|e| e.0)
-        .collect();
-    let children: BTreeSet<_> = edges
-        .iter()
-        .filter(|e| e.1 == 1 && e.0 == person)
-        .map(|e| e.2)
-        .collect();
-    let grandparents: BTreeSet<_> = edges
-        .iter()
-        .filter(|e| e.1 == 1 && parents.contains(&e.2))
-        .map(|e| e.0)
-        .collect();
-    let siblings: BTreeSet<_> = edges
-        .iter()
-        .filter(|e| e.1 == 1 && parents.contains(&e.0) && e.2 != person)
-        .map(|e| e.2)
-        .chain(
-            edges
-                .iter()
-                .filter(|e| e.1 == 4 && (e.0 == person || e.2 == person))
-                .map(|e| if e.0 == person { e.2 } else { e.0 }),
-        )
-        .collect();
-    let uncles: BTreeSet<_> = edges
-        .iter()
-        .filter(|e| e.1 == 1 && grandparents.contains(&e.0) && !parents.contains(&e.2))
-        .map(|e| e.2)
-        .chain(
-            edges
-                .iter()
-                .filter(|e| e.1 == 4 && (parents.contains(&e.0) || parents.contains(&e.2)))
-                .map(|e| if parents.contains(&e.0) { e.2 } else { e.0 }),
-        )
-        .collect();
-    let mut result: BTreeMap<String, Vec<i64>> = BTreeMap::from([
-        ("eltern".into(), parents.into_iter().collect()),
-        ("kinder".into(), children.iter().copied().collect()),
-        ("geschwister".into(), siblings.into_iter().collect()),
-        ("grosseltern".into(), grandparents.into_iter().collect()),
-        (
-            "enkel".into(),
-            edges
-                .iter()
-                .filter(|e| e.1 == 1 && children.contains(&e.0))
-                .map(|e| e.2)
-                .collect(),
-        ),
-        ("onkel_tanten".into(), uncles.iter().copied().collect()),
-        (
-            "cousins".into(),
-            edges
-                .iter()
-                .filter(|e| e.1 == 1 && uncles.contains(&e.0))
-                .map(|e| e.2)
-                .collect(),
-        ),
-        (
-            "partner".into(),
-            edges
-                .iter()
-                .filter(|e| e.1 == 3 && (e.0 == person || e.2 == person))
-                .map(|e| if e.0 == person { e.2 } else { e.0 })
-                .collect(),
-        ),
-    ]);
-    for ids in result.values_mut() {
+    use super::relations::{DerivedRole as D, Role as R, derive, direct, load_edges};
+    let edges = load_edges(collection)?;
+    let direct_roles = direct(&edges, person);
+    let derived = derive(&edges, person);
+    let by_role = |role: R, extra: &[D]| -> Vec<i64> {
+        let mut ids: Vec<i64> = direct_roles
+            .iter()
+            .filter(|(r, _)| *r == role)
+            .map(|(_, id)| *id)
+            .chain(
+                derived
+                    .iter()
+                    .filter(|x| extra.contains(&x.role))
+                    .map(|x| x.person),
+            )
+            .collect();
         ids.sort_unstable();
         ids.dedup();
-        ids.retain(|id| *id != person);
+        ids
+    };
+    let mut result: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for (key, role, extra) in [
+        ("eltern", R::Parent, &[][..]),
+        ("kinder", R::Child, &[]),
+        ("partner", R::Partner, &[]),
+        ("freunde", R::Friend, &[]),
+        ("bekannte", R::Acquaintance, &[]),
+        ("geschwister", R::Sibling, &[D::Sibling, D::HalfSibling]),
+        ("cousins", R::Cousin, &[D::Cousin]),
+    ] {
+        result.insert(key.into(), by_role(role, extra));
+    }
+    for (key, role) in [
+        ("grosseltern", D::Grandparent),
+        ("enkel", D::Grandchild),
+        ("onkel_tanten", D::UncleAunt),
+        ("nichten_neffen", D::NieceNephew),
+        ("schwiegereltern", D::ParentInLaw),
+        ("schwiegerkinder", D::ChildInLaw),
+    ] {
+        result.insert(
+            key.into(),
+            derived
+                .iter()
+                .filter(|d| d.role == role)
+                .map(|d| d.person)
+                .collect(),
+        );
     }
     Ok(result)
 }
@@ -479,25 +452,26 @@ pub fn merge_people(collection: &mut Collection, source: i64, target: i64) -> Re
         )?;
         tx.execute(&format!("DELETE FROM {table} WHERE person_id=?"), [source])?;
     }
-    let edges:Vec<(i64,i64,i64)>=tx.prepare("SELECT from_person,type_id,to_person FROM relations WHERE from_person=? OR to_person=?")?.query_map(params![source,source],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let rows: Vec<(i64, i64, i64)> = tx
+        .prepare("SELECT from_person,type_id,to_person FROM relations")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let plan = super::relations::plan_merge(&super::relations::normalize(&rows), source, target)?;
+    tx.execute_batch(&super::relations::seed_sql())?;
     tx.execute(
         "DELETE FROM relations WHERE from_person=? OR to_person=?",
         params![source, source],
     )?;
-    for (from, kind, to) in edges {
-        let (mut from, mut to) = (
-            if from == source { target } else { from },
-            if to == source { target } else { to },
-        );
-        if from == to {
-            continue;
-        }
-        if kind == 3 || kind == 4 {
-            (from, to) = (from.min(to), from.max(to));
-        }
+    for edge in &plan.drop {
+        tx.execute(
+            "DELETE FROM relations WHERE type_id=?2 AND ((from_person=?1 AND to_person=?3) OR (from_person=?3 AND to_person=?1))",
+            params![edge.from, edge.kind.id(), edge.to],
+        )?;
+    }
+    for edge in &plan.add {
         tx.execute(
             "INSERT OR IGNORE INTO relations VALUES(?,?,?)",
-            params![from, kind, to],
+            params![edge.from, edge.kind.id(), edge.to],
         )?;
     }
     tx.execute(

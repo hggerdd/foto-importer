@@ -80,7 +80,7 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
         }
         db.execute_batch("DROP INDEX IF EXISTS ix_group_page;")?;
         db.execute_batch(&schema)?;
-        db.execute_batch("INSERT OR IGNORE INTO relation_types VALUES(1,'elternteil_von',2,0),(2,'kind_von',1,0),(3,'partner_von',3,1),(4,'geschwister_von',4,1);")?;
+        db.execute_batch(&super::relations::seed_sql())?;
         db.execute_batch("DELETE FROM metadata_photos;
             INSERT INTO metadata_photos SELECT file_id,photo_id,relpath,name,ext,size,meta_state,dt_original,model,lens,iso,camera FROM (
                 SELECT f.id file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,m.dt_original,m.model,m.lens,m.iso,NULLIF(TRIM(m.model),'') camera,
