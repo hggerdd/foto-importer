@@ -466,6 +466,8 @@ impl PhotoApp {
         }
     }
     pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
+        // Zentrale Stelle für alle vorgeschlagenen Beziehungen.
+        self.questions_list(ui);
         let mut photos = None;
         let mut graph_from = None;
         if self.relation_from.is_none() {
@@ -557,7 +559,6 @@ impl PhotoApp {
             self.view = View::Collection;
             self.refresh_collection();
         }
-        self.questions_list(ui);
         self.add_person_form(ui);
         ui.label(RichText::new("Beziehung zwischen Personen").strong());
         self.relation_form(ui);
@@ -592,7 +593,14 @@ impl PhotoApp {
                         Role::Acquaintance,
                         Role::Sibling,
                         Role::Cousin,
-                    ] {
+                    ]
+                    .into_iter()
+                    .filter(|option| {
+                        // Geschwister/Cousin nur im Notfall (Behelf), nie als Standard.
+                        !matches!(option, Role::Sibling | Role::Cousin)
+                            || self.family_ui.show_shortcuts
+                            || *option == role
+                    }) {
                         let text = option.label(gender_of(a));
                         let text = if matches!(option, Role::Sibling | Role::Cousin) {
                             format!("{text} (Behelf)")
@@ -606,6 +614,12 @@ impl PhotoApp {
             Self::relationship_person(ui, "Person B", people, &mut self.relation_to);
         });
         self.relation_kind = chosen.key().into();
+        ui.checkbox(
+            &mut self.family_ui.show_shortcuts,
+            "Notfall-Behelf anzeigen (Geschwister / Cousin direkt eintragen)",
+        );
+        let ready = a.is_some() && b.is_some() && a != b;
+        let mut blocked = false;
         if matches!(chosen, Role::Sibling | Role::Cousin) {
             ui.label(
                 RichText::new(
@@ -613,8 +627,16 @@ impl PhotoApp {
                 )
                 .weak(),
             );
+            if let (Some(a), Some(b), true) = (a, b, ready)
+                && !crate::core::relations::shortcut_needed(&self.face_page.family, a, b)
+            {
+                blocked = true;
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Diese Verwandtschaft ergibt sich schon aus dem Stammbaum und wird nicht zusätzlich gespeichert.",
+                );
+            }
         }
-        let ready = a.is_some() && b.is_some() && a != b;
         if ready {
             let name = |id: Option<i64>| {
                 id.and_then(|id| people.iter().find(|p| p.id == id))
@@ -632,7 +654,10 @@ impl PhotoApp {
         }
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!busy && ready, egui::Button::new("Beziehung speichern"))
+                .add_enabled(
+                    !busy && ready && !blocked,
+                    egui::Button::new("Beziehung speichern"),
+                )
                 .clicked()
             {
                 let root = self.settings.collection.clone();

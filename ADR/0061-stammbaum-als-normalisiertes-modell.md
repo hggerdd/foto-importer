@@ -98,7 +98,7 @@ Zeilen gehen nie verloren (AGENTS.md: explizite Entscheidungen). Folgt dieselbe 
 Baum, wird die Zeile unterdrückt, nicht gelöscht: Sie erscheint nicht doppelt, die Oberfläche weist
 freundlich darauf hin und bietet „Behelfsverbindung entfernen“ an (nur auf Klick). Neues Speichern
 einer bereits aus dem Baum folgenden Behelfsverbindung wird abgelehnt (`Conflict::Redundant`);
-bei der Zusammenführung bleibt sie erhalten. Behelfskanten tragen nicht zur weiteren Berechnung
+bei der Zusammenführung bleibt sie erhalten. Die App schlägt Geschwister oder Cousin nie vor. In der Rollenliste erscheinen sie nur hinter „Notfall-Behelf anzeigen“ und werden blockiert, sobald sich die Beziehung berechnen lässt (`relations::shortcut_needed`). Behelfskanten tragen nicht zur weiteren Berechnung
 bei (keine Nichten über Behelfsgeschwister).
 
 **Widersprüche** (`validate_add`): wie ADR 0060 (Selbstbezug, Zyklen, Paarregeln,
@@ -115,7 +115,7 @@ als Elternteil haben: „Ist D auch Elternteil?“ Nie vorgeschlagen werden Paar
 ablehnt (Zyklus, Selbstbezug, Widerspruch), bereits Entschiedenes, und Personen mit zwei oder mehr
 Eltern. Antworten: „Ja“ (legt Kanten mit voller Prüfung an), „Nur X“ bzw. „Nein – Halbgeschwister“
 (speichert die Ablehnung), „Später“ (nur für diese Sitzung zurückgestellt). Der Nutzer entscheidet
-immer; die Mechanik dupliziert nichts. **Speicherung der Ablehnung:** als Paare (Kind:Elternteil) im
+immer; die Mechanik dupliziert nichts. Alle Vorschläge stehen an einer zentralen Stelle, oben im Reiter „Personen & Beziehungen“; der Reiter „Stammbaum“ verweist mit dem Zähler darauf. **Speicherung der Ablehnung:** als Paare (Kind:Elternteil) im
 vorhandenen Schlüssel-Wert-Speicher `face_settings` (Schlüssel `family.declined_parents`).
 Begründung: keine Schemaänderung (ADR 0042), geht mit der Sammlung mit, ist unabhängig von
 Personenattributen und überlebt Zusammenführungen unschädlich (nicht mehr passende Paare werden
