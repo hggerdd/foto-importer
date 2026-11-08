@@ -716,11 +716,12 @@ mod hover_tests {
 
 /// Spaltenzahl und Kachelgröße einer Gruppe: so viele Spalten, wie bei
 /// mindestens 96 Pixeln Breite passen (7 bis 14), und die Kacheln füllen die
-/// verfügbare Breite. Kleine Gruppen bekommen größere Kacheln (bis 150 Pixel).
+/// verfügbare Breite. Kleine Gruppen bekommen größere Kacheln (bis 220 Pixel).
+const MAX_TILE: f32 = 220.0;
 fn tile_layout(width: f32, gap: f32, faces: usize) -> (usize, f32) {
     let fit = ((width + gap) / (96.0 + gap)).floor() as usize;
     let columns = fit.clamp(7, 14).min(faces.max(1));
-    let size = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, 150.0);
+    let size = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, MAX_TILE);
     (columns, size)
 }
 #[cfg(test)]
@@ -736,6 +737,10 @@ mod layout_tests {
         // Zwei Gesichter belegen nur zwei Spalten, aber größere Kacheln.
         let (columns, size) = tile_layout(1800.0, 8.0, 2);
         assert_eq!(columns, 2);
-        assert_eq!(size, 150.0);
+        assert_eq!(size, MAX_TILE);
+        // Sechs Gesichter füllen die Breite, statt in der linken Hälfte zu stehen.
+        let (columns, size) = tile_layout(1300.0, 8.0, 6);
+        assert_eq!(columns, 6);
+        assert!(columns as f32 * size + 5.0 * 8.0 > 1300.0 * 0.95);
     }
 }
