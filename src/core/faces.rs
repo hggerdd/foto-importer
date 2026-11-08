@@ -262,6 +262,8 @@ pub fn active_detector_key(collection: &Collection) -> Result<Option<String>> {
     Ok(setting(collection, "rust.detector_key")?.map(|key| inference::presence_detector_key(&key)))
 }
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
+    let max = crate::config::GROUP_MAX as i64;
+    let over = max + 1;
     let status = status(collection)?;
     let mut groups = Vec::new();
     if mode == "unknown" && status.embedder.is_empty() {
@@ -275,7 +277,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
     if mode == "unknown" && !status.embedder.is_empty() {
         let ids=collection.db.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id LIMIT 8 OFFSET ?")?.query_map(params![status.embedder,(page*8) as i64],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for id in ids {
-            let group=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN face_group_members g ON g.face_id=f.id WHERE g.group_id=? AND f.retained=0 AND f.ignored=0 AND f.person_id IS NULL ORDER BY f.id LIMIT 15"))?.query_map([id],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let group=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN face_group_members g ON g.face_id=f.id WHERE g.group_id=? AND f.retained=0 AND f.ignored=0 AND f.person_id IS NULL ORDER BY f.id LIMIT {over}"))?.query_map([id],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !group.is_empty() && group.len() <= crate::config::GROUP_MAX {
                 groups.push(group);
             }
@@ -287,9 +289,9 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             "confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
         };
-        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/14 part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT 8 OFFSET ?"))?.query_map([(page*8) as i64],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT 8 OFFSET ?"))?.query_map([(page*8) as i64],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (person, part) in parts {
-            let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate}) r ON r.id=f.id WHERE r.rn>? AND r.rn<=? ORDER BY r.rn LIMIT 14"))?.query_map(params![person,part*14,(part+1)*14],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate}) r ON r.id=f.id WHERE r.rn>? AND r.rn<=? ORDER BY r.rn LIMIT {max}"))?.query_map(params![person,part*max,(part+1)*max],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !rows.is_empty() {
                 groups.push(rows);
             }
@@ -681,8 +683,8 @@ pub fn prepare_groups(collection: &mut Collection, key: &str, control: &Control)
         if eligible {
             let vector = decode(bytes)?;
             let sig = signature(&vector);
-            let candidates=tx.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members<14 AND (signature=? OR signature IN (?,?,?,?,?,?,?,?,?,?,?,?)) ORDER BY group_id LIMIT 32")?
-                .query_map(params![key,sig,sig^1,sig^2,sig^4,sig^8,sig^16,sig^32,sig^64,sig^128,sig^256,sig^512,sig^1024,sig^2048],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let candidates=tx.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members<? AND (signature=? OR signature IN (?,?,?,?,?,?,?,?,?,?,?,?)) ORDER BY group_id LIMIT 32")?
+                .query_map(params![key,crate::config::GROUP_MAX as i64,sig,sig^1,sig^2,sig^4,sig^8,sig^16,sig^32,sig^64,sig^128,sig^256,sig^512,sig^1024,sig^2048],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let mut matched = None;
             for group in candidates {
                 let members=tx.prepare("SELECT f.photo_id,e.vec FROM face_group_members g JOIN faces f ON f.id=g.face_id JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=g.embedder_id WHERE g.group_id=?")?.query_map([group],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;

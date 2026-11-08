@@ -62,7 +62,7 @@ fn complete_link_groups_never_exceed_fourteen() -> anyhow::Result<()> {
         c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
             r.get(0)
         })?;
-    assert!(maximum <= 14);
+    assert!(maximum <= foto_importer::config::GROUP_MAX as i64);
     assert_eq!(
         c.db.query_row("SELECT count(*) FROM face_group_members", [], |r| r
             .get::<_, i64>(0))?,
@@ -115,12 +115,12 @@ fn vector_spaces_and_invalid_values_are_rejected() {
 fn review_groups_are_size_sorted_globally_and_do_not_mix_people() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;
-    seed(&c, 35)?;
+    seed(&c, 51)?;
     c.db.execute_batch("INSERT INTO persons(id) VALUES(1),(2),(3); UPDATE faces SET person_id=CASE WHEN id<=1 THEN 1 WHEN id<=21 THEN 2 ELSE 3 END,assignment='suggested';")?;
     let page = faces::page(&c, "review", 0)?;
     assert_eq!(
         page.groups.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![14, 14, 6, 1]
+        vec![28, 20, 2, 1]
     );
     for group in &page.groups {
         assert!(group.iter().all(|f| f.person == group[0].person));
@@ -246,6 +246,6 @@ fn small_groups_join_similar_groups_but_not_dissimilar_or_same_photo() -> anyhow
         c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
             r.get(0)
         })?;
-    assert!(largest <= 14);
+    assert!(largest <= foto_importer::config::GROUP_MAX as i64);
     Ok(())
 }

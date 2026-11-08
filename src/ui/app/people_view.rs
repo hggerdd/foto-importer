@@ -377,8 +377,12 @@ impl PhotoApp {
                         }
                     });
                 }
-                let size = ((ui.available_width() - 6.0 * 10.0) / 7.0).clamp(42.0, 110.0);
-                for chunk in group.chunks(7) {
+                let (columns, size) = tile_layout(
+                    ui.available_width(),
+                    ui.spacing().item_spacing.x,
+                    group.len(),
+                );
+                for chunk in group.chunks(columns) {
                     ui.horizontal(|ui| {
                         for face in chunk {
                             ui.vertical(|ui| {
@@ -717,5 +721,31 @@ mod hover_tests {
             corner.x < 1250.0 && corner.y < 780.0,
             "weicht zum Zeiger hin aus"
         );
+    }
+}
+
+/// Spaltenzahl und Kachelgröße einer Gruppe: so viele Spalten, wie bei
+/// mindestens 96 Pixeln Breite passen (7 bis 14), und die Kacheln füllen die
+/// verfügbare Breite. Kleine Gruppen bekommen größere Kacheln (bis 150 Pixel).
+fn tile_layout(width: f32, gap: f32, faces: usize) -> (usize, f32) {
+    let fit = ((width + gap) / (96.0 + gap)).floor() as usize;
+    let columns = fit.clamp(7, 14).min(faces.max(1));
+    let size = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, 150.0);
+    (columns, size)
+}
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn wide_windows_use_more_columns_and_fill_the_width() {
+        let (columns, size) = tile_layout(1800.0, 8.0, 28);
+        assert_eq!(columns, 14);
+        assert!(columns as f32 * (size + 8.0) > 1500.0);
+        // Schmale Fenster behalten sieben Spalten und umbrechen in weitere Reihen.
+        assert_eq!(tile_layout(700.0, 8.0, 28).0, 7);
+        // Zwei Gesichter belegen nur zwei Spalten, aber größere Kacheln.
+        let (columns, size) = tile_layout(1800.0, 8.0, 2);
+        assert_eq!(columns, 2);
+        assert_eq!(size, 150.0);
     }
 }

@@ -5,7 +5,8 @@ pub const PAGE_SIZE: usize = 48;
 pub const COPY_CHUNK: usize = 1024 * 1024;
 pub const CACHE_BYTES: usize = 192 * 1024 * 1024;
 pub const CACHE_ENTRIES: usize = 512;
-pub const GROUP_MAX: usize = 14;
+/// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
+pub const GROUP_MAX: usize = 28;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
