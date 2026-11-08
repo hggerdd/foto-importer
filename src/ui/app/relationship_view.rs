@@ -136,7 +136,14 @@ fn recorded_label(kind: &Recorded) -> String {
     }
 }
 
-fn node_fill(person: i64) -> Color32 {
+/// Neutrale Füllung für Personen ohne bestätigte Gesichter (z. B. manuell angelegt):
+/// keine Farbe, die einen Bezug zu Fotos vortäuscht.
+const NEUTRAL_FILL: Color32 = Color32::from_rgb(78, 88, 100);
+
+fn node_fill(person: i64, has_faces: bool) -> Color32 {
+    if !has_faces {
+        return NEUTRAL_FILL;
+    }
     let hue = (person as f32 * 0.618_034).rem_euclid(1.0);
     egui::ecolor::Hsva::new(hue, 0.55, 0.5, 1.0).into()
 }
@@ -582,7 +589,8 @@ fn canvas(
             }
             let r = radius_px[i];
             let alpha = if pass { 0.3 } else { 1.0 };
-            let fill = node_fill(node.person).gamma_multiply(alpha);
+            let fill = node_fill(node.person, node.photos > 0 || node.portrait.is_some())
+                .gamma_multiply(alpha);
             let ring = if selected == Some(i) {
                 Stroke::new(3.5_f32, colours.ring)
             } else if related.contains(&i) && selected.is_some() || hover == Some(i) {
@@ -937,5 +945,19 @@ mod portrait_tests {
             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
         );
         assert_eq!(wide.center(), egui::pos2(0.5, 0.5));
+    }
+}
+
+#[cfg(test)]
+mod neutral_tests {
+    use super::*;
+    #[test]
+    fn people_without_faces_get_the_neutral_colour_and_others_a_person_colour() {
+        assert_eq!(node_fill(7, false), NEUTRAL_FILL);
+        assert_eq!(node_fill(8, false), NEUTRAL_FILL);
+        assert_ne!(node_fill(7, true), NEUTRAL_FILL);
+        assert_ne!(node_fill(7, true), node_fill(8, true));
+        // Unterschiedliche Personen behalten verschiedene Farben.
+        assert_eq!(node_fill(7, true), node_fill(7, true));
     }
 }
