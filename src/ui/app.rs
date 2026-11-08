@@ -282,12 +282,22 @@ impl PhotoApp {
         if !app.settings.source.is_empty() {
             app.begin_scan();
         }
+        // Nur für Sichtprüfungen: Reiter vor dem ersten Laden wählen.
+        if let Ok(mode) = std::env::var("FOTO_IMPORTER_FACE_MODE")
+            && ["unknown", "review", "confirmed", "ignored", "persons"].contains(&mode.as_str())
+        {
+            app.face_mode = mode;
+        }
         if !app.settings.collection.is_empty() {
             app.refresh_collection();
             app.refresh_faces();
         }
-        if std::env::var("FOTO_IMPORTER_VIEW").as_deref() == Ok("collection") {
-            app.view = View::Collection;
+        match std::env::var("FOTO_IMPORTER_VIEW").as_deref() {
+            Ok("collection") => app.view = View::Collection,
+            Ok("people") => app.view = View::People,
+            Ok("tasks") => app.view = View::Tasks,
+            Ok("settings") => app.view = View::Settings,
+            _ => {}
         }
         app
     }
