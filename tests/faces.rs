@@ -276,3 +276,24 @@ fn a_group_of_the_maximum_size_can_be_named_and_larger_ones_are_rejected() -> an
     assert!(message.contains(&GROUP_MAX.to_string()), "{message}");
     Ok(())
 }
+#[test]
+fn a_large_group_can_be_confirmed_with_only_part_of_its_faces() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    // Mehr als die frühere Grenze von 14 sichtbaren Gesichtern.
+    seed(&c, 20)?;
+    let all: Vec<i64> = (1..=20).collect();
+    let selected: BTreeSet<i64> = (1..=9).collect();
+    faces::name_group(&mut c, &all, &selected, None, "Alex", false)?;
+    let confirmed: i64 = c.db.query_row(
+        "SELECT count(*) FROM faces WHERE assignment='user' AND person_id IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(confirmed, 9);
+    // Abgewählte Gesichter werden für diese Person abgelehnt, nicht übernommen.
+    let rejected: i64 =
+        c.db.query_row("SELECT count(*) FROM face_rejections", [], |r| r.get(0))?;
+    assert_eq!(rejected, 11);
+    Ok(())
+}
