@@ -276,6 +276,8 @@ impl PhotoApp {
             .and_then(|f| self.face_page.suggestions.get(&f.id))
             .cloned();
         theme::card(ui).show(ui, |ui| {
+            // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
+            ui.set_min_width(ui.available_width());
             ui.push_id(&key, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} Gesichter", group.len())).strong());
