@@ -90,15 +90,15 @@ impl Column {
     pub fn width(self) -> f32 {
         match self {
             Column::Name => 150.0,
-            Column::Photos => 56.0,
+            Column::Photos => 72.0,
             Column::Faces => 84.0,
             Column::Birth => 104.0,
             Column::Gender => 72.0,
-            Column::Relations => 52.0,
+            Column::Relations => 58.0,
             Column::Family => 168.0,
             Column::FirstPhoto => 100.0,
             Column::LastPhoto => 104.0,
-            Column::Hints => 80.0,
+            Column::Hints => 88.0,
         }
     }
     /// Reihenfolge, in der Spalten bei wenig Platz entfallen (klein = bleibt zuletzt).

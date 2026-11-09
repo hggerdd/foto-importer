@@ -145,13 +145,25 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
                 FontId::proportional(15.0),
                 colour,
             );
-            ui.painter().text(
-                egui::pos2(rect.right() - 14.0, rect.center().y),
-                Align2::CENTER_CENTER,
-                if open { "▴" } else { "▾" },
-                FontId::proportional(13.0),
+            let (x, y) = (rect.right() - 16.0, rect.center().y);
+            let points = if open {
+                vec![
+                    egui::pos2(x - 5.0, y + 3.0),
+                    egui::pos2(x + 5.0, y + 3.0),
+                    egui::pos2(x, y - 3.0),
+                ]
+            } else {
+                vec![
+                    egui::pos2(x - 5.0, y - 3.0),
+                    egui::pos2(x + 5.0, y - 3.0),
+                    egui::pos2(x, y + 3.0),
+                ]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
                 visuals.weak_text_color(),
-            );
+                egui::Stroke::NONE,
+            ));
         }
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

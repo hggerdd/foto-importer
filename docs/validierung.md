@@ -136,3 +136,9 @@ Für Sichtprüfungen (nur synthetische Daten, `cargo run --example demo_faces`):
 `FOTO_IMPORTER_FACE_MODE=persons`, `FOTO_IMPORTER_PEOPLE_SELECT=<ID>`,
 `FOTO_IMPORTER_PEOPLE_SORT=<name|photos|faces|birth|gender|relations|family|first|last|hints>[:desc]`,
 `FOTO_IMPORTER_PEOPLE_POPUP=<Suchtext>` (hält das Auswahlfeld „von …“ in „Beziehung hinzufügen“ offen).
+
+Sichtprüfung am 09.11.2026 (Debug-Build, synthetische Demodaten, 61 Personen, 1280 × 800, dunkles Design,
+`FOTO_IMPORTER_PEOPLE_SORT=photos:desc`, Auswahl #1, Popup mit Suchtext „cl“): [Bild](screenshots/personen-tabelle.png).
+Sichtbar: Tabelle mit Porträts, Sortierdreieck, Auswahlzeile, Detailspalte mit gefiltertem Auswahlfeld.
+Nicht geprüft: 980 × 680 per Bild (nur per Layouttest), Hell-Design, Mausrad, Screenreader. Die Demodaten
+enthalten weder Geburtsjahre noch Aufnahmedaten, daher zeigen diese Spalten dort „–“ (per Test mit Daten abgedeckt).

@@ -181,11 +181,7 @@ fn sort_mark(keys: &[SortKey], column: Column) -> String {
     let Some(position) = keys.iter().position(|k| k.column == column) else {
         return String::new();
     };
-    let arrow = if keys[position].descending {
-        "▼"
-    } else {
-        "▲"
-    };
+    let arrow = if keys[position].descending { "v" } else { "^" };
     if keys.len() > 1 {
         format!("{arrow}{}", position + 1)
     } else {
@@ -253,7 +249,7 @@ fn cell_text(row: &PersonRow, column: Column) -> String {
             if row.hints == 0 {
                 dash()
             } else {
-                format!("● {}", row.hints)
+                format!("! {}", row.hints)
             }
         }
     }
@@ -439,7 +435,7 @@ impl PhotoApp {
             }
             if ui
                 .add(
-                    egui::Button::new("＋ Person hinzufügen")
+                    egui::Button::new("+ Person hinzufügen")
                         .selected(self.people_ui.panel == Panel::NewPerson),
                 )
                 .clicked()
@@ -612,32 +608,46 @@ impl PhotoApp {
             } else {
                 theme::ACCENT
             };
-            let text = if mark.is_empty() {
-                title.to_string()
-            } else if numeric(column) {
-                format!("{mark} {title}")
+            let text = if mark.len() > 1 {
+                format!("{title} {}", &mark[1..])
             } else {
-                format!("{title} {mark}")
+                title.to_string()
             };
             let painter = ui
                 .painter()
                 .with_clip_rect(cell.shrink2(Vec2::new(4.0, 0.0)));
-            if numeric(column) {
-                painter.text(
-                    Pos2::new(cell.right() - 12.0, cell.center().y),
-                    Align2::RIGHT_CENTER,
-                    text,
-                    FontId::proportional(13.5),
-                    colour,
-                );
+            let galley = painter.layout_no_wrap(text, FontId::proportional(13.5), colour);
+            let text_width = galley.size().x;
+            let reserve = if mark.is_empty() { 0.0 } else { 14.0 };
+            let left = if numeric(column) {
+                cell.right() - 12.0 - reserve - text_width
             } else {
-                painter.text(
-                    Pos2::new(cell.left() + 8.0, cell.center().y),
-                    Align2::LEFT_CENTER,
-                    text,
-                    FontId::proportional(13.5),
-                    colour,
-                );
+                cell.left() + 8.0
+            };
+            painter.galley(
+                Pos2::new(left, cell.center().y - galley.size().y / 2.0),
+                galley,
+                colour,
+            );
+            if !mark.is_empty() {
+                // Dreieck statt Zeichen: vermeidet Schriftlücken. ▲ aufsteigend, ▼ absteigend.
+                let down = mark.starts_with('v');
+                let x = left + text_width + 9.0;
+                let y = cell.center().y;
+                let points = if down {
+                    vec![
+                        Pos2::new(x - 4.0, y - 2.5),
+                        Pos2::new(x + 4.0, y - 2.5),
+                        Pos2::new(x, y + 3.5),
+                    ]
+                } else {
+                    vec![
+                        Pos2::new(x - 4.0, y + 2.5),
+                        Pos2::new(x + 4.0, y + 2.5),
+                        Pos2::new(x, y - 3.5),
+                    ]
+                };
+                painter.add(egui::Shape::convex_polygon(points, colour, Stroke::NONE));
             }
             if response
                 .on_hover_text(format!(
@@ -663,18 +673,22 @@ impl PhotoApp {
     // ------------------------------------------------------------ Detailspalte
 
     fn person_panel(&mut self, ui: &mut egui::Ui) {
-        #[cfg_attr(not(test), allow(unused_variables))]
-        let output = egui::ScrollArea::vertical()
+        let mut area = egui::ScrollArea::vertical()
             .id_salt("people-detail-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                match self.people_ui.panel {
-                    Panel::Questions => self.panel_questions(ui),
-                    Panel::NewPerson => self.panel_new_person(ui),
-                    Panel::Details => self.panel_details(ui),
-                }
-            });
+            .auto_shrink([false, false]);
+        if self.people_ui.capture_popup.is_some() {
+            // Nur Sichtprüfung: Beziehungsformular ins Bild scrollen.
+            area = area.vertical_scroll_offset(420.0);
+        }
+        #[cfg_attr(not(test), allow(unused_variables))]
+        let output = area.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            match self.people_ui.panel {
+                Panel::Questions => self.panel_questions(ui),
+                Panel::NewPerson => self.panel_new_person(ui),
+                Panel::Details => self.panel_details(ui),
+            }
+        });
         #[cfg(test)]
         {
             let mut bounds = self.people_ui.bounds.unwrap_or(Bounds {
