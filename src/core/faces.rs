@@ -72,6 +72,38 @@ pub struct FacePage {
     pub family: Box<super::kinship::Family>,
     /// Offene Rückfragen zu wahrscheinlich fehlenden Eltern (ADR 0061).
     pub questions: Vec<super::gaps::Suggestion>,
+    /// Zeilen der Personentabelle; nur im Reiter „persons“ gefüllt (ADR 0063).
+    pub rows: Vec<super::people_table::PersonRow>,
+    /// Porträt je Person (Gesicht mit bester Qualität, ohne Merkmale berechnet);
+    /// nur im Reiter „persons“.
+    pub portraits: BTreeMap<i64, Face>,
+}
+
+/// Tabellenzeilen und Porträts für den Reiter „persons“, sonst leer.
+fn table_state(
+    collection: &Collection,
+    mode: &str,
+    people: &[Person],
+    edges: &[super::relations::Edge],
+    family: &super::kinship::Family,
+    questions: &[super::gaps::Suggestion],
+) -> Result<(Vec<super::people_table::PersonRow>, BTreeMap<i64, Face>)> {
+    if mode != "persons" {
+        return Ok((Vec::new(), BTreeMap::new()));
+    }
+    let stats = super::people_table::load_stats(collection)?;
+    let rows = super::people_table::build_rows(
+        people,
+        &stats,
+        edges,
+        family,
+        questions,
+        super::people_table::current_year(),
+    );
+    let ids: Vec<i64> = people.iter().map(|p| p.id).collect();
+    // Ohne Merkmale: eine Fensterabfrage, keine Vektoren dekodieren (Tabelle bleibt schnell).
+    let portraits = person_portraits(collection, "", &ids).unwrap_or_default();
+    Ok((rows, portraits))
 }
 
 /// Kanten, Stammbaum und Rückfragen in einem Zug laden.
@@ -375,6 +407,25 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
     let status = status(collection)?;
     let mut groups = Vec::new();
     let total_groups: usize;
+    if matches!(mode, "persons" | "tree" | "graph") {
+        // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
+        let (relations, family, questions) = tree_state(collection)?;
+        let people = people(collection)?;
+        let (rows, portraits) =
+            table_state(collection, mode, &people, &relations, &family, &questions)?;
+        return Ok(FacePage {
+            groups,
+            people,
+            status,
+            suggestions: BTreeMap::new(),
+            total_groups: 0,
+            relations,
+            family: Box::new(family),
+            questions,
+            rows,
+            portraits,
+        });
+    }
     if mode == "unknown" && status.embedder.is_empty() {
         let (relations, family, questions) = tree_state(collection)?;
         return Ok(FacePage {
@@ -386,6 +437,8 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             relations,
             family: Box::new(family),
             questions,
+            rows: Vec::new(),
+            portraits: BTreeMap::new(),
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -435,15 +488,20 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
         }
     }
     let (relations, family, questions) = tree_state(collection)?;
+    let people = people(collection)?;
+    let (rows, portraits) =
+        table_state(collection, mode, &people, &relations, &family, &questions)?;
     Ok(FacePage {
         groups,
-        people: people(collection)?,
+        people,
         status,
         suggestions,
         total_groups,
         relations,
         family: Box::new(family),
         questions,
+        rows,
+        portraits,
     })
 }
 

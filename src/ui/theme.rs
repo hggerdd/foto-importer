@@ -5,6 +5,8 @@ pub const WARM: Color32 = Color32::from_rgb(239, 188, 111);
 pub const MUTED: Color32 = Color32::from_rgb(156, 168, 182);
 /// Kleinste Schriftgröße der Oberfläche.
 pub const MIN_TEXT: f32 = 12.0;
+/// Höhe von Auswahlfeldern und Haupt-Bedienelementen.
+pub const CONTROL_HEIGHT: f32 = 36.0;
 pub fn apply(ctx: &egui::Context, dark: bool) {
     let mut style = egui::Style {
         visuals: if dark {

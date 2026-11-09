@@ -1,3 +1,4 @@
+pub mod choice_filter;
 pub mod classifier;
 pub mod collection;
 pub mod dng_updates;
@@ -17,6 +18,7 @@ pub mod matching;
 pub mod metadata;
 pub mod migrations;
 pub mod onnx_runtime;
+pub mod people_table;
 pub mod previews;
 pub mod recognition;
 pub mod relations;

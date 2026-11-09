@@ -1,10 +1,12 @@
 use super::*;
-use crate::core::relations::{Gender, Role};
 
 impl PhotoApp {
     pub(super) fn people_view(&mut self, ui: &mut egui::Ui) {
         self.hover_face = None;
-        self.people_workflow(ui);
+        self.people_workflow(
+            ui,
+            matches!(self.face_mode.as_str(), "persons" | "tree" | "graph"),
+        );
         if self.settings.collection.is_empty() {
             self.empty(
                 ui,
@@ -43,9 +45,7 @@ impl PhotoApp {
         });
         ui.separator();
         if self.face_mode == "persons" {
-            egui::ScrollArea::vertical()
-                .id_salt("person-management")
-                .show(ui, |ui| self.person_manager(ui));
+            self.persons_page(ui);
             return;
         }
         if self.face_mode == "tree" {
@@ -323,32 +323,19 @@ impl PhotoApp {
                         draft.person = None;
                     }
                     submit = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    egui::ComboBox::from_id_salt("person")
-                        .selected_text("Person wählen …")
-                        .show_ui(ui, |ui| {
-                            for person in self
-                                .face_page
-                                .people
-                                .iter()
-                                .filter(|p| {
-                                    files::fold(&p.name).contains(&files::fold(&draft.name))
-                                })
-                                .take(40)
-                                .cloned()
-                                .collect::<Vec<_>>()
-                            {
-                                if ui
-                                    .selectable_label(
-                                        draft.person == Some(person.id),
-                                        format!("{} · #{}", person.name, person.id),
-                                    )
-                                    .clicked()
-                                {
-                                    draft.person = Some(person.id);
-                                    draft.name = person.name.clone();
-                                }
-                            }
-                        });
+                    let mut chosen = draft.person;
+                    let items = select::person_choices(&self.face_page.people, None);
+                    if select::FilterSelect::new("group-person", &items)
+                        .placeholder("Person wählen …")
+                        .width(200.0)
+                        .show(ui, &mut chosen)
+                        && let Some(person) = chosen
+                    {
+                        draft.person = Some(person);
+                        if let Some(found) = self.face_page.people.iter().find(|p| p.id == person) {
+                            draft.name = found.name.clone();
+                        }
+                    }
                     if ui
                         .add_enabled(!busy, egui::Button::new("Bestätigen"))
                         .clicked()
@@ -464,252 +451,6 @@ impl PhotoApp {
                 Ok(Outcome::Named(undo))
             });
         }
-    }
-    pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
-        // Zentrale Stelle für alle vorgeschlagenen Beziehungen.
-        self.questions_list(ui);
-        let mut photos = None;
-        let mut graph_from = None;
-        if self.relation_from.is_none() {
-            // Die Übersicht soll sofort etwas zeigen: Standard ist die Person mit den meisten Gesichtern.
-            self.relation_from = self
-                .face_page
-                .people
-                .iter()
-                .max_by_key(|person| person.count)
-                .map(|person| person.id);
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    !self.face_page.people.is_empty(),
-                    egui::Button::new("Beziehungsgraph …"),
-                )
-                .on_hover_text("Gemeinsame Fotos und eingetragene Beziehungen als Graph ansehen")
-                .clicked()
-            {
-                graph_from = self.relation_from.or_else(|| {
-                    self.face_page
-                        .people
-                        .iter()
-                        .max_by_key(|person| person.count)
-                        .map(|person| person.id)
-                });
-            }
-            if ui
-                .add_enabled(
-                    !self.busy()
-                        && self.relation_from.is_some()
-                        && self.relation_to.is_some()
-                        && self.relation_from != self.relation_to,
-                    egui::Button::new("Person A in Person B zusammenführen"),
-                )
-                .clicked()
-            {
-                let root = self.settings.collection.clone();
-                let source = self.relation_from.unwrap_or_default();
-                let target = self.relation_to.unwrap_or_default();
-                self.undo.clear();
-                self.launch("Personen zusammenführen", true, "mutation", move |_| {
-                    let mut c = Collection::open(Path::new(&root), true)?;
-                    crate::core::maintenance::merge_people(&mut c, source, target)?;
-                    Ok(Outcome::Done(
-                        "Personen zusammengeführt; alte ID bleibt als Weiterleitung erhalten"
-                            .into(),
-                    ))
-                });
-            }
-        });
-        ui.label(
-            RichText::new("Personen haben stabile IDs. Gleiche Namen bleiben unterscheidbar.")
-                .weak(),
-        );
-        egui::ScrollArea::vertical()
-            .id_salt("persons")
-            .max_height(130.0)
-            .show(ui, |ui| {
-                for person in &self.face_page.people {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&person.name).strong());
-                        ui.label(format!(
-                            "#{} · {} bestätigte Gesichter · Geburtsjahr {}",
-                            person.id, person.count, person.birth
-                        ));
-                        if ui.small_button("Bearbeiten").clicked() {
-                            self.person_edit = Some(person.clone());
-                        }
-                        if ui.small_button("Fotos").clicked() {
-                            photos = Some(person.id);
-                        }
-                        if ui.small_button("Graph").clicked() {
-                            graph_from = Some(person.id);
-                        }
-                    });
-                }
-            });
-        ui.separator();
-        if let Some(person) = graph_from {
-            self.open_relationship_graph(person);
-        }
-        if let Some(person) = photos {
-            self.filters = Search {
-                people_all: vec![person],
-                ..Default::default()
-            };
-            self.view = View::Collection;
-            self.refresh_collection();
-        }
-        self.add_person_form(ui);
-        ui.label(RichText::new("Beziehung zwischen Personen").strong());
-        self.relation_form(ui);
-        ui.add_space(6.0);
-        self.relation_overview(ui);
-    }
-
-    /// Satzform "[Person A] ist [Rolle] von [Person B]". Die Rollenbeschriftung
-    /// folgt dem Geschlecht von Person A; die Gegenrichtung steht als Hinweis daneben.
-    fn relation_form(&mut self, ui: &mut egui::Ui) {
-        let busy = self.busy();
-        let people = &self.face_page.people;
-        let gender_of = |id: Option<i64>| {
-            id.and_then(|id| people.iter().find(|p| p.id == id))
-                .map_or(Gender::Unknown, |p| Gender::parse(&p.gender))
-        };
-        let role = Role::from_key(&self.relation_kind).unwrap_or(Role::Parent);
-        let (a, b) = (self.relation_from, self.relation_to);
-        let mut chosen = role;
-        ui.horizontal_wrapped(|ui| {
-            Self::relationship_person(ui, "Person A", people, &mut self.relation_from);
-            ui.label("ist");
-            egui::ComboBox::from_id_salt("relation-kind")
-                .selected_text(role.label(gender_of(a)))
-                .show_ui(ui, |ui| {
-                    for option in [
-                        Role::Child,
-                        Role::Parent,
-                        Role::Partner,
-                        Role::FormerPartner,
-                        Role::Friend,
-                        Role::Acquaintance,
-                        Role::Sibling,
-                        Role::Cousin,
-                    ]
-                    .into_iter()
-                    .filter(|option| {
-                        // Geschwister/Cousin nur im Notfall (Behelf), nie als Standard.
-                        !matches!(option, Role::Sibling | Role::Cousin)
-                            || self.family_ui.show_shortcuts
-                            || *option == role
-                    }) {
-                        let text = option.label(gender_of(a));
-                        let text = if matches!(option, Role::Sibling | Role::Cousin) {
-                            format!("{text} (Behelf)")
-                        } else {
-                            text.to_string()
-                        };
-                        ui.selectable_value(&mut chosen, option, text);
-                    }
-                });
-            ui.label("von");
-            Self::relationship_person(ui, "Person B", people, &mut self.relation_to);
-        });
-        self.relation_kind = chosen.key().into();
-        ui.checkbox(
-            &mut self.family_ui.show_shortcuts,
-            "Notfall-Behelf anzeigen (Geschwister / Cousin direkt eintragen)",
-        );
-        let ready = a.is_some() && b.is_some() && a != b;
-        let mut blocked = false;
-        if matches!(chosen, Role::Sibling | Role::Cousin) {
-            ui.label(
-                RichText::new(
-                    "Behelf: nur nötig, solange die Eltern nicht erfasst sind. Mit erfassten Eltern ergeben sich Geschwister und Cousins automatisch aus dem Stammbaum.",
-                )
-                .weak(),
-            );
-            if let (Some(a), Some(b), true) = (a, b, ready)
-                && !crate::core::relations::shortcut_needed(&self.face_page.family, a, b)
-            {
-                blocked = true;
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    "Diese Verwandtschaft ergibt sich schon aus dem Stammbaum und wird nicht zusätzlich gespeichert.",
-                );
-            }
-        }
-        if ready {
-            let name = |id: Option<i64>| {
-                id.and_then(|id| people.iter().find(|p| p.id == id))
-                    .map_or_else(String::new, |p| p.name.clone())
-            };
-            ui.label(
-                RichText::new(format!(
-                    "Gleichbedeutend: {} ist {} von {}.",
-                    name(b),
-                    chosen.inverse().label(gender_of(b)),
-                    name(a)
-                ))
-                .weak(),
-            );
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    !busy && ready && !blocked,
-                    egui::Button::new("Beziehung speichern"),
-                )
-                .clicked()
-            {
-                let root = self.settings.collection.clone();
-                let (from, to) = (a.unwrap_or_default(), b.unwrap_or_default());
-                let kind = self.relation_kind.clone();
-                self.undo.clear();
-                self.launch("Beziehung speichern", true, "mutation", move |_| {
-                    let mut c = Collection::open(Path::new(&root), true)?;
-                    faces::add_relation(&mut c, from, &kind, to)?;
-                    Ok(Outcome::Done("Beziehung gespeichert".into()))
-                });
-            }
-            if ui
-                .add_enabled(!busy && ready, egui::Button::new("Beziehung entfernen"))
-                .clicked()
-            {
-                let root = self.settings.collection.clone();
-                let (from, to) = (a.unwrap_or_default(), b.unwrap_or_default());
-                let kind = self.relation_kind.clone();
-                self.undo.clear();
-                self.launch("Beziehung entfernen", true, "mutation", move |_| {
-                    let c = Collection::open(Path::new(&root), true)?;
-                    faces::remove_relation(&c, from, &kind, to)?;
-                    Ok(Outcome::Done("Beziehung entfernt".into()))
-                });
-            }
-        });
-    }
-
-    fn relationship_person(
-        ui: &mut egui::Ui,
-        label: &str,
-        people: &[faces::Person],
-        selected: &mut Option<i64>,
-    ) {
-        let caption = selected
-            .and_then(|id| people.iter().find(|person| person.id == id))
-            .map_or_else(
-                || format!("{label}: Person wählen …"),
-                |person| format!("{label}: {} · #{}", person.name, person.id),
-            );
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(caption)
-            .show_ui(ui, |ui| {
-                for person in people {
-                    ui.selectable_value(
-                        selected,
-                        Some(person.id),
-                        format!("{} · #{}", person.name, person.id),
-                    );
-                }
-            });
     }
 }
 

@@ -7,7 +7,9 @@ impl PhotoApp {
             .any(|task| task.kind == "face-analysis" && task.collection == self.settings.collection)
     }
 
-    pub(super) fn people_workflow(&mut self, ui: &mut egui::Ui) {
+    /// `compact`: nur Titelzeile (und laufender Auftrag) statt der drei Schritte; die
+    /// Reiter Personen, Stammbaum und Graph brauchen die Höhe für ihre Inhalte (ADR 0063).
+    pub(super) fn people_workflow(&mut self, ui: &mut egui::Ui, compact: bool) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Personen").size(23.0).strong());
             if ui.button("Sammlung wählen …").clicked() {
@@ -20,6 +22,18 @@ impl PhotoApp {
             }
         });
         if self.settings.collection.is_empty() {
+            return;
+        }
+        if compact {
+            if self.analysing_current_collection()
+                || self
+                    .tasks
+                    .iter()
+                    .any(|t| t.is_face_matching() && t.collection == self.settings.collection)
+            {
+                self.recognition_progress(ui);
+            }
+            self.recognition_tools(ui.ctx());
             return;
         }
         let status = self.face_page.status.clone();

@@ -1,6 +1,7 @@
 mod collection_view;
 mod folder_tree;
 mod import_view;
+mod people_table;
 mod people_view;
 mod recognition_view;
 mod relationship_view;
@@ -10,7 +11,7 @@ mod tests;
 mod tree_view;
 mod windows;
 
-use super::{theme, thumbnails::Thumbnails};
+use super::{select, theme, thumbnails::Thumbnails};
 use crate::{
     config::{self, Settings},
     core::{
@@ -184,10 +185,11 @@ pub struct PhotoApp {
     /// Gesicht unter der Maus in diesem Frame (höchstens eines).
     hover_face: Option<Face>,
     relation_from: Option<i64>,
-    relation_to: Option<i64>,
     relation_kind: String,
     family_ui: tree_view::FamilyUi,
-    person_edit: Option<faces::Person>,
+    people_ui: people_table::PeopleUi,
+    /// Zählt übernommene `face_page`-Stände; Tabellenansicht berechnet sich daran neu.
+    face_page_serial: u64,
     relationship_graph: relationship_view::RelationshipView,
     report: Option<String>,
     delete_phrase: String,
@@ -273,10 +275,10 @@ impl PhotoApp {
             name_portraits: BTreeMap::new(),
             hover_face: None,
             relation_from: None,
-            relation_to: None,
             relation_kind: "parent".into(),
             family_ui: Default::default(),
-            person_edit: None,
+            people_ui: Default::default(),
+            face_page_serial: 0,
             relationship_graph: Default::default(),
             report: None,
             delete_phrase: String::new(),
@@ -325,6 +327,15 @@ impl PhotoApp {
         {
             app.relationship_graph.selected = Some(person);
         }
+        // Nur für Sichtprüfungen: Person, Sortierung und offenes Auswahlfeld der Personentabelle.
+        if let Ok(person) = std::env::var("FOTO_IMPORTER_PEOPLE_SELECT")
+            && let Ok(person) = person.parse()
+        {
+            app.relation_from = Some(person);
+            app.people_ui.scroll_to_person(person);
+        }
+        app.people_ui.sort_from_env();
+        app.people_ui.capture_popup = std::env::var("FOTO_IMPORTER_PEOPLE_POPUP").ok();
         // Nur für Sichtprüfungen: Fokus-Person und Generationen im Stammbaum.
         if let Ok(person) = std::env::var("FOTO_IMPORTER_TREE_PERSON")
             && let Ok(person) = person.parse()
@@ -814,6 +825,7 @@ impl PhotoApp {
                     }
                     self.face_index = index;
                     self.face_page = page;
+                    self.face_page_serial += 1;
                 }
                 Ok(Outcome::Detail(revision, detail, faces, analysed))
                     if revision == self.detail_revision =>
@@ -865,6 +877,8 @@ impl PhotoApp {
                     self.message("Person angelegt".into(), false);
                     if running.collection == self.settings.collection {
                         self.family_ui.just_added = Some(id);
+                        self.select_person(id);
+                        self.people_ui.scroll_to_person(id);
                         self.relationship_graph.stale = true;
                         self.refresh_faces();
                     }
