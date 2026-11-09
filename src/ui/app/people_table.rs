@@ -454,6 +454,17 @@ impl PhotoApp {
             {
                 self.people_ui.panel = Panel::NewPerson;
             }
+            // Sichtbarer Weg, alle lokalen Personen in den zentralen Bestand zu schieben.
+            if self.settings.central_enabled
+                && ui
+                    .add_enabled(!self.busy(), egui::Button::new("Zentral abgleichen"))
+                    .on_hover_text(
+                        "Legt alle Personen dieser Sammlung im zentralen Bestand an, verknüpft gleiche Namen und ergänzt leere Felder in beide Richtungen. Es wird nie etwas überschrieben; Widersprüche kommen als Rückfrage.",
+                    )
+                    .clicked()
+            {
+                self.run_central(crate::core::central::sync);
+            }
         });
     }
 

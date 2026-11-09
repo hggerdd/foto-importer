@@ -228,7 +228,7 @@ impl PhotoApp {
     }
 
     /// Startet eine zentrale Operation auf dem Worker; Fehler werden angezeigt.
-    fn run_central(
+    pub(super) fn run_central(
         &mut self,
         work: impl FnOnce(&mut Collection, &mut Central) -> Result<SyncReport> + Send + 'static,
     ) {
