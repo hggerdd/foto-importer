@@ -1,3 +1,4 @@
+mod central_view;
 mod collection_view;
 mod folder_tree;
 mod import_view;
@@ -75,6 +76,8 @@ enum Outcome {
         crate::core::dng_updates::UpdateCache,
     ),
     Named(Undo),
+    /// Ergebnis plus Hinweis/Bericht des zentralen Abgleichs (ADR 0062).
+    Synced(Box<Outcome>, crate::core::central::SyncNote),
     Pick(Pick, Option<PathBuf>),
 }
 struct Running {
@@ -187,6 +190,7 @@ pub struct PhotoApp {
     relation_to: Option<i64>,
     relation_kind: String,
     family_ui: tree_view::FamilyUi,
+    central_ui: central_view::CentralUi,
     person_edit: Option<faces::Person>,
     relationship_graph: relationship_view::RelationshipView,
     report: Option<String>,
@@ -276,6 +280,7 @@ impl PhotoApp {
             relation_to: None,
             relation_kind: "parent".into(),
             family_ui: Default::default(),
+            central_ui: Default::default(),
             person_edit: None,
             relationship_graph: Default::default(),
             report: None,
@@ -589,6 +594,7 @@ impl PhotoApp {
             self.undo.clear();
         }
         let settings = self.settings.clone();
+        let wipe_central = self.central_ui.wipe_references;
         let scope = self.work_scope();
         let action = action.to_string();
         let detector = self.detector.clone();
@@ -647,7 +653,14 @@ impl PhotoApp {
                 }
                 "verify" => c.verify(&control)?,
                 "export" => crate::core::maintenance::export(&c, &settings.exiftool, &control)?,
-                "delete_biometrics" => crate::core::maintenance::delete_biometrics(&c)?,
+                "delete_biometrics" => {
+                    let mut message = crate::core::maintenance::delete_biometrics(&c)?;
+                    if wipe_central {
+                        let removed = crate::core::central::wipe_references(&settings.central())?;
+                        message.push_str(&format!(" Zentrale Referenzbilder entfernt: {removed}."));
+                    }
+                    message
+                }
                 "calibrate" => {
                     return Ok(Outcome::Report(serde_json::to_string_pretty(
                         &crate::core::maintenance::calibrate(&c, &control)?,
@@ -721,6 +734,18 @@ impl PhotoApp {
         }
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
+            let result = match result {
+                Ok(Outcome::Synced(inner, note)) => {
+                    if running.collection == self.settings.collection {
+                        if let Some(warning) = &note.warning {
+                            self.message(warning.clone(), true);
+                        }
+                        self.central_ui.accept(note);
+                    }
+                    Ok(*inner)
+                }
+                other => other,
+            };
             match result {
                 Err(_) if running.kind == "folders" => {
                     // Never retry a failing or cancelled level in a loop; "Aktualisieren" retries.

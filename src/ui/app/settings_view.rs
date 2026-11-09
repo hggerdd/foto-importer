@@ -182,6 +182,7 @@ impl PhotoApp {
                 ui.label(RichText::new("Die Installation prüft die Gewichte mit SHA-256. Rust-Adapter verwenden getrennte Modellschlüssel.").small().weak());
             });
             ui.add_space(16.0);
+            self.central_settings_card(ui);
             if ui.checkbox(&mut self.settings.dark,"Dunkle Oberfläche").changed(){theme::apply(ui.ctx(),self.settings.dark);}
             if theme::primary(ui,"Einstellungen speichern",true)&&self.save(){
                 match crate::core::inference::manifests(Path::new(&self.settings.model_dir)){

@@ -458,16 +458,20 @@ impl PhotoApp {
                 .collect();
             let name = draft.name.clone();
             let person = draft.person;
+            let config = self.settings.central();
             self.launch("Gesichtsgruppe speichern", true, "naming", move |_| {
                 let mut c = Collection::open(Path::new(&root), true)?;
-                let undo = faces::name_group(&mut c, &ids, &selected, person, &name, ignore)?;
-                Ok(Outcome::Named(undo))
+                let (undo, note) = crate::core::central::name_group_synced(
+                    &mut c, &config, &ids, &selected, person, &name, ignore,
+                )?;
+                Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
             });
         }
     }
     pub(super) fn person_manager(&mut self, ui: &mut egui::Ui) {
         // Zentrale Stelle für alle vorgeschlagenen Beziehungen.
         self.questions_list(ui);
+        self.central_panel(ui);
         let mut photos = None;
         let mut graph_from = None;
         if self.relation_from.is_none() {
@@ -510,12 +514,17 @@ impl PhotoApp {
                 let source = self.relation_from.unwrap_or_default();
                 let target = self.relation_to.unwrap_or_default();
                 self.undo.clear();
+                let config = self.settings.central();
                 self.launch("Personen zusammenführen", true, "mutation", move |_| {
                     let mut c = Collection::open(Path::new(&root), true)?;
-                    crate::core::maintenance::merge_people(&mut c, source, target)?;
-                    Ok(Outcome::Done(
-                        "Personen zusammengeführt; alte ID bleibt als Weiterleitung erhalten"
-                            .into(),
+                    let note =
+                        crate::core::central::merge_people_synced(&mut c, &config, source, target)?;
+                    Ok(Outcome::Synced(
+                        Box::new(Outcome::Done(
+                            "Personen zusammengeführt; alte ID bleibt als Weiterleitung erhalten"
+                                .into(),
+                        )),
+                        note,
                     ))
                 });
             }
