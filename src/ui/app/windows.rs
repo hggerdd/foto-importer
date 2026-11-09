@@ -20,49 +20,6 @@ impl PhotoApp {
                 self.report = None;
             }
         }
-        if let Some(mut person) = self.person_edit.clone() {
-            let mut open = true;
-            egui::Window::new(format!("Person #{} bearbeiten", person.id))
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut person.name);
-                    ui.label("Geburtsjahr");
-                    ui.text_edit_singleline(&mut person.birth);
-                    ui.label("Geschlecht");
-                    ui.text_edit_singleline(&mut person.gender);
-                    ui.label(
-                        RichText::new(
-                            "„weiblich“ oder „männlich“ steuert die Beschriftung von Beziehungen; sonst neutral.",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                    ui.label("Notiz");
-                    ui.text_edit_multiline(&mut person.note);
-                    if theme::primary(
-                        ui,
-                        "Änderungen speichern",
-                        !self.busy() && !person.name.trim().is_empty(),
-                    ) {
-                        let root = self.settings.collection.clone();
-                        let id = person.id;
-                        let attrs = BTreeMap::from([
-                            ("name".into(), person.name.clone()),
-                            ("birth_year".into(), person.birth.clone()),
-                            ("gender".into(), person.gender.clone()),
-                            ("note".into(), person.note.clone()),
-                        ]);
-                        self.undo.clear();
-                        self.launch("Person speichern", true, "mutation", move |_| {
-                            let c = Collection::open(Path::new(&root), true)?;
-                            crate::core::maintenance::set_person(&c, id, &attrs)?;
-                            Ok(Outcome::Done("Person gespeichert".into()))
-                        });
-                    }
-                });
-            self.person_edit = if open { Some(person) } else { None };
-        }
         if self.large {
             let mut open = true;
             egui::Window::new("Große Bildansicht")

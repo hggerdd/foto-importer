@@ -393,3 +393,155 @@ fn dates_and_sizes_are_shown_in_german_notation_without_touching_unknown_formats
     assert_eq!(human_size(300 * 1024), "300 KB");
     assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
 }
+
+fn people_app(count: i64) -> (egui::Context, PhotoApp) {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.view = View::People;
+    app.face_mode = "persons".into();
+    app.settings.collection = "tmp/synthetic-people".into();
+    load_people(&mut app, count, 0);
+    (context, app)
+}
+
+/// Übernimmt einen synthetischen Personenstand wie `poll` nach einem Worker-Ergebnis.
+fn load_people(app: &mut PhotoApp, count: i64, offset: i64) {
+    let people: Vec<faces::Person> = (1..=count)
+        .map(|id| faces::Person {
+            id,
+            name: format!("Person {:03} Müller", (id + offset) % 997),
+            birth: if id % 3 == 0 {
+                "1980".into()
+            } else {
+                String::new()
+            },
+            count: (id % 7) as usize,
+            gender: if id % 2 == 0 {
+                "weiblich".into()
+            } else {
+                String::new()
+            },
+            note: String::new(),
+        })
+        .collect();
+    let family = crate::core::kinship::Family::new(&[], &BTreeMap::new());
+    app.face_page.rows =
+        crate::core::people_table::build_rows(&people, &BTreeMap::new(), &[], &family, &[], 2026);
+    app.face_page.people = people;
+    app.face_page_serial += 1;
+}
+
+fn draw_people(context: &egui::Context, app: &mut PhotoApp, size: egui::Vec2) {
+    for _ in 0..2 {
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+        );
+    }
+}
+
+#[test]
+fn people_table_and_detail_panel_are_not_cut_off_in_small_and_large_windows() {
+    for size in [
+        egui::vec2(980.0, 680.0),
+        egui::vec2(1280.0, 800.0),
+        egui::vec2(1920.0, 1080.0),
+    ] {
+        let (context, mut app) = people_app(300);
+        app.relation_from = Some(42);
+        draw_people(&context, &mut app, size);
+        let bounds = app.people_ui.bounds.expect("page was drawn");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        assert!(screen.contains_rect(bounds.table), "{bounds:?} at {size:?}");
+        assert!(screen.contains_rect(bounds.panel), "{bounds:?} at {size:?}");
+        assert!(
+            bounds.table.right() <= bounds.panel.left() + 1.0,
+            "table and panel overlap: {bounds:?}"
+        );
+        assert!(
+            bounds.table.width() >= 340.0,
+            "table too narrow at {size:?}: {bounds:?}"
+        );
+        assert!(
+            bounds.panel.width() >= 270.0,
+            "panel too narrow at {size:?}: {bounds:?}"
+        );
+        assert!(
+            bounds.panel_content_width <= bounds.panel.width() + 1.0,
+            "panel content wider than the panel at {size:?}: {bounds:?}"
+        );
+        assert!(bounds.table.height() >= 300.0 && bounds.panel.height() >= 300.0);
+        assert!(bounds.columns >= 2, "{bounds:?}");
+        if size.x >= 1900.0 {
+            assert!(
+                bounds.columns >= 8,
+                "wide window shows most columns: {bounds:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn people_filter_reduces_rows_and_the_selection_survives_a_reload() {
+    let (context, mut app) = people_app(120);
+    let size = egui::vec2(1280.0, 800.0);
+    app.select_person(7);
+    draw_people(&context, &mut app, size);
+    assert_eq!(app.people_ui.view.len(), 120);
+    // Tippen filtert sofort: Umschrift und #ID treffen dieselbe Zeile.
+    app.people_ui.query = "mueller 007".into();
+    draw_people(&context, &mut app, size);
+    assert_eq!(app.people_ui.view.len(), 1);
+    assert_eq!(app.face_page.rows[app.people_ui.view[0]].id, 7);
+    app.people_ui.query = "#12".into();
+    draw_people(&context, &mut app, size);
+    assert!(!app.people_ui.view.is_empty() && app.people_ui.view.len() < 120);
+    app.people_ui.query.clear();
+    // Neuladen (neue Revision der Daten) behält Auswahl und Sortierung.
+    app.people_ui.sort = vec![crate::core::people_table::SortKey {
+        column: crate::core::people_table::Column::Faces,
+        descending: true,
+    }];
+    draw_people(&context, &mut app, size);
+    let first = app.face_page.rows[app.people_ui.view[0]].faces;
+    assert_eq!(first, 6, "meiste Gesichter zuerst");
+    load_people(&mut app, 120, 5);
+    draw_people(&context, &mut app, size);
+    assert_eq!(app.relation_from, Some(7));
+    assert_eq!(app.people_ui.sort.len(), 1);
+    assert_eq!(app.people_ui.view.len(), 120);
+    // Verschwindet die Person (z. B. zusammengeführt), wird die Auswahl verworfen.
+    app.face_page.people.retain(|p| p.id != 7);
+    draw_people(&context, &mut app, size);
+    assert_eq!(app.relation_from, None);
+}
+
+#[test]
+fn unsaved_property_edits_survive_a_reload_but_clean_drafts_follow_the_data() {
+    let (context, mut app) = people_app(5);
+    let size = egui::vec2(1280.0, 800.0);
+    app.select_person(2);
+    draw_people(&context, &mut app, size);
+    app.people_ui.draft_mut().expect("draft").2.note = "Notiz im Entwurf".into();
+    load_people(&mut app, 5, 3);
+    draw_people(&context, &mut app, size);
+    let (_, base, edit) = app.people_ui.draft_mut().expect("draft").clone();
+    assert_eq!(edit.note, "Notiz im Entwurf", "Eingabe bleibt erhalten");
+    assert_eq!(
+        base.name, app.face_page.people[1].name,
+        "Stand folgt den Daten"
+    );
+}
+
+#[test]
+fn filter_select_popup_stays_open_for_the_visual_check() {
+    let (context, mut app) = people_app(40);
+    app.select_person(3);
+    app.people_ui.capture_popup = Some("mül".into());
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    assert!(egui::Popup::is_any_open(&context), "popup stays open");
+}

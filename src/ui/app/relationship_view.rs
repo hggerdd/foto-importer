@@ -11,12 +11,10 @@ pub(super) struct RelationshipView {
     pub(super) revision: u64,
     pub(super) data: Option<Network>,
     /// Kleingeschriebene Namen in Knotenreihenfolge für die Suche.
-    names: Vec<String>,
     /// Daten sind veraltet (Sammlung wurde geändert) und werden neu berechnet.
     pub(super) stale: bool,
     attempted: bool,
     pub(super) selected: Option<i64>,
-    filter: String,
     centre: [f32; 2],
     scale: f32,
     fit: bool,
@@ -31,11 +29,9 @@ impl Default for RelationshipView {
         Self {
             revision: 0,
             data: None,
-            names: Vec::new(),
             stale: false,
             attempted: false,
             selected: None,
-            filter: String::new(),
             centre: [0.0, 0.0],
             scale: 40.0,
             fit: true,
@@ -60,11 +56,6 @@ impl RelationshipView {
         if self.data.is_none() {
             self.min_photos = default_threshold(&network);
         }
-        self.names = network
-            .nodes
-            .iter()
-            .map(|node| files::fold(&node.name))
-            .collect();
         if self
             .selected
             .is_some_and(|person| network.index_of(person).is_none())
@@ -330,14 +321,14 @@ struct PortraitSource<'a> {
 }
 
 /// UV-Rechteck, das aus einer beliebigen Textur den mittleren quadratischen Teil wählt.
-fn square_uv(size: egui::Vec2) -> egui::Rect {
+pub(super) fn square_uv(size: egui::Vec2) -> egui::Rect {
     let (w, h) = (size.x.max(1.0), size.y.max(1.0));
     let (u, v) = if w > h { (h / w, 1.0) } else { (1.0, w / h) };
     egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(u, v))
 }
 
 /// Zeichnet die Textur als Kreis (Dreiecksfächer mit passenden UV-Koordinaten).
-fn textured_circle(
+pub(super) fn textured_circle(
     painter: &egui::Painter,
     centre: Pos2,
     radius: f32,
@@ -745,39 +736,29 @@ fn side_panel(
     let mut photos = None;
     ui.add_space(4.0);
     ui.label(RichText::new("Person finden").strong());
-    ui.add(
-        egui::TextEdit::singleline(&mut view.filter)
-            .hint_text("Name eingeben …")
-            .desired_width(f32::INFINITY),
-    );
-    let needle = files::fold(view.filter.trim());
-    let mut matches: Vec<usize> = (0..network.nodes.len())
-        .filter(|i| view.names[*i].contains(&needle))
+    let mut order: Vec<usize> = (0..network.nodes.len()).collect();
+    order.sort_by_cached_key(|&i| crate::core::choice_filter::sort_key(&network.nodes[i].name));
+    let items: Vec<_> = order
+        .into_iter()
+        .map(|i| {
+            let node = &network.nodes[i];
+            super::select::Choice::new(
+                node.person,
+                node.name.clone(),
+                format!("{} Fotos", node.photos),
+            )
+        })
         .collect();
-    matches.sort_by(|a, b| view.names[*a].cmp(&view.names[*b]));
-    egui::ScrollArea::vertical()
-        .id_salt("graph-people")
-        .max_height(110.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            if matches.is_empty() {
-                ui.label("Keine passende Person");
-            }
-            for &i in matches.iter().take(300) {
-                let node = &network.nodes[i];
-                let chosen = view.selected == Some(node.person);
-                if ui
-                    .selectable_label(chosen, format!("{} · {} Fotos", node.name, node.photos))
-                    .clicked()
-                {
-                    view.selected = Some(node.person);
-                    view.focus_request = Some(node.person);
-                }
-            }
-            if matches.len() > 300 {
-                ui.label(RichText::new("Weitere Treffer: Suchbegriff eingrenzen").small());
-            }
-        });
+    let mut picked = view.selected;
+    if super::select::FilterSelect::new("graph-person", &items)
+        .placeholder("Name eintippen oder wählen …")
+        .width(ui.available_width())
+        .show(ui, &mut picked)
+        && picked.is_some()
+    {
+        view.selected = picked;
+        view.focus_request = picked;
+    }
     egui::TopBottomPanel::bottom("graph-legend").show_inside(ui, |ui| {
         legend(ui, network, &colours);
     });

@@ -122,3 +122,23 @@ unter der Zeitgrenze). Sichtprüfung am 08.11.2026 (Debug-Build, synthetische Fa
 [Rückfragen](screenshots/personen-rueckfragen.png). Nicht geprüft: Hell-Design, Bedienung per
 Maus (Klick auf Personen, Auswahlfelder, „Person anlegen“), Screenreader, Sammlungen mit
 echten Familien, Layout bei Pedigree-Collapse (Ahnenschwund) in der Zeichnung.
+
+## Personentabelle und Tippfilter (ADR 0063)
+
+Regressionen: reine Sortier- und Filterlogik (stabile Mehrspaltensortierung, Umlaute und Umschrift,
+leere Werte zuletzt, Präfix vor Wortanfang vor Teiltreffer, Spaltenauswahl nach Breite), eine
+Datenbankprüfung der Zählungen (bestätigte Fotos/Gesichter, Datumsbereich, Beziehungen, Familie),
+UI-Tests im Kittest-Stil: Tabelle und Detailspalte werden bei 980 × 680, 1280 × 800 und 1920 × 1080
+nicht abgeschnitten und überlappen nicht, die Detailspalte läuft nicht über; der Filter reduziert die
+Zeilen; Auswahl und Sortierung überstehen neu geladene Daten, eine verschwundene Person verwirft die
+Auswahl; ungespeicherte Eingaben im Detail bleiben bei Neuladen erhalten; das Auswahl-Popup bleibt offen.
+Für Sichtprüfungen (nur synthetische Daten, `cargo run --example demo_faces`):
+`FOTO_IMPORTER_FACE_MODE=persons`, `FOTO_IMPORTER_PEOPLE_SELECT=<ID>`,
+`FOTO_IMPORTER_PEOPLE_SORT=<name|photos|faces|birth|gender|relations|family|first|last|hints>[:desc]`,
+`FOTO_IMPORTER_PEOPLE_POPUP=<Suchtext>` (hält das Auswahlfeld „von …“ in „Beziehung hinzufügen“ offen).
+
+Sichtprüfung am 09.11.2026 (Debug-Build, synthetische Demodaten, 61 Personen, 1280 × 800, dunkles Design,
+`FOTO_IMPORTER_PEOPLE_SORT=photos:desc`, Auswahl #1, Popup mit Suchtext „cl“): [Bild](screenshots/personen-tabelle.png).
+Sichtbar: Tabelle mit Porträts, Sortierdreieck, Auswahlzeile, Detailspalte mit gefiltertem Auswahlfeld.
+Nicht geprüft: 980 × 680 per Bild (nur per Layouttest), Hell-Design, Mausrad, Screenreader. Die Demodaten
+enthalten weder Geburtsjahre noch Aufnahmedaten, daher zeigen diese Spalten dort „–“ (per Test mit Daten abgedeckt).

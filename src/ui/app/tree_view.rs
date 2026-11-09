@@ -3,7 +3,7 @@
 //! Alle Verwandtschaft wird aus den gespeicherten Basisfakten berechnet
 //! (`core::kinship`, `core::tree_layout`); die Oberfläche zeichnet nur.
 use super::*;
-use crate::core::gaps::{self, Answer, Suggestion, SuggestionKind};
+use crate::core::gaps::Suggestion;
 use crate::core::kinship::{Family, Relation};
 use crate::core::relations::{self, Gender, Role};
 use crate::core::tree_layout::{self, LinkKind, NodeRole};
@@ -34,6 +34,16 @@ pub(super) struct FamilyUi {
     pub(super) show_shortcuts: bool,
 }
 
+impl FamilyUi {
+    /// Zurückgestellte Rückfragen werden bis zum Neustart ausgeblendet.
+    pub(super) fn is_snoozed(&self, suggestion: &Suggestion) -> bool {
+        self.snoozed.contains(&format!("{suggestion:?}"))
+    }
+    pub(super) fn snooze(&mut self, suggestion: &Suggestion) {
+        self.snoozed.insert(format!("{suggestion:?}"));
+    }
+}
+
 impl Default for FamilyUi {
     fn default() -> Self {
         Self {
@@ -62,7 +72,7 @@ fn gender_color(gender: Gender) -> Color32 {
     }
 }
 
-fn initials(name: &str) -> String {
+pub(super) fn initials(name: &str) -> String {
     let mut letters: Vec<char> = name
         .split_whitespace()
         .filter_map(|w| w.chars().next())
@@ -80,7 +90,7 @@ fn dashed(painter: &egui::Painter, points: [Pos2; 2], stroke: Stroke) {
 }
 
 impl PhotoApp {
-    fn person_name(&self, id: i64) -> String {
+    pub(super) fn person_name(&self, id: i64) -> String {
         self.face_page
             .people
             .iter()
@@ -88,6 +98,7 @@ impl PhotoApp {
             .map_or_else(|| format!("#{id}"), |p| p.name.clone())
     }
 
+    /// Personenfeld mit Tippfilter und Beschriftung davor (ADR 0063).
     fn person_combo(
         ui: &mut egui::Ui,
         salt: &str,
@@ -95,20 +106,8 @@ impl PhotoApp {
         people: &[faces::Person],
         selected: &mut Option<i64>,
     ) {
-        let caption = selected
-            .and_then(|id| people.iter().find(|p| p.id == id))
-            .map_or_else(
-                || format!("{label}: wählen …"),
-                |p| format!("{label}: {} · #{}", p.name, p.id),
-            );
-        egui::ComboBox::from_id_salt(salt)
-            .selected_text(caption)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                for p in people {
-                    ui.selectable_value(selected, Some(p.id), format!("{} · #{}", p.name, p.id));
-                }
-            });
+        ui.label(label);
+        select::person_select(ui, salt, people, None, selected, "Person wählen …", 240.0);
     }
 
     /// Standard-Fokus: die Person mit den meisten Familienbeziehungen.
@@ -165,6 +164,8 @@ impl PhotoApp {
                 ));
                 if ui.small_button("Zu den Rückfragen").clicked() {
                     self.face_mode = "persons".into();
+                    self.people_ui.panel = super::people_table::Panel::Questions;
+                    self.refresh_faces();
                 }
             });
         }
@@ -476,35 +477,87 @@ impl PhotoApp {
         picked
     }
 
-    /// Eintragen von Beziehungen für `person`: „[Person] ist Kind von / Elternteil von /
-    /// Partner von / Freund von [andere Person]“.
+    /// Beziehung eintragen: „[Person] ist [Rolle] von [andere Person]“. Beide Auswahlfelder
+    /// filtern beim Tippen; die Rollenbeschriftung folgt dem Geschlecht der Person.
     pub(super) fn quick_relation_row(&mut self, ui: &mut egui::Ui, person: i64) {
         let busy = self.busy();
         let people = self.face_page.people.clone();
-        let others: Vec<faces::Person> =
-            people.iter().filter(|p| p.id != person).cloned().collect();
         let mut other = self.family_ui.quick_other.filter(|o| *o != person);
         let me = self.person_name(person);
-        let mut action: Option<Role> = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{me} ist"));
-            for (role, label) in [
-                (Role::Child, "Kind von"),
-                (Role::Parent, "Elternteil von"),
-                (Role::Partner, "Partner von"),
-                (Role::Friend, "Freund von"),
-            ] {
-                if ui
-                    .add_enabled(!busy && other.is_some(), egui::Button::new(label))
-                    .clicked()
-                {
-                    action = Some(role);
-                }
-            }
-            Self::person_combo(ui, "quick-other", "Person", &others, &mut other);
-        });
+        let gender = people
+            .iter()
+            .find(|p| p.id == person)
+            .map_or(Gender::Unknown, |p| Gender::parse(&p.gender));
+        let mut role = Role::from_key(&self.relation_kind);
+        let roles = self.role_choices(gender);
+        if role.is_none_or(|r| !roles.iter().any(|c| c.value == r)) {
+            role = Some(Role::Parent);
+        }
+        let mut chosen = role;
+        let width = ui.available_width().clamp(200.0, 420.0);
+        ui.label(RichText::new(format!("Beziehung hinzufügen: {me} ist …")).strong());
+        select::FilterSelect::new("quick-role", &roles)
+            .placeholder("Rolle wählen …")
+            .width(width)
+            .show(ui, &mut chosen);
+        ui.label("von");
+        let items = select::person_choices(&people, Some(person));
+        let popup = self.people_ui.capture_popup.clone();
+        select::FilterSelect::new("quick-other", &items)
+            .placeholder("Person wählen …")
+            .width(width)
+            .open_with(popup.as_deref())
+            .show(ui, &mut other);
         self.family_ui.quick_other = other;
-        if let (Some(role), Some(object)) = (action, other) {
+        let role = chosen.unwrap_or(Role::Parent);
+        self.relation_kind = role.key().into();
+        let ready = other.is_some();
+        let mut blocked = false;
+        if matches!(role, Role::Sibling | Role::Cousin) {
+            ui.label(
+                RichText::new(
+                    "Behelf: nur nötig, solange die Eltern nicht erfasst sind. Mit erfassten Eltern ergeben sich Geschwister und Cousins automatisch aus dem Stammbaum.",
+                )
+                .color(theme::MUTED),
+            );
+            if let Some(other) = other
+                && !relations::shortcut_needed(&self.face_page.family, person, other)
+            {
+                blocked = true;
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Diese Verwandtschaft ergibt sich schon aus dem Stammbaum und wird nicht zusätzlich gespeichert.",
+                );
+            }
+        }
+        if let Some(other) = other {
+            let other_gender = people
+                .iter()
+                .find(|p| p.id == other)
+                .map_or(Gender::Unknown, |p| Gender::parse(&p.gender));
+            ui.label(
+                RichText::new(format!(
+                    "Gleichbedeutend: {} ist {} von {}.",
+                    self.person_name(other),
+                    role.inverse().label(other_gender),
+                    me
+                ))
+                .color(theme::MUTED),
+            );
+        }
+        ui.checkbox(
+            &mut self.family_ui.show_shortcuts,
+            "Notfall-Behelf anzeigen (Geschwister / Cousin)",
+        );
+        if ui
+            .add_enabled(
+                !busy && ready && !blocked,
+                egui::Button::new("Beziehung speichern")
+                    .min_size(egui::vec2(0.0, theme::CONTROL_HEIGHT)),
+            )
+            .clicked()
+            && let Some(object) = other
+        {
             let root = self.settings.collection.clone();
             self.undo.clear();
             self.launch("Beziehung speichern", true, "mutation", move |_| {
@@ -537,7 +590,7 @@ impl PhotoApp {
         let family = self.face_page.family.clone();
         let mut action: Option<(i64, Role, i64)> = None;
         let mut select = None;
-        ui.label(RichText::new(format!("Beziehungen von {}", me.name)).strong());
+        let _ = me;
         self.quick_relation_row(ui, person);
         ui.label(RichText::new("Gespeichert").strong());
         if direct.is_empty() {
@@ -550,7 +603,7 @@ impl PhotoApp {
             }
             ui.label(role.group_label());
             for (_, other) in items {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let (name, gender) = info(*other);
                     ui.add_space(12.0);
                     if ui.link(name).clicked() {
@@ -625,7 +678,7 @@ impl PhotoApp {
             for group in shown {
                 ui.label(&group.title);
                 for member in &group.members {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let (name, gender) = info(member.person);
                         ui.add_space(12.0);
                         if ui.link(name).clicked() {
@@ -661,224 +714,90 @@ impl PhotoApp {
         }
     }
 
-    /// Liste der offenen Rückfragen zu wahrscheinlich fehlenden Eltern.
-    pub(super) fn questions_list(&mut self, ui: &mut egui::Ui) {
-        let open: Vec<Suggestion> = self
-            .face_page
-            .questions
-            .iter()
-            .filter(|s| !self.family_ui.snoozed.contains(&format!("{s:?}")))
-            .cloned()
-            .collect();
-        if open.is_empty() {
-            return;
-        }
-        let busy = self.busy();
-        let family = self.face_page.family.clone();
-        ui.label(RichText::new(format!("Rückfragen · {}", open.len())).strong());
-        ui.label(
-            RichText::new(
-                "Das könnte im Stammbaum oder bei den Freundschaften fehlen. Nichts wird ohne deine Antwort ergänzt.",
-            )
-            .weak(),
-        );
-        let mut answered: Option<(Suggestion, Answer)> = None;
-        let mut snooze = None;
-        for s in &open {
-            let names = |ids: &[i64]| {
-                ids.iter()
-                    .map(|id| self.person_name(*id))
-                    .collect::<Vec<_>>()
-                    .join(" und ")
-            };
-            let (question, no_label) = match s.kind {
-                SuggestionKind::SiblingParents => {
-                    let target = s.targets[0];
-                    let has_parent = !family.parents_of(target).is_empty();
-                    (
-                        format!(
-                            "Sind {} auch Eltern von {}? ({} und {} gelten als Geschwister, erfasst sind aber nicht dieselben Eltern.)",
-                            names(&s.candidates),
-                            self.person_name(target),
-                            names(&s.via),
-                            self.person_name(target)
-                        ),
-                        if has_parent {
-                            "Nein – Halbgeschwister"
-                        } else {
-                            "Nein"
-                        },
-                    )
-                }
-                SuggestionKind::PartnerParent => (
-                    format!(
-                        "Ist {} (Partner von {}) auch Elternteil von {}?",
-                        names(&s.candidates),
-                        names(&s.via),
-                        names(&s.targets)
-                    ),
-                    "Nein – Stiefbeziehung",
-                ),
-                SuggestionKind::FriendOfPartner => (
-                    format!(
-                        "{} ist mit {} befreundet. Ist {} (Partner von {}) auch mit {} befreundet?",
-                        names(&s.targets),
-                        names(&s.via),
-                        names(&s.candidates),
-                        names(&s.via),
-                        names(&s.targets)
-                    ),
-                    "Nein",
-                ),
-            };
-            ui.group(|ui| {
-                ui.label(question);
-                ui.horizontal_wrapped(|ui| {
-                    let yes = if s.candidates.len() > 1 {
-                        "Ja, beide"
-                    } else {
-                        "Ja"
-                    };
-                    if ui.add_enabled(!busy, egui::Button::new(yes)).clicked() {
-                        answered = Some((s.clone(), Answer::All));
-                    }
-                    if s.candidates.len() > 1 {
-                        for &c in &s.candidates {
-                            if ui
-                                .add_enabled(
-                                    !busy,
-                                    egui::Button::new(format!(
-                                        "Nur {} (Halbgeschwister)",
-                                        self.person_name(c)
-                                    )),
-                                )
-                                .clicked()
-                            {
-                                answered = Some((s.clone(), Answer::Only(c)));
-                            }
-                        }
-                    }
-                    if ui.add_enabled(!busy, egui::Button::new(no_label)).clicked() {
-                        answered = Some((s.clone(), Answer::None));
-                    }
-                    if ui.button("Später").clicked() {
-                        snooze = Some(format!("{s:?}"));
-                    }
-                });
-            });
-        }
-        if let Some(key) = snooze {
-            self.family_ui.snoozed.insert(key);
-        }
-        if let Some((suggestion, answer)) = answered {
-            let root = self.settings.collection.clone();
-            self.undo.clear();
-            self.launch("Rückfrage beantworten", true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                gaps::apply(&mut c, &suggestion, answer)?;
-                Ok(Outcome::Done("Antwort gespeichert".into()))
-            });
-        }
-        ui.separator();
-    }
-
     /// Anzahl der Rückfragen, die nicht zurückgestellt sind (für den Reiter).
     pub(super) fn open_questions(&self) -> usize {
         self.face_page
             .questions
             .iter()
-            .filter(|s| !self.family_ui.snoozed.contains(&format!("{s:?}")))
+            .filter(|s| !self.family_ui.is_snoozed(s))
             .count()
     }
 
     /// Formular „Person hinzufügen“ (ohne Gesichtsbezug, z. B. verstorbene Großeltern).
+    /// Angelegt wird ausschließlich über `faces::add_person`.
     pub(super) fn add_person_form(&mut self, ui: &mut egui::Ui) {
         let busy = self.busy();
         let mut state = std::mem::take(&mut self.family_ui);
-        egui::CollapsingHeader::new("Person hinzufügen (ohne Foto)")
-            .id_salt("add-person")
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut state.new_name).desired_width(200.0));
-                    egui::ComboBox::from_id_salt("new-gender")
-                        .selected_text(match state.new_gender.as_str() {
-                            "weiblich" => "weiblich",
-                            "männlich" => "männlich",
-                            _ => "divers / unbekannt",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.new_gender, String::new(), "divers / unbekannt");
-                            ui.selectable_value(&mut state.new_gender, "weiblich".into(), "weiblich");
-                            ui.selectable_value(&mut state.new_gender, "männlich".into(), "männlich");
-                        });
-                    ui.label("Geburtsjahr");
-                    ui.add(egui::TextEdit::singleline(&mut state.new_birth).desired_width(60.0));
-                    ui.label("Notiz");
-                    ui.add(egui::TextEdit::singleline(&mut state.new_note).desired_width(200.0));
-                });
-                let birth = state.new_birth.trim();
-                let year = if birth.is_empty() { Ok(None) } else { birth.parse::<i32>().map(Some) };
-                let new = faces::NewPerson {
-                    name: state.new_name.clone(),
-                    gender: state.new_gender.clone(),
-                    birth_year: year.clone().unwrap_or(None),
-                    note: state.new_note.clone(),
-                };
-                let problem = if year.is_err() {
-                    Some("Das Geburtsjahr muss eine Zahl sein".to_string())
-                } else if state.new_name.trim().is_empty() {
-                    None
-                } else {
-                    faces::validate_new_person(&new).err().map(|e| e.to_string())
-                };
-                if let Some(problem) = &problem {
-                    ui.colored_label(ui.visuals().warn_fg_color, problem);
-                }
-                let same = faces::people_named(&self.face_page.people, &state.new_name);
-                if !same.is_empty() && !state.new_name.trim().is_empty() {
-                    ui.label(
-                        RichText::new(format!(
-                            "Hinweis: Es gibt schon {} Person(en) mit diesem Namen (#{}). Das ist erlaubt; die IDs bleiben unterscheidbar.",
-                            same.len(),
-                            same.iter().map(i64::to_string).collect::<Vec<_>>().join(", #")
-                        ))
-                        .weak(),
-                    );
-                }
-                let ready = problem.is_none() && !state.new_name.trim().is_empty();
-                if ui
-                    .add_enabled(!busy && ready, egui::Button::new("Person anlegen"))
-                    .clicked()
-                {
-                    let root = self.settings.collection.clone();
-                    self.undo.clear();
-                    let config = self.settings.central();
-                    self.launch("Person anlegen", true, "mutation", move |_| {
-                        let mut c = Collection::open(Path::new(&root), true)?;
-                        let (id, note) =
-                            crate::core::central::add_person_synced(&mut c, &config, &new)?;
-                        Ok(Outcome::Synced(Box::new(Outcome::PersonAdded(id)), note))
-                    });
-                    state.new_name.clear();
-                    state.new_birth.clear();
-                    state.new_note.clear();
-                }
-            });
-        self.family_ui = state;
-        if let Some(id) = self.family_ui.just_added
-            && self.face_page.people.iter().any(|p| p.id == id)
-        {
-            ui.group(|ui| {
-                ui.label(format!(
-                    "{} wurde angelegt. Beziehung hinzufügen:",
-                    self.person_name(id)
-                ));
-                self.quick_relation_row(ui, id);
-                if ui.small_button("Fertig").clicked() {
-                    self.family_ui.just_added = None;
-                }
-            });
+        let width = ui.available_width();
+        ui.label("Name");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.new_name)
+                .desired_width(width)
+                .margin(egui::Margin::symmetric(10, 9)),
+        );
+        ui.label("Geschlecht");
+        super::people_table::gender_buttons(ui, &mut state.new_gender);
+        ui.label("Geburtsjahr");
+        ui.add(
+            egui::TextEdit::singleline(&mut state.new_birth)
+                .desired_width(100.0)
+                .margin(egui::Margin::symmetric(10, 9)),
+        );
+        ui.label("Notiz");
+        ui.add(
+            egui::TextEdit::multiline(&mut state.new_note)
+                .desired_width(width)
+                .desired_rows(2),
+        );
+        let birth = state.new_birth.trim();
+        let year = if birth.is_empty() {
+            Ok(None)
+        } else {
+            birth.parse::<i32>().map(Some)
+        };
+        let new = faces::NewPerson {
+            name: state.new_name.clone(),
+            gender: state.new_gender.clone(),
+            birth_year: year.clone().unwrap_or(None),
+            note: state.new_note.clone(),
+        };
+        let problem = if year.is_err() {
+            Some("Das Geburtsjahr muss eine Zahl sein".to_string())
+        } else if state.new_name.trim().is_empty() {
+            None
+        } else {
+            faces::validate_new_person(&new)
+                .err()
+                .map(|e| e.to_string())
+        };
+        if let Some(problem) = &problem {
+            ui.colored_label(ui.visuals().warn_fg_color, problem);
         }
+        let same = faces::people_named(&self.face_page.people, &state.new_name);
+        if !same.is_empty() && !state.new_name.trim().is_empty() {
+            ui.label(
+                RichText::new(format!(
+                    "Hinweis: Es gibt schon {} Person(en) mit diesem Namen (#{}). Das ist erlaubt; die IDs bleiben unterscheidbar.",
+                    same.len(),
+                    same.iter().map(i64::to_string).collect::<Vec<_>>().join(", #")
+                ))
+                .color(theme::MUTED),
+            );
+        }
+        let ready = problem.is_none() && !state.new_name.trim().is_empty();
+        if theme::primary(ui, "Person anlegen", !busy && ready) {
+            let root = self.settings.collection.clone();
+            self.undo.clear();
+            let config = self.settings.central();
+            self.launch("Person anlegen", true, "mutation", move |_| {
+                let mut c = Collection::open(Path::new(&root), true)?;
+                let (id, note) = crate::core::central::add_person_synced(&mut c, &config, &new)?;
+                Ok(Outcome::Synced(Box::new(Outcome::PersonAdded(id)), note))
+            });
+            state.new_name.clear();
+            state.new_birth.clear();
+            state.new_note.clear();
+        }
+        self.family_ui = state;
     }
 }

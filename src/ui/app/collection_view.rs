@@ -381,23 +381,19 @@ impl PhotoApp {
         ] {
             ui.horizontal_wrapped(|ui| {
                 ui.label(label);
-                egui::ComboBox::from_id_salt(label)
-                    .selected_text("Person hinzufügen …")
-                    .show_ui(ui, |ui| {
-                        for person in &self.face_page.people {
-                            let included = group.contains(&person.id);
-                            if ui
-                                .selectable_label(
-                                    included,
-                                    format!("{} · #{}", person.name, person.id),
-                                )
-                                .clicked()
-                                && !included
-                            {
-                                group.push(person.id);
-                            }
-                        }
-                    });
+                let mut added = None;
+                let items = select::person_choices(&self.face_page.people, None);
+                let hidden: Vec<_> = items
+                    .into_iter()
+                    .filter(|c| !group.contains(&c.value))
+                    .collect();
+                select::FilterSelect::new(label, &hidden)
+                    .placeholder("Person hinzufügen …")
+                    .width(220.0)
+                    .show(ui, &mut added);
+                if let Some(person) = added {
+                    group.push(person);
+                }
                 let mut remove = None;
                 for &id in group.iter() {
                     let name = self
