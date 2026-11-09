@@ -3,7 +3,7 @@
 - **Status:** Akzeptiert
 - **Erfasst am:** 2026-10-27
 - **Art:** Rückblickende Bestandsentscheidung; ursprüngliches Datum nicht rekonstruiert
-- **Bezieht sich auf:** [ADR-0008](0008-lokale-sqlite-sammlung.md), [ADR-0009](0009-stabile-foto-identitaeten.md)
+- **Bezieht sich auf:** [ADR-0008](0008-lokale-sqlite-sammlung.md), [ADR-0009](0009-stabile-foto-identitaeten.md), ergänzt durch [ADR-0064](0064-gestufte-indizierung-mit-fortschritt.md)
 
 ## Kontext
 
