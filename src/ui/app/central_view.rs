@@ -57,13 +57,15 @@ impl PhotoApp {
             return;
         }
         let busy = self.busy();
-        egui::CollapsingHeader::new("Zentraler Personenbestand")
+        egui::CollapsingHeader::new("Abgleich und fehlende Personen")
             .id_salt("central-panel")
+            .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(!busy, egui::Button::new("Mit zentralem Personenbestand abgleichen"))
                         .on_hover_text("Ergänzt leere Felder in beide Richtungen und fragt bei Widersprüchen nach")
+                        .on_disabled_hover_text(self.busy_reason())
                         .clicked()
                     {
                         self.run_central(central::sync);
@@ -185,6 +187,7 @@ impl PhotoApp {
             );
             if ui
                 .add_enabled(!self.busy(), egui::Button::new("Alle übernehmen"))
+                .on_disabled_hover_text(self.busy_reason())
                 .clicked()
             {
                 let gids = missing.iter().map(|p| p.gid.clone()).collect::<Vec<_>>();

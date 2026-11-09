@@ -389,10 +389,28 @@ impl PhotoApp {
         }
         app
     }
+    /// Läuft ein schreibender Auftrag, der diese Sammlung betrifft? Aufträge anderer
+    /// Sammlungen blockieren nicht (je Sammlung gibt es einen Schreiber, ADR 0008).
     fn busy(&self) -> bool {
-        self.tasks
-            .iter()
-            .any(|t| t.write && t.kind != "copy" && t.kind != "maintenance")
+        self.blocking_task().is_some()
+    }
+    fn blocking_task(&self) -> Option<&Running> {
+        self.tasks.iter().find(|t| {
+            t.write
+                && t.kind != "copy"
+                && t.kind != "maintenance"
+                && t.collection == self.settings.collection
+        })
+    }
+    /// Erklärt, worauf ein ausgegrauter Knopf wartet.
+    fn busy_reason(&self) -> String {
+        match self.blocking_task() {
+            Some(task) => format!(
+                "Gesperrt, solange „{}“ läuft. Der Knopf wird frei, sobald der Auftrag fertig ist (Aufgaben ansehen).",
+                task.task.label
+            ),
+            None => "Gerade nicht verfügbar.".into(),
+        }
     }
     fn launch(
         &mut self,
@@ -771,6 +789,12 @@ impl PhotoApp {
                             self.message(warning.clone(), true);
                         }
                         self.central_ui.accept(note);
+                        // Nach einem Abgleich mit offenen Punkten den Bereich zeigen.
+                        if self.central_ui.report.as_ref().is_some_and(|r| {
+                            !r.missing.is_empty() || !r.conflicts.is_empty() || r.ambiguous > 0
+                        }) {
+                            self.people_ui.panel = people_table::Panel::Central;
+                        }
                     }
                     Ok(*inner)
                 }

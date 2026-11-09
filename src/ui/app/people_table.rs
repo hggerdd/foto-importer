@@ -27,6 +27,8 @@ pub(super) enum Panel {
     NewPerson,
     /// Alle offenen Rückfragen.
     Questions,
+    /// Zentraler Personenbestand: Abgleich, Rückfragen zu Widersprüchen, fehlende Personen.
+    Central,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -454,37 +456,29 @@ impl PhotoApp {
             {
                 self.people_ui.panel = Panel::NewPerson;
             }
-            // Sichtbarer Weg, alle lokalen Personen in den zentralen Bestand zu schieben.
-            if self.settings.central_enabled
-                && ui
-                    .add_enabled(!self.busy(), egui::Button::new("Zentral abgleichen"))
+            // Zentraler Bestand: Abgleich, Konflikte und fehlende Personen an einem Ort.
+            if self.settings.central_enabled {
+                let pending = self.central_ui.report.as_ref().map_or(0, |r| {
+                    r.missing.len() + r.conflicts.len() + r.ambiguous
+                });
+                let label = if pending > 0 {
+                    format!("Zentraler Bestand · {pending}")
+                } else {
+                    "Zentraler Bestand".to_string()
+                };
+                if ui
+                    .add(egui::Button::new(label).selected(self.people_ui.panel == Panel::Central))
                     .on_hover_text(
-                        "Legt alle Personen dieser Sammlung im zentralen Bestand an, verknüpft gleiche Namen und ergänzt leere Felder in beide Richtungen. Es wird nie etwas überschrieben; Widersprüche kommen als Rückfrage.",
+                        "Personen mit anderen Sammlungen teilen: abgleichen, fehlende zentrale Personen übernehmen",
                     )
                     .clicked()
-            {
-                self.run_central(crate::core::central::sync);
-            }
-            // Der Abgleich holt zentrale Personen nicht von selbst: erst hier übernehmen.
-            let missing: Vec<String> = self
-                .central_ui
-                .report
-                .as_ref()
-                .map(|r| r.missing.iter().map(|p| p.gid.clone()).collect())
-                .unwrap_or_default();
-            if self.settings.central_enabled
-                && !missing.is_empty()
-                && ui
-                    .add_enabled(
-                        !self.busy(),
-                        egui::Button::new(format!("{} zentrale Personen übernehmen", missing.len())),
-                    )
-                    .on_hover_text(
-                        "Legt die Personen aus dem zentralen Bestand, die in dieser Sammlung fehlen, hier an (ohne Gesichter). Einzelne Personen wählst du unter Rückfragen anzeigen.",
-                    )
-                    .clicked()
-            {
-                self.adopt_central(missing);
+                {
+                    self.people_ui.panel = if self.people_ui.panel == Panel::Central {
+                        Panel::Details
+                    } else {
+                        Panel::Central
+                    };
+                }
             }
         });
     }
@@ -729,6 +723,7 @@ impl PhotoApp {
             ui.set_width(ui.available_width());
             match self.people_ui.panel {
                 Panel::Questions => self.panel_questions(ui),
+                Panel::Central => self.panel_central(ui),
                 Panel::NewPerson => self.panel_new_person(ui),
                 Panel::Details => self.panel_details(ui),
             }
@@ -760,7 +755,21 @@ impl PhotoApp {
             );
         }
         self.questions_list(ui, None);
-        // Abgleich mit dem zentralen Personenbestand (nur wenn in den Einstellungen aktiv).
+    }
+
+    fn panel_central(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Zentraler Personenbestand")
+                .size(20.0)
+                .strong(),
+        );
+        ui.label(muted(
+            "Personen, die mehrere Sammlungen teilen. Der Abgleich legt hier vorhandene Personen zentral an und meldet, welche zentralen Personen in dieser Sammlung fehlen. Übernommen wird erst auf deinen Klick.",
+        ));
+        if !self.settings.central_enabled {
+            ui.label("Der zentrale Bestand ist in den Einstellungen ausgeschaltet.");
+            return;
+        }
         self.central_panel(ui);
     }
 
