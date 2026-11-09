@@ -251,3 +251,50 @@ Netzlaufwerke, ein Lauf mit echter ExifTool-Anreicherung und die Automatik „Be
 Läufen zuerst Metadaten lesen“ in der Oberfläche, Rechner ohne Virenscanner.
 Beim Start mit einem noch nicht indizierten Ordner melden die ersten lesenden Abfragen
 „unable to open database file“ (vorbestehendes Verhalten, nicht Teil dieser Änderung).
+
+## Gesichtsgruppen speichern (ADR 0066)
+
+Synthetische Sammlung (nie private Daten): 90.000 Fotos, 200.000 Gesichter, 40 Personen, 15.000
+bestätigt, 20.000 automatisch/vorgeschlagen, 12.030 Gruppen, 5.680 Referenzen, trainiertes Modell.
+
+Wiederholen (Release; die Sammlung liegt unter `tmp/`, die Messung arbeitet auf einer Kopie):
+
+```text
+cargo run -j 1 --release --example face_save_bench -- gen tmp/bench-faces
+cargo run -j 1 --release --example face_save_bench -- run tmp/bench-faces tmp/bench-faces-work 20
+cargo run -j 1 --release --example face_save_bench -- plans tmp/bench-faces
+```
+
+Messwerte in ms (Release, ein Rechner, Werte schwanken um etwa 20 %):
+
+| Schritt | Vorher | Nachher |
+|---|---|---|
+| `name_group` (28 Gesichter) | 20 bis 50 | 13 bis 25 |
+| Nachladen `page(unknown)` nach dem Speichern | 5.700 bis 5.950 | 180 bis 260 |
+| `page(review)` | 950 | 70 bis 80 |
+| `page(confirmed)` | 510 | 75 |
+| `page(ignored)` | 5.200 bis 5.700 | 180 |
+| `page(persons)` | 930 bis 1.380 | 120 |
+| `status()` | 240 bis 300 | 53 |
+| `people()` | 150 bis 213 | 1 |
+| Vorschläge einer Gruppe | 700 | 40 |
+| Öffnen schreibend (erstmalig, baut 3 Zusatzindizes) | 9 | 246 (danach 5) |
+| Wartung: Fotos im Abgleich in 20 s | 22 | 2.190 bis 2.576 |
+| Abbruch der Wartung bis Rückkehr | 20 bis 170 | 19 |
+
+Kostentreiber vorher: (1) `ranked` je Gesicht mit Neulesen aller Referenzen (24 mal je Seite),
+(2) Fensterfunktionen und Zählungen über alle Gesichter der Reiter, (3) `status()` und `people()`
+mit Vollscan, (4) kalter Seitencache je lesender Verbindung (1,4 s für das erste Lesen), (5) der
+Speicherauftrag wartete als Hintergrundauftrag auf laufende Lesevorgänge. Das Speichern selbst,
+das Öffnen und Trigger waren unauffällig. Debug-Build nachher: Nachladen 1.170 bis 1.270 ms,
+`name_group` 23 bis 37 ms; ein Debug-Vorher-Wert wurde nicht gemessen. Im Debug-Build kehrt die
+Wartung erst nach etwa 2,6 s zurück (das einmalige Laden der Referenzen ist nicht abbrechbar,
+Release 19 ms).
+
+Tests: `tests/face_save_performance.rs` (Vorschläge bitgleich zur bisherigen Abfrage für alle
+Gesichter, Ablehnungen/Foto-Personen, Seiten und Zähler gleich den bisherigen Fensterabfragen,
+Vorschläge nach Bestätigung/Ablehnung/Ignorieren ohne veralteten Zwischenspeicher, Zusatzindizes
+idempotent und schreibgeschützt wirkungslos), `src/ui/app/tests.rs` (Nutzerschreibaufträge nicht als
+Hintergrundauftrag). Nicht geprüft: echte Modelle, echte Sammlungen, Netzlaufwerke (mmap), ein
+Testfall mit absichtlich langem Wartungsauftrag in der Oberfläche (nur der Kern-Abbruch im
+Benchmark), Benchmarks der zentralen Synchronisierung.

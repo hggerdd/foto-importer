@@ -10,7 +10,37 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, String, f32)>> {
+/// Referenzgesichter eines Embedders, die für jedes Vergleichsgesicht gleich sind (ADR 0066).
+/// Einmal je Seite oder Abgleichslauf aus einem konsistenten Lesestand geladen, statt für
+/// jedes Gesicht erneut aus SQLite zu lesen. Gesichtsabhängige Ausschlüsse (eigenes Gesicht,
+/// Ablehnungen, Personen desselben Fotos) werden je Aufruf angewendet.
+pub struct References {
+    entries: Vec<(i64, i64, Vec<f32>)>,
+    names: BTreeMap<i64, String>,
+}
+impl References {
+    pub fn load(collection: &Collection, key: &str) -> Result<Self> {
+        let mut statement=collection.db.prepare("SELECT f.id,f.person_id,e.vec,coalesce(a.value,'Unbenannt') FROM faces f JOIN face_embeddings e ON e.face_id=f.id LEFT JOIN person_attrs a ON a.person_id=f.person_id AND a.key='name' WHERE e.embedder_id=?1 AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5 AND (EXISTS(SELECT 1 FROM training_set t WHERE t.face_id=f.id AND t.embedder_id=?1 AND t.split='ref') OR NOT EXISTS(SELECT 1 FROM training_set t WHERE t.person_id=f.person_id AND t.embedder_id=?1)) AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=e.embedder_id) AND NOT EXISTS(SELECT 1 FROM face_review v WHERE v.face_id=f.id AND v.embedder_id=e.embedder_id) ORDER BY f.person_id,f.id")?;
+        let mut rows = statement.query([key])?;
+        let (mut entries, mut names) = (Vec::new(), BTreeMap::new());
+        while let Some(row) = rows.next()? {
+            let person: i64 = row.get(1)?;
+            let vector = decode(&row.get::<_, Vec<u8>>(2)?)?;
+            names
+                .entry(person)
+                .or_insert_with(|| row.get(3).unwrap_or_default());
+            entries.push((row.get(0)?, person, vector));
+        }
+        Ok(Self { entries, names })
+    }
+}
+
+fn ranked_with(
+    collection: &Collection,
+    references: &References,
+    face: i64,
+    key: &str,
+) -> Result<Vec<(i64, String, f32)>> {
     let bytes: Option<Vec<u8>> = collection
         .db
         .query_row(
@@ -30,23 +60,37 @@ fn ranked(collection: &Collection, face: i64, key: &str) -> Result<Vec<(i64, Str
             .query_row("SELECT photo_id FROM faces WHERE id=?", [face], |r| {
                 r.get(0)
             })?;
-    let mut statement=collection.db.prepare("SELECT f.person_id,e.vec,coalesce(a.value,'Unbenannt') FROM faces f JOIN face_embeddings e ON e.face_id=f.id LEFT JOIN person_attrs a ON a.person_id=f.person_id AND a.key='name' WHERE e.embedder_id=? AND f.id!=? AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5 AND (EXISTS(SELECT 1 FROM training_set t WHERE t.face_id=f.id AND t.embedder_id=? AND t.split='ref') OR NOT EXISTS(SELECT 1 FROM training_set t WHERE t.person_id=f.person_id AND t.embedder_id=?)) AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=e.embedder_id) AND NOT EXISTS(SELECT 1 FROM face_review v WHERE v.face_id=f.id AND v.embedder_id=e.embedder_id) AND NOT EXISTS(SELECT 1 FROM face_rejections r WHERE r.face_id=? AND r.person_id=f.person_id) AND NOT EXISTS(SELECT 1 FROM faces o WHERE o.photo_id=? AND o.assignment='user' AND o.person_id=f.person_id AND o.id!=?) ORDER BY f.person_id,f.id")?;
-    let mut rows = statement.query(params![key, face, key, key, face, photo, face])?;
-    let mut scores: BTreeMap<i64, (String, Vec<f32>)> = BTreeMap::new();
-    while let Some(row) = rows.next()? {
-        let vector = decode(&row.get::<_, Vec<u8>>(1)?)?;
-        if let Some(score) = inference::cosine(&query, &vector) {
-            let entry = scores
-                .entry(row.get(0)?)
-                .or_insert_with(|| (row.get(2).unwrap_or_default(), Vec::new()));
-            entry.1.push(score);
-            entry.1.sort_by(|a, b| b.total_cmp(a));
-            entry.1.truncate(3);
+    let rejected: BTreeSet<i64> = collection
+        .db
+        .prepare_cached("SELECT person_id FROM face_rejections WHERE face_id=?")?
+        .query_map([face], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let occupied: BTreeSet<i64> = collection
+        .db
+        .prepare_cached("SELECT person_id FROM faces WHERE photo_id=? AND assignment='user' AND id!=? AND person_id IS NOT NULL")?
+        .query_map(params![photo, face], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut scores: BTreeMap<i64, Vec<f32>> = BTreeMap::new();
+    for (id, person, vector) in &references.entries {
+        if *id == face || rejected.contains(person) || occupied.contains(person) {
+            continue;
+        }
+        if let Some(score) = inference::cosine(&query, vector) {
+            let entry = scores.entry(*person).or_default();
+            entry.push(score);
+            entry.sort_by(|a, b| b.total_cmp(a));
+            entry.truncate(3);
         }
     }
     let mut result: Vec<_> = scores
         .into_iter()
-        .map(|(id, (name, scores))| (id, name, scores.iter().sum::<f32>() / scores.len() as f32))
+        .map(|(id, scores)| {
+            (
+                id,
+                references.names.get(&id).cloned().unwrap_or_default(),
+                scores.iter().sum::<f32>() / scores.len() as f32,
+            )
+        })
         .collect();
     result.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
     Ok(result)
@@ -61,27 +105,69 @@ pub struct Suggestions {
     /// Repräsentatives Gesicht je vorgeschlagener Person (Medoid).
     pub portraits: BTreeMap<i64, faces::Face>,
 }
-fn with_portraits(collection: &Collection, mut found: Suggestions, key: &str) -> Suggestions {
+/// Je Seite geteilter Zwischenspeicher (ADR 0066): Referenzvektoren, Klassifikator und
+/// Porträts werden einmal je konsistentem Lesestand geladen. Er lebt nur so lange wie
+/// der Aufruf, daher kann er nie veraltete Zuordnungen zeigen.
+#[derive(Default)]
+pub struct SuggestionCache {
+    references: Option<References>,
+    model: Option<Option<classifier::Model>>,
+    portraits: BTreeMap<i64, Option<faces::Face>>,
+}
+impl SuggestionCache {
+    fn references(&mut self, collection: &Collection, key: &str) -> Result<&References> {
+        if self.references.is_none() {
+            self.references = Some(References::load(collection, key)?);
+        }
+        Ok(self.references.as_ref().expect("geladen"))
+    }
+    fn model(&mut self, collection: &Collection, key: &str) -> Result<Option<&classifier::Model>> {
+        if self.model.is_none() {
+            self.model = Some(classifier::load(collection, key)?);
+        }
+        Ok(self.model.as_ref().and_then(|m| m.as_ref()))
+    }
+}
+fn with_portraits(
+    collection: &Collection,
+    cache: &mut SuggestionCache,
+    mut found: Suggestions,
+    key: &str,
+) -> Suggestions {
     for (person, _, _) in &found.items {
         // Ein fehlendes Bild darf den Vorschlag nicht verhindern.
-        if let Ok(Some(face)) = faces::person_portrait(collection, *person, key) {
-            found.portraits.insert(*person, face);
+        let face = cache.portraits.entry(*person).or_insert_with(|| {
+            faces::person_portrait(collection, *person, key)
+                .ok()
+                .flatten()
+        });
+        if let Some(face) = face {
+            found.portraits.insert(*person, face.clone());
         }
     }
     found
 }
 pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
-    let mut all = scored(collection, face, key)?;
+    let mut cache = SuggestionCache::default();
+    let mut all = scored(collection, &mut cache, face, key)?;
     all.items.truncate(if all.by_model { 3 } else { 6 });
-    Ok(with_portraits(collection, all, key))
+    Ok(with_portraits(collection, &mut cache, all, key))
 }
 /// Gemeinsamer Vorschlag für eine Gruppe: Mittel der Einzelwerte über
 /// höchstens drei Gesichter (begrenzt die Lesezeit je Seite).
 pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> Result<Suggestions> {
+    group_suggestions_cached(collection, &mut SuggestionCache::default(), faces, key)
+}
+pub fn group_suggestions_cached(
+    collection: &Collection,
+    cache: &mut SuggestionCache,
+    faces: &[i64],
+    key: &str,
+) -> Result<Suggestions> {
     let mut totals: BTreeMap<i64, (String, f32)> = BTreeMap::new();
     let (mut used, mut by_model) = (0usize, true);
     for face in faces.iter().take(3) {
-        let one = scored(collection, *face, key)?;
+        let one = scored(collection, cache, *face, key)?;
         if one.items.is_empty() {
             continue;
         }
@@ -99,6 +185,7 @@ pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> R
     items.truncate(3);
     Ok(with_portraits(
         collection,
+        cache,
         Suggestions {
             by_model,
             items,
@@ -107,9 +194,14 @@ pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> R
         key,
     ))
 }
-fn scored(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
-    let result = ranked(collection, face, key)?;
-    if let Some(model) = classifier::load(collection, key)? {
+fn scored(
+    collection: &Collection,
+    cache: &mut SuggestionCache,
+    face: i64,
+    key: &str,
+) -> Result<Suggestions> {
+    let result = ranked_with(collection, cache.references(collection, key)?, face, key)?;
+    if let Some(model) = cache.model(collection, key)? {
         let bytes: Option<Vec<u8>> = collection
             .db
             .query_row(
@@ -296,6 +388,8 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .filter_map(|r| r.ok().and_then(|(id, year)| Some((id, year.parse().ok()?))))
         .collect();
+    let references = References::load(collection, key)?;
+    let mut prior_memo: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
     loop {
         control.checkpoint()?;
         let photos=collection.db.prepare("SELECT DISTINCT photo_id FROM faces WHERE photo_id>? AND retained=0 ORDER BY photo_id LIMIT 32")?.query_map([cursor],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -312,8 +406,13 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
             let occupied:BTreeSet<i64>=collection.db.prepare("SELECT DISTINCT person_id FROM faces WHERE photo_id=? AND assignment='user' AND person_id IS NOT NULL")?.query_map([photo],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
             let mut priors: BTreeMap<i64, f32> = BTreeMap::new();
             for known in &occupied {
-                let rows=collection.db.prepare("SELECT b.person_id,count(DISTINCT a.photo_id) FROM faces a JOIN faces b ON b.photo_id=a.photo_id WHERE a.person_id=? AND a.assignment='user' AND b.assignment='user' AND a.ignored=0 AND b.ignored=0 AND b.person_id!=? GROUP BY b.person_id")?.query_map(params![known,known],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                for (person, count) in rows {
+                // Nutzerbestätigungen ändern sich während des Laufs nicht (jede Nutzeraktion
+                // bricht ihn ab); je bekannter Person genügt eine Abfrage (ADR 0066).
+                if !prior_memo.contains_key(known) {
+                    let rows=collection.db.prepare("SELECT b.person_id,count(DISTINCT a.photo_id) FROM faces a JOIN faces b ON b.photo_id=a.photo_id WHERE a.person_id=? AND a.assignment='user' AND b.assignment='user' AND a.ignored=0 AND b.ignored=0 AND b.person_id!=? GROUP BY b.person_id")?.query_map(params![known,known],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    prior_memo.insert(*known, rows);
+                }
+                for (person, count) in prior_memo[known].iter().copied() {
                     let value = (count as f32 * 0.005).min(0.03);
                     priors
                         .entry(person)
@@ -325,7 +424,7 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
             let mut people = BTreeSet::new();
             for face in &candidates {
                 control.checkpoint()?;
-                let ranking = ranked(collection, face.id, key)?;
+                let ranking = ranked_with(collection, &references, face.id, key)?;
                 for (person, _, _) in &ranking {
                     people.insert(*person);
                 }

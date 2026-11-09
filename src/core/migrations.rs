@@ -101,3 +101,39 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
     db.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
     result
 }
+
+/// Rein additive Zusatzindizes für schnelle Zählungen (ADR 0066). Sie enthalten nur
+/// abgeleitete Daten, sind in Sekunden aufgebaut und verändern keine Tabelle; Schema 6
+/// bleibt unverändert. Name und Definition müssen zu `schema.sql` passen (Test).
+pub const ADDITIVE_INDEXES: &[(&str, &str)] = &[
+    (
+        "ix_faces_user_counts",
+        "CREATE INDEX IF NOT EXISTS ix_faces_user_counts ON faces(person_id) WHERE assignment='user' AND retained=0",
+    ),
+    (
+        "ix_faces_ignored",
+        "CREATE INDEX IF NOT EXISTS ix_faces_ignored ON faces(id) WHERE ignored=1 AND retained=0",
+    ),
+    (
+        "ix_faces_retained",
+        "CREATE INDEX IF NOT EXISTS ix_faces_retained ON faces(id) WHERE retained=1",
+    ),
+];
+
+/// Legt fehlende Zusatzindizes an; wiederholbar. Nur mit Schreibrecht aufrufen.
+/// Gibt die Zahl neu angelegter Indizes zurück.
+pub fn ensure_indexes(db: &Connection) -> Result<usize> {
+    let mut created = 0;
+    for (name, ddl) in ADDITIVE_INDEXES {
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)",
+            [name],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            db.execute_batch(ddl)?;
+            created += 1;
+        }
+    }
+    Ok(created)
+}

@@ -132,3 +132,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0063](0063-personentabelle-und-tippfilter.md) | Personentabelle mit Detailspalte und Tippfilter-Auswahlfeldern; ergänzt 0038/0045, ersetzt die Bedienung der Personenliste und Beziehungseingabe aus 0060/0061 | Akzeptiert |
 | [0064](0064-gestufte-indizierung-mit-fortschritt.md) | Gestufte Indizierung in Stapeln, ehrlicher Fortschritt mit Phasen/Rate/Restzeit; ergänzt 0010 und 0059 | Akzeptiert |
 | [0065](0065-zentrale-beziehungen.md) | Beziehungen zentral speichern und abgleichen (Schema 2, Grabsteine, Rückfragen); setzt Phase 2 aus 0062 um | Akzeptiert |
+| [0066](0066-schnelles-speichern-von-gesichtsgruppen.md) | Schnelles Speichern von Gesichtsgruppen: Referenzen je Lesestand einmal, Seiten ohne Fensterfunktionen, additive Teilindizes, Nutzerschreibaufträge ohne Wartezeit; ergänzt 0004, 0022, 0024, 0042, 0064 | Akzeptiert |

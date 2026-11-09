@@ -138,6 +138,12 @@ CREATE INDEX ix_browse_year ON metadata_photos(substr(dt_original,1,4),photo_id)
 
 CREATE INDEX ix_group_page ON face_group_catalog(embedder_id,members DESC,group_id) WHERE members>0;
 
+CREATE INDEX ix_faces_user_counts ON faces(person_id) WHERE assignment='user' AND retained=0;
+
+CREATE INDEX ix_faces_ignored ON faces(id) WHERE ignored=1 AND retained=0;
+
+CREATE INDEX ix_faces_retained ON faces(id) WHERE retained=1;
+
 CREATE TRIGGER browse_files_insert AFTER INSERT ON files BEGIN DELETE FROM metadata_photos WHERE photo_id=new.photo_id;INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
  m.dt_original,m.model,m.lens,m.iso,NULLIF(TRIM(m.model),'') AS camera
