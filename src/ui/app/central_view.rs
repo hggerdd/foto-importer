@@ -220,7 +220,7 @@ impl PhotoApp {
             });
     }
 
-    fn adopt_central(&mut self, gids: Vec<String>) {
+    pub(super) fn adopt_central(&mut self, gids: Vec<String>) {
         self.run_central(move |c, central| {
             central::adopt(c, central, &gids)?;
             central::sync(c, central)

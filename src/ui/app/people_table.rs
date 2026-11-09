@@ -465,6 +465,27 @@ impl PhotoApp {
             {
                 self.run_central(crate::core::central::sync);
             }
+            // Der Abgleich holt zentrale Personen nicht von selbst: erst hier übernehmen.
+            let missing: Vec<String> = self
+                .central_ui
+                .report
+                .as_ref()
+                .map(|r| r.missing.iter().map(|p| p.gid.clone()).collect())
+                .unwrap_or_default();
+            if self.settings.central_enabled
+                && !missing.is_empty()
+                && ui
+                    .add_enabled(
+                        !self.busy(),
+                        egui::Button::new(format!("{} zentrale Personen übernehmen", missing.len())),
+                    )
+                    .on_hover_text(
+                        "Legt die Personen aus dem zentralen Bestand, die in dieser Sammlung fehlen, hier an (ohne Gesichter). Einzelne Personen wählst du unter Rückfragen anzeigen.",
+                    )
+                    .clicked()
+            {
+                self.adopt_central(missing);
+            }
         });
     }
 
