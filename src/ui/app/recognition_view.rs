@@ -201,6 +201,10 @@ impl PhotoApp {
                         .desired_width(132.0)
                         .text(format!("{done} / {total}")),
                 );
+                let timing = running.task.control.snapshot().timing();
+                if !timing.is_empty() {
+                    ui.label(RichText::new(timing).small().weak());
+                }
             }
             if ui
                 .add_enabled(

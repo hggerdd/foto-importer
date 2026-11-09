@@ -4,6 +4,7 @@ mod folder_tree;
 mod import_view;
 mod people_table;
 mod people_view;
+mod progress_view;
 mod recognition_view;
 mod relationship_view;
 mod settings_view;
@@ -90,6 +91,14 @@ struct Running {
 impl Running {
     fn is_face_matching(&self) -> bool {
         matches!(self.kind, "maintenance" | "face-knowledge")
+    }
+    /// Explains what the running job leaves for later, so a half-finished index is not a surprise.
+    fn catch_up_note(&self) -> Option<&'static str> {
+        (self.write && self.task.label == "Sammlung indizieren").then_some(
+            "Schon eingetragene Dateien sind in der Sammlung sichtbar. Danach folgen als eigene \
+             Läufe: Metadaten lesen (Aufnahmedatum, Kamera, Foto-Zuordnung) und die BLAKE3-Prüfung. \
+             Ein Abbruch behält alles bereits Eingetragene und markiert nichts als fehlend.",
+        )
     }
 }
 #[derive(Default)]
@@ -206,6 +215,10 @@ pub struct PhotoApp {
     maintenance_paused: bool,
     recognition_tools_open: bool,
     auto_analysis_pending: bool,
+    /// Nach einem Indexlauf folgt der Metadatenlauf, wenn die Automatik an ist.
+    auto_metadata_pending: bool,
+    /// Zuletzt in der Galerie gezeigter Stand eines laufenden Indexlaufs (Stapelzahl, Zeitpunkt).
+    live_refresh: (usize, std::time::Instant),
     last_night: String,
     capture_started: std::time::Instant,
     capture_requested: bool,
@@ -296,6 +309,8 @@ impl PhotoApp {
             maintenance_paused: false,
             recognition_tools_open: false,
             auto_analysis_pending: false,
+            auto_metadata_pending: false,
+            live_refresh: (0, std::time::Instant::now()),
             last_night: String::new(),
             capture_started: std::time::Instant::now(),
             capture_requested: false,
@@ -367,6 +382,10 @@ impl PhotoApp {
             Ok("tasks") => app.view = View::Tasks,
             Ok("settings") => app.view = View::Settings,
             _ => {}
+        }
+        // Sichtprüfung: startet z. B. "scan" gleich nach dem Öffnen (docs/validierung.md).
+        if let Ok(action) = std::env::var("FOTO_IMPORTER_ACTION") {
+            app.collection_action(&action);
         }
         app
     }
@@ -786,6 +805,14 @@ impl PhotoApp {
                             false,
                         );
                     }
+                    if running.write
+                        && running.collection == self.settings.collection
+                        && !self.closing
+                        && running.task.label == "Sammlung indizieren"
+                    {
+                        // Entered batches of a cancelled or failed index run stay usable.
+                        self.query_collection(self.applied.clone());
+                    }
                 }
                 Ok(Outcome::Scan(revision, scan)) if revision == self.scan_revision => {
                     self.focused = scan
@@ -889,6 +916,12 @@ impl PhotoApp {
                         self.undo.pop();
                     }
                     self.message(message, false);
+                    if running.task.label == "Sammlung indizieren"
+                        && self.settings.auto_metadata
+                        && running.collection == self.settings.collection
+                    {
+                        self.auto_metadata_pending = true;
+                    }
                     if running.write && running.collection == self.settings.collection {
                         self.relationship_graph.stale = true;
                         self.query_collection(self.applied.clone());
@@ -1088,6 +1121,12 @@ impl PhotoApp {
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+        if !self.closing && !self.busy() && self.auto_metadata_pending {
+            // Stage 2 of the index: metadata in portions (ADR 0059) after the quick entry.
+            self.auto_metadata_pending = false;
+            self.collection_action("metadata");
+        }
+        self.live_gallery(ctx);
         if !self.closing && !self.busy() && !self.models_installing() && self.auto_analysis_pending
         {
             self.auto_analysis_pending = false;
@@ -1213,32 +1252,45 @@ impl PhotoApp {
                     .find(|t| t.write)
                     .or_else(|| self.tasks.first())
                 {
+                    let progress = running.task.control.snapshot();
+                    let stopping = running.task.control.cancel.load(Ordering::Relaxed);
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(RichText::new(&running.task.label).strong());
-                        let done = running.task.control.done.load(Ordering::Relaxed);
-                        let total = running.task.control.total.load(Ordering::Relaxed);
-                        if total > 0 {
-                            ui.add(
-                                egui::ProgressBar::new(done as f32 / total as f32)
-                                    .desired_width(240.0)
-                                    .text(format!("{done} / {total}")),
-                            );
-                        } else if done > 0 {
-                            ui.label(format!("{done} gefunden"));
+                        if !progress.phase.is_empty() {
+                            ui.label(RichText::new(format!("· {}", progress.phase)).weak());
                         }
-                        let can_pause = running.is_face_matching();
-                        if ui
-                            .button(if can_pause { "Pausieren" } else { "Abbrechen" })
-                            .clicked()
-                        {
-                            if can_pause {
-                                self.maintenance_paused = true;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let can_pause = running.is_face_matching();
+                            if ui
+                                .add_enabled(
+                                    !stopping,
+                                    egui::Button::new(if can_pause {
+                                        "Pausieren"
+                                    } else {
+                                        "Abbrechen"
+                                    }),
+                                )
+                                .clicked()
+                            {
+                                if can_pause {
+                                    self.maintenance_paused = true;
+                                }
+                                running.task.control.stop();
                             }
-                            running.task.control.stop();
-                        }
-                        ui.label(format!("{} s", running.task.started.elapsed().as_secs()));
+                            ui.label(progress_view::clock(running.task.started.elapsed()));
+                        });
                     });
+                    if stopping {
+                        ui.label(
+                            RichText::new(
+                                "Wird abgebrochen … bereits Gespeichertes bleibt erhalten",
+                            )
+                            .weak(),
+                        );
+                    } else {
+                        Self::progress_bar(ui, &progress, ui.available_width());
+                    }
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -1253,6 +1305,9 @@ impl PhotoApp {
                         ui.add(egui::Label::new(&self.notice).truncate())
                             .on_hover_text(&self.notice);
                     });
+                    if let Some(hint) = self.catch_up_hint() {
+                        ui.label(RichText::new(hint).small().weak());
+                    }
                 }
             });
     }

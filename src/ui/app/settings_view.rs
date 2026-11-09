@@ -207,13 +207,21 @@ impl PhotoApp {
             "Aufträge laufen im Hintergrund. Abbrechen beendet laufende Arbeit kooperativ.",
         );
         for running in &self.tasks {
+            let progress = running.task.control.snapshot();
+            let stopping = running.task.control.cancel.load(Ordering::Relaxed);
             theme::card(ui).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(&running.task.label);
+                    ui.label(RichText::new(&running.task.label).strong());
+                    if !progress.phase.is_empty() {
+                        ui.label(RichText::new(format!("· {}", progress.phase)).weak());
+                    }
                     let can_pause = running.is_face_matching();
                     if ui
-                        .button(if can_pause { "Pausieren" } else { "Abbrechen" })
+                        .add_enabled(
+                            !stopping,
+                            egui::Button::new(if can_pause { "Pausieren" } else { "Abbrechen" }),
+                        )
                         .clicked()
                     {
                         if can_pause {
@@ -221,8 +229,31 @@ impl PhotoApp {
                         }
                         running.task.control.stop();
                     }
+                    ui.label(
+                        RichText::new(format!(
+                            "seit {}",
+                            progress_view::clock(running.task.started.elapsed())
+                        ))
+                        .weak(),
+                    );
                 });
+                if stopping {
+                    ui.label(
+                        RichText::new("Wird abgebrochen … bereits Gespeichertes bleibt erhalten")
+                            .weak(),
+                    );
+                } else {
+                    Self::progress_bar(ui, &progress, ui.available_width().min(640.0));
+                    if let Some(hint) = running.catch_up_note() {
+                        ui.label(RichText::new(hint).small().weak());
+                    }
+                }
             });
+        }
+        if self.tasks.is_empty()
+            && let Some(hint) = self.catch_up_hint()
+        {
+            ui.label(RichText::new(hint).weak());
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {

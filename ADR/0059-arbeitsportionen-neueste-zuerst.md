@@ -3,7 +3,7 @@
 - **Status:** Akzeptiert
 - **Erfasst am und entschieden am:** 2026-11-08
 - **Art:** Neue Entscheidung auf Anweisung des Projektverantwortlichen
-- **Bezieht sich auf:** [0010](0010-gestufte-bestandspruefung.md), [0015](0015-fortsetzbare-gesichtspipeline.md), [0022](0022-indizierte-sammlungsprojektionen.md), [0024](0024-fortsetzbarer-gesichtsabgleich.md)
+- **Bezieht sich auf:** [0010](0010-gestufte-bestandspruefung.md), [0015](0015-fortsetzbare-gesichtspipeline.md), [0022](0022-indizierte-sammlungsprojektionen.md), [0024](0024-fortsetzbarer-gesichtsabgleich.md); ergänzt durch [0064](0064-gestufte-indizierung-mit-fortschritt.md)
 
 ## Kontext
 

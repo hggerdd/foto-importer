@@ -1,10 +1,11 @@
-use super::{files, jobs::Control};
+use super::{files, jobs::Control, known_files::KnownFiles};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::Ordering,
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -189,8 +190,38 @@ impl Collection {
     }
 
     /// An incomplete scan never marks unvisited files as missing.
+    ///
+    /// Files are entered in batches of `config::SCAN_BATCH` per transaction (ADR 0064): the
+    /// collection becomes usable during the run and a cancelled run keeps what was entered.
     pub fn quick_scan(&mut self, allow_missing: bool, control: &Control) -> Result<String> {
+        self.quick_scan_batched(allow_missing, control, crate::config::SCAN_BATCH)
+    }
+
+    pub fn quick_scan_batched(
+        &mut self,
+        allow_missing: bool,
+        control: &Control,
+        batch: usize,
+    ) -> Result<String> {
         self.writable()?;
+        // Statements are interrupted on cancel too; the handler never outlives the run.
+        self.cancel_with(control);
+        let result = self.index_run(allow_missing, control, batch);
+        self.clear_cancel();
+        result
+    }
+
+    fn clear_cancel(&self) {
+        self.db.progress_handler(0, None::<fn() -> bool>);
+    }
+
+    fn index_run(
+        &mut self,
+        allow_missing: bool,
+        control: &Control,
+        batch: usize,
+    ) -> Result<String> {
+        let batch = batch.max(1);
         let mut extensions = self.list_option(
             "extensions",
             &[
@@ -203,152 +234,83 @@ impl Collection {
         let exclusions = self.list_option("exclusions", &[])?;
         let extension_folders = self.list_option("extension_folders", crate::config::SUPPORTED)?;
         let export_folders = self.list_option("export_folders", &["Export"])?;
+        control.phase("Schritt 1 von 4 · Ordner lesen", "Dateien");
         let scan =
             files::scan_filtered(&self.root, false, &extensions, &exclusions, true, control)?;
         if scan.files.is_empty() {
             bail!("Keine unterstützten Dateien gefunden; vorhandener Bestand bleibt unverändert.");
         }
-        let tx = self.db.transaction()?;
-        tx.execute("INSERT INTO scans(kind,scope,started_at,status) VALUES('quick','',datetime('now'),'running')", [])?;
-        let scan_id = tx.last_insert_rowid();
-        let mut added = 0;
-        let mut moved = 0;
-        for (index, source) in scan.files.iter().enumerate() {
-            control.checkpoint()?;
-            let rel = files::normalize(source.path.strip_prefix(&self.root)?);
-            let stat = source.path.metadata()?;
-            let mtime = stat
-                .modified()?
-                .duration_since(UNIX_EPOCH)?
-                .as_nanos()
-                .min(i64::MAX as u128) as i64;
-            let name = source
-                .path
-                .file_name()
-                .context("Dateiname fehlt")?
-                .to_string_lossy()
-                .into_owned();
-            let stem = source
-                .path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let ext = files::extension(&source.path);
-            let dir = rel.rsplit_once('/').map(|v| v.0).unwrap_or("");
-            let inode = file_id(&source.path);
-            let mut old: Option<(i64, i64, i64)> = tx
-                .query_row(
-                    "SELECT id,size,mtime_ns FROM files WHERE relpath=?",
-                    [&rel],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .optional()?;
-            if old.is_none() && inode.is_some() {
-                let candidates = tx
-                    .prepare("SELECT id,size,mtime_ns,relpath FROM files WHERE inode=? AND size=?")?
-                    .query_map(params![inode, source.size as i64], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, i64>(2)?,
-                            r.get::<_, String>(3)?,
-                        ))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                let candidates: Vec<_> = candidates
-                    .into_iter()
-                    .filter(|r| !self.root.join(&r.3).exists())
-                    .collect();
-                if let [candidate] = candidates.as_slice() {
-                    old = Some((candidate.0, candidate.1, candidate.2));
-                    moved += 1;
-                    tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))", params![scan_id,candidate.0,candidate.3,rel])?;
-                }
-            }
-            if old.is_none() {
-                let candidates=tx.prepare("SELECT id,size,mtime_ns,relpath,full_hash FROM files WHERE size=? AND full_hash IS NOT NULL")?.query_map([source.size as i64],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                let candidates: Vec<_> = candidates
-                    .into_iter()
-                    .filter(|r| !self.root.join(&r.3).exists())
-                    .collect();
-                if !candidates.is_empty() {
-                    let hash = content_hash(&source.path, control)?;
-                    let matches: Vec<_> = candidates.into_iter().filter(|r| r.4 == hash).collect();
-                    if let [candidate] = matches.as_slice() {
-                        old = Some((candidate.0, candidate.1, candidate.2));
-                        moved += 1;
-                        tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))",params![scan_id,candidate.0,candidate.3,rel])?;
-                    }
-                }
-            }
-            if let Some((id, size, time)) = old {
-                let previous: String =
-                    tx.query_row("SELECT relpath FROM files WHERE id=?", [id], |r| r.get(0))?;
-                let changed = size != source.size as i64 || time != mtime;
-                tx.execute("UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,size=?,mtime_ns=?,inode=?,last_seen_scan=?,status='present',meta_state=CASE WHEN ? THEN 'stale' ELSE meta_state END,quick_hash=CASE WHEN ? THEN NULL ELSE quick_hash END WHERE id=?", params![rel,files::fold(&rel),dir,name,stem,ext,source.size as i64,mtime,inode,scan_id,changed,changed,id])?;
-                if previous != rel {
-                    tx.execute("UPDATE faces SET source_relpath=? WHERE source_file_id=? AND source_relpath=?",params![rel,id,previous])?;
-                }
-            } else {
-                // Pair variants only in the same family, never in Export folders.
-                let family = family_directory(dir, &extension_folders);
-                let photo: Option<i64> = if dir.split('/').any(|v| {
-                    export_folders
-                        .iter()
-                        .any(|f| files::fold(f) == files::fold(v))
-                }) {
-                    None
+        let total = scan.files.len();
+        control.phase("Schritt 2 von 4 · Bestand vergleichen", "Dateien");
+        let relpaths = scan
+            .files
+            .iter()
+            .map(|source| Ok(files::normalize(source.path.strip_prefix(&self.root)?)))
+            .collect::<Result<Vec<String>>>()?;
+        let mut known = KnownFiles::load(&self.db, &relpaths, &extension_folders, control)?;
+        let scan_id = {
+            let tx = self.db.transaction()?;
+            tx.execute("INSERT INTO scans(kind,scope,started_at,status) VALUES('quick','',datetime('now'),'running')", [])?;
+            let id = tx.last_insert_rowid();
+            tx.commit()?;
+            id
+        };
+        control.phase("Schritt 3 von 4 · Dateien eintragen", "Dateien");
+        control.progress(0, total);
+        let entered = self.enter_files(
+            &scan,
+            &relpaths,
+            scan_id,
+            batch,
+            &mut known,
+            &extension_folders,
+            &export_folders,
+            control,
+        );
+        let (added, moved) = match entered {
+            Ok(counts) => counts,
+            Err(error) => {
+                // Entered batches stay; nothing is marked missing and the scan is closed visibly.
+                self.clear_cancel();
+                let status = if control.cancel.load(Ordering::Relaxed) {
+                    "cancelled"
                 } else {
-                    let candidates=tx.prepare("SELECT photo_id,dir FROM files WHERE casefold(stem)=? AND photo_id IS NOT NULL ORDER BY id")?.query_map([files::fold(&stem)],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                    candidates
-                        .into_iter()
-                        .find(|(_, directory)| {
-                            files::fold(&family_directory(directory, &extension_folders))
-                                == files::fold(&family)
-                        })
-                        .map(|r| r.0)
+                    "failed"
                 };
-                let photo = match photo {
-                    Some(p) => p,
-                    None => {
-                        tx.execute(
-                            "INSERT INTO photos(status,created_scan) VALUES('present',?)",
-                            [scan_id],
-                        )?;
-                        tx.last_insert_rowid()
-                    }
-                };
-                tx.execute("INSERT INTO files(relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,inode,photo_id,status,first_seen_scan,last_seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?,'present',?,?)", params![rel,files::fold(&rel),dir,name,stem,ext,source.size as i64,mtime,inode,photo,scan_id,scan_id])?;
-                added += 1;
+                let _ = self.close_scan(scan_id, status);
+                return Err(error);
             }
-            control.progress(index + 1, scan.files.len());
-        }
+        };
+        control.phase("Schritt 4 von 4 · Abschließen", "");
+        control.checkpoint()?;
+        let tx = self.db.transaction()?;
         let missing: i64 = tx.query_row(
             "SELECT count(*) FROM files WHERE status='present' AND last_seen_scan!=?",
             [scan_id],
             |r| r.get(0),
         )?;
-        let total: i64 = tx.query_row(
+        let present: i64 = tx.query_row(
             "SELECT count(*) FROM files WHERE status='present'",
             [],
             |r| r.get(0),
         )?;
-        let mark_missing = scan.warnings.is_empty() && (allow_missing || missing * 5 <= total);
+        let mark_missing = scan.warnings.is_empty() && (allow_missing || missing * 5 <= present);
         if mark_missing {
             tx.execute(
                 "UPDATE files SET status='missing' WHERE last_seen_scan!=?",
                 [scan_id],
             )?;
         }
-        tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END",[])?;
+        // Only rows whose state changes are written; the result equals the full rewrite.
+        tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END WHERE status IS NOT CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END",[])?;
         tx.execute("UPDATE scans SET status='done',finished_at=datetime('now'),stats_json=? WHERE id=?", params![serde_json::json!({"added":added,"moved":moved,"unvisited":missing,"marked_missing":mark_missing}).to_string(),scan_id])?;
         control.checkpoint()?;
         tx.commit()?;
+        control.phase("Schritt 4 von 4 · Sicherung schreiben", "");
         self.backup()?;
         Ok(format!(
             "{} Dateien · {added} neu · {moved} verschoben · {missing} nicht gesehen{}{}",
-            scan.files.len(),
+            total,
             if mark_missing {
                 ""
             } else {
@@ -360,6 +322,157 @@ impl Collection {
                 format!(" · {} Lesefehler", scan.warnings.len())
             }
         ))
+    }
+
+    /// Close an unfinished scan without marking anything missing.
+    fn close_scan(&mut self, scan_id: i64, status: &str) -> Result<()> {
+        let tx = self.db.transaction()?;
+        tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END WHERE status IS NOT CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END",[])?;
+        tx.execute(
+            "UPDATE scans SET status=?,finished_at=datetime('now') WHERE id=?",
+            params![status, scan_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+    fn enter_files(
+        &mut self,
+        scan: &files::Scan,
+        relpaths: &[String],
+        scan_id: i64,
+        batch: usize,
+        known: &mut KnownFiles,
+        extension_folders: &[String],
+        export_folders: &[String],
+        control: &Control,
+    ) -> Result<(usize, usize)> {
+        let (mut added, mut moved) = (0, 0);
+        let total = scan.files.len();
+        let mut position = 0;
+        while position < total {
+            let end = (position + batch).min(total);
+            let tx = self.db.transaction()?;
+            for index in position..end {
+                control.checkpoint()?;
+                let source = &scan.files[index];
+                let rel = &relpaths[index];
+                let stat = source.path.metadata()?;
+                let mtime = stat
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)?
+                    .as_nanos()
+                    .min(i64::MAX as u128) as i64;
+                let name = source
+                    .path
+                    .file_name()
+                    .context("Dateiname fehlt")?
+                    .to_string_lossy()
+                    .into_owned();
+                let stem = source
+                    .path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let ext = files::extension(&source.path);
+                let dir = rel.rsplit_once('/').map(|v| v.0).unwrap_or("");
+                let inode = file_id(&source.path);
+                let size = source.size as i64;
+                let mut old: Option<(i64, i64, i64)> = None;
+                let mut stored: Option<(String, Option<String>)> = None;
+                if let Some(row) = tx
+                    .prepare_cached(
+                        "SELECT id,size,mtime_ns,status,inode FROM files WHERE relpath=?",
+                    )?
+                    .query_row([rel], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })
+                    .optional()?
+                {
+                    old = Some((row.0, row.1, row.2));
+                    stored = Some((row.3, row.4));
+                }
+                let mut previous = rel.clone();
+                if old.is_none()
+                    && let Some(found) = known.moved_by_inode(&self.root, inode.as_deref(), size)
+                {
+                    old = Some((found.id, found.size, found.mtime));
+                    previous = found.relpath.clone();
+                    moved += 1;
+                    tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))", params![scan_id,found.id,found.relpath,rel])?;
+                    known.relocate(&found, &stem, dir, extension_folders);
+                }
+                if old.is_none() && known.has_hashed(size) {
+                    let candidates = known.hashed_unseen(&self.root, size);
+                    if !candidates.is_empty() {
+                        let hash = content_hash(&source.path, control)?;
+                        let matches: Vec<_> = candidates
+                            .into_iter()
+                            .filter(|r| r.full_hash.as_deref() == Some(hash.as_str()))
+                            .collect();
+                        if let [found] = matches.as_slice() {
+                            old = Some((found.id, found.size, found.mtime));
+                            previous = found.relpath.clone();
+                            moved += 1;
+                            tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))",params![scan_id,found.id,found.relpath,rel])?;
+                            known.relocate(found, &stem, dir, extension_folders);
+                        }
+                    }
+                }
+                if let Some((id, old_size, time)) = old {
+                    let changed = old_size != size || time != mtime;
+                    let unchanged_in_place = !changed
+                        && previous == *rel
+                        && stored
+                            .as_ref()
+                            .is_some_and(|(status, node)| status == "present" && *node == inode);
+                    if unchanged_in_place {
+                        // Nothing but the visit mark changes; this does not fire the projection triggers.
+                        tx.prepare_cached("UPDATE files SET last_seen_scan=? WHERE id=?")?
+                            .execute(params![scan_id, id])?;
+                    } else {
+                        tx.prepare_cached("UPDATE files SET relpath=?,relpath_fold=?,dir=?,name=?,stem=?,ext=?,size=?,mtime_ns=?,inode=?,last_seen_scan=?,status='present',meta_state=CASE WHEN ? THEN 'stale' ELSE meta_state END,quick_hash=CASE WHEN ? THEN NULL ELSE quick_hash END WHERE id=?")?.execute(params![rel,files::fold(rel),dir,name,stem,ext,size,mtime,inode,scan_id,changed,changed,id])?;
+                    }
+                    if previous != *rel {
+                        tx.execute("UPDATE faces SET source_relpath=? WHERE source_file_id=? AND source_relpath=?",params![rel,id,previous])?;
+                    }
+                } else {
+                    // Pair variants only in the same family, never in Export folders.
+                    let family = family_directory(dir, extension_folders);
+                    let photo = if dir.split('/').any(|v| {
+                        export_folders
+                            .iter()
+                            .any(|f| files::fold(f) == files::fold(v))
+                    }) {
+                        None
+                    } else {
+                        known.family_photo(&stem, &family)
+                    };
+                    let photo = match photo {
+                        Some(p) => p,
+                        None => {
+                            tx.execute(
+                                "INSERT INTO photos(status,created_scan) VALUES('present',?)",
+                                [scan_id],
+                            )?;
+                            tx.last_insert_rowid()
+                        }
+                    };
+                    tx.prepare_cached("INSERT INTO files(relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,inode,photo_id,status,first_seen_scan,last_seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?,'present',?,?)")?.execute(params![rel,files::fold(rel),dir,name,stem,ext,size,mtime,inode,photo,scan_id,scan_id])?;
+                    known.add(tx.last_insert_rowid(), photo, &stem, &family);
+                    added += 1;
+                }
+                control.progress(index + 1, total);
+            }
+            tx.commit()?;
+            control
+                .committed
+                .fetch_add(end - position, Ordering::Relaxed);
+            position = end;
+        }
+        Ok((added, moved))
     }
 
     pub fn verify(&mut self, control: &Control) -> Result<String> {
@@ -376,19 +489,33 @@ impl Collection {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut mismatches = Vec::new();
-        for (index, (id, rel, old)) in rows.iter().enumerate() {
-            control.checkpoint()?;
-            let hash = content_hash(&self.safe_path(rel)?, control)?;
-            if let Some(old) = old {
-                if old != &hash {
-                    mismatches.push(rel.clone());
+        control.phase("BLAKE3-Prüfsummen berechnen", "Dateien");
+        control.progress(0, rows.len());
+        // First-time hashes are stored per portion instead of one commit per file; what was
+        // computed before a cancel is kept (the stored baseline is never overwritten).
+        let mut pending: Vec<(i64, String)> = Vec::new();
+        let outcome = (|| -> Result<()> {
+            for (index, (id, rel, old)) in rows.iter().enumerate() {
+                control.checkpoint()?;
+                let hash = content_hash(&self.safe_path(rel)?, control)?;
+                if let Some(old) = old {
+                    if old != &hash {
+                        mismatches.push(rel.clone());
+                    }
+                } else {
+                    pending.push((*id, hash));
+                    if pending.len() >= crate::config::HASH_PORTION {
+                        self.store_hashes(&mut pending)?;
+                    }
                 }
-            } else {
-                self.db
-                    .execute("UPDATE files SET full_hash=? WHERE id=?", params![hash, id])?;
+                control.progress(index + 1, rows.len());
             }
-            control.progress(index + 1, rows.len());
-        }
+            Ok(())
+        })();
+        let stored = self.store_hashes(&mut pending);
+        outcome?;
+        stored?;
+        control.phase("Sicherung schreiben", "");
         self.backup()?;
         if !mismatches.is_empty() {
             bail!(
@@ -401,6 +528,21 @@ impl Collection {
             "{} Dateien mit BLAKE3 geprüft; keine Abweichung",
             rows.len()
         ))
+    }
+    fn store_hashes(&self, pending: &mut Vec<(i64, String)>) -> Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let tx = self.db.unchecked_transaction()?;
+        for (id, hash) in pending.iter() {
+            tx.execute(
+                "UPDATE files SET full_hash=? WHERE id=? AND full_hash IS NULL",
+                params![hash, id],
+            )?;
+        }
+        tx.commit()?;
+        pending.clear();
+        Ok(())
     }
     pub fn purge_missing(&mut self, age: i64) -> Result<String> {
         self.writable()?;
@@ -496,7 +638,7 @@ impl Collection {
         Ok("Verschiebung mit bestehender Foto-Identität zugeordnet".into())
     }
 }
-fn family_directory(directory: &str, extensions: &[String]) -> String {
+pub(crate) fn family_directory(directory: &str, extensions: &[String]) -> String {
     let leaf = directory.rsplit('/').next().unwrap_or("");
     if extensions
         .iter()
@@ -560,7 +702,15 @@ fn file_id(path: &Path) -> Option<String> {
         unsafe extern "system" {
             fn GetFileInformationByHandle(handle: *mut std::ffi::c_void, info: *mut Info) -> i32;
         }
-        let file = File::open(path).ok()?;
+        // Attribute access only: opening for read makes on-access virus scanners inspect every
+        // new file first (about 9 ms per file measured, ADR 0064); the file index needs no data.
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(7)
+            .open(path)
+            .ok()?;
         let mut info = std::mem::MaybeUninit::<Info>::uninit();
         // SAFETY: valid owned file handle and writable, correctly laid-out Win32 structure.
         if unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) } == 0 {

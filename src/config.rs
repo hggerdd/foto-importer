@@ -5,6 +5,10 @@ pub const PAGE_SIZE: usize = 48;
 /// Zulässige Breite des Ordnerbaums (Minimum, Maximum) in Punkten.
 pub const FOLDER_TREE_WIDTH: (f32, f32) = (170.0, 380.0);
 pub const COPY_CHUNK: usize = 1024 * 1024;
+/// Dateien je Transaktion beim Indizieren (ADR 0064).
+pub const SCAN_BATCH: usize = 500;
+/// Dateien je Transaktion beim Speichern neuer BLAKE3-Werte.
+pub const HASH_PORTION: usize = 100;
 pub const CACHE_BYTES: usize = 192 * 1024 * 1024;
 pub const CACHE_ENTRIES: usize = 512;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.

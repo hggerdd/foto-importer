@@ -142,3 +142,84 @@ Sichtprüfung am 09.11.2026 (Debug-Build, synthetische Demodaten, 61 Personen, 1
 Sichtbar: Tabelle mit Porträts, Sortierdreieck, Auswahlzeile, Detailspalte mit gefiltertem Auswahlfeld.
 Nicht geprüft: 980 × 680 per Bild (nur per Layouttest), Hell-Design, Mausrad, Screenreader. Die Demodaten
 enthalten weder Geburtsjahre noch Aufnahmedaten, daher zeigen diese Spalten dort „–“ (per Test mit Daten abgedeckt).
+## Indizierung in Stapeln mit Fortschritt (ADR 0064)
+
+Anlass: Ein Ordner mit über 30.000 Bildern zeigte nur „34195 gefunden, 356 s“.
+Gemessen wurde mit einem synthetischen Baum (Kunstdaten, niemals private Sammlungen):
+30.000 kleine JPG-Dateien in 300 Ordnern, jede zehnte mit NEF-Partner, zusammen 33.000 Dateien.
+Windows 11, Release-Build, ein Lauf je Zahl; parallel liefen andere Builds, die Zahlen sind
+Größenordnungen, keine Garantien.
+
+| Messung | vorher | nachher |
+|---|---|---|
+| Verzeichnislauf mit `stat`, ohne Datenbank | 0,6 s | 0,5 s |
+| Erster Indexlauf (33.000 Dateien) | **726 s** | **14,4 s** |
+| Neuindizierung ohne Änderung | **351 s** | **8,2 s** |
+
+Kleinere Läufe des alten Stands: 3.300 Dateien 30–37 s, 6.600 Dateien 75 s.
+
+Kostentreiber je neuer Datei im alten Lauf (Einzelmessung auf der gefüllten Sammlung, 33.000 Zeilen):
+
+| Teil | Kosten je Datei |
+|---|---|
+| `File::open` (Lesen) nur für die Datei-ID; der Virenscanner prüft jede erste Öffnung | ≈ 9 ms (`stat`: 0,04 ms) |
+| Partner gleicher Dateiname über `casefold(stem)` (Vollscan der Tabelle `files`) | 13 ms |
+| Verschiebungskandidaten über Inode+Größe / Größe+Hash (zwei Vollscans) | 2,4 ms / 2,1 ms |
+| Einfügen von Foto und Datei einschließlich Triggern | 0,17–0,28 ms |
+| Davon Trigger (`browse_files_insert`; 30.000 Einfügungen im Speicher mit / ohne Trigger) | 2,6 s / 0,3 s gesamt |
+| Vollständiges `UPDATE` einer unveränderten Zeile / nur `last_seen_scan` | 0,22 ms / 0,005 ms |
+
+Der alte Lauf war **eine einzige** Transaktion über alle Dateien; Trigger sind nicht der
+Haupttreiber (≈ 3–5 s von 726 s). Behoben wurde: Attributzugriff statt Lesezugriff für die
+Datei-ID (≈ 9 ms → 0,04 ms), Partner- und Verschiebungsabfragen einmal je Lauf im Speicher
+(`core::known_files`) statt Vollscans, unveränderte Zeilen nur mit Besuchsmarke
+(`UPDATE` ohne Trigger), Stapel-Commits. Die Trigger selbst bleiben (Schema 6, ADR 0042);
+sie kosten nach den Behebungen ≈ 0,15 ms je Datei, bei 30.000 Dateien ≈ 4–5 s.
+
+Stapelgröße (11.000 Dateien, erster Lauf): 1 Datei je Commit 30,4 s, 10: 6,5 s, 100: 2,8 s,
+**500: 2,4 s**, 2.000: 2,3 s, 10.000: 2,3 s, alles in einer Transaktion: 2,3 s. Ein Commit kostet
+≈ 2,7 ms; 500 Dateien halten den Mehraufwand unter 6 %, die ersten Dateien sind nach
+wenigen Zehntelsekunden sichtbar, und ein Abbruch verliert höchstens 500 Einträge.
+
+### Benchmark wiederholen
+
+```
+cargo run --release --example scan_bench -- 30000 300
+```
+
+Erzeugt den Baum in einem temporären Ordner (`SCAN_BENCH_DIR` setzt einen eigenen Ordner),
+misst Verzeichnislauf, ersten und zweiten Indexlauf mit Zeiten je Phase, die Einzelkosten
+(Abfragen, Öffnen, Einfügen, Trigger) und das Sichern. `SCAN_BENCH_BATCHES=1,100,500,5000`
+vergleicht Stapelgrößen. `scan_bench dump <Sammlung>` gibt Dateien und Fotos zum Vergleichen
+zweier Läufe aus. Die Zahl „erste Öffnung 9 ms“ hängt vom Virenscanner ab; auf einem
+Rechner ohne Echtzeitscan fällt dieser Anteil weg.
+
+### Regressionen
+
+`tests/scan_batches.rs`: gleiche Dateien, Foto-Zuordnungen (NEF/JPG-Paare, Unterordner `nef`,
+Export-Kopien, gleichnamige Dateien anderer Ordner) und gleiche Projektion für alle Stapelgrößen von
+1 bis zu einer einzigen Transaktion; ein Leser sieht freigegebene Stapel während des Laufs;
+Abbruch behält die Stapel, markiert nichts als fehlend und schließt den Scan mit `cancelled`;
+der nächste Lauf setzt fort, behält die IDs und liefert dieselben Dateien wie ein
+ununterbrochener Lauf (verschwundene Dateien markiert erst der vollständige Lauf als fehlend);
+eine unveränderte Neuindizierung ändert weder Zeilen noch Projektion noch Revision; Umbenennen
+behält Datei- und Foto-ID. `tests/progress.rs`: Rate/Restzeit erst nach genügend Messpunkten,
+Glättung, Neustart der Zählung, „Gesamtzahl unbekannt“ ohne Prozent, Prozent nie 100 vor
+Abschluss, deutsche Zahlen- und Zeitformate, Phasen. Zusätzlich wurde auf einem Baum mit 2.200
+Dateien ein Lauf des alten und des neuen Programms verglichen: die Tabellen `files` und `photos`
+sind identisch (Textvergleich der Ausgabe von `scan_bench dump`).
+
+### Sichtprüfung
+
+Release-Build, synthetischer Baum mit 33.000 Dateien unter `tmp/scan-demo`
+(`FOTO_IMPORTER_SETTINGS`, `FOTO_IMPORTER_VIEW`, `FOTO_IMPORTER_ACTION=scan` startet den Lauf
+beim Öffnen, `FOTO_IMPORTER_CAPTURE` mit `FOTO_IMPORTER_CAPTURE_DELAY=6`):
+[Aufgabenansicht mitten im Lauf](screenshots/indexierung-aufgaben.png) und
+[Sammlung während des Laufs](screenshots/indexierung-sammlung.png) (die Galerie zeigt bereits
+12.700 der 22.085 eingetragenen Dateien; Fußleiste mit Balken, Prozent, Rate und Restzeit).
+Nach dem Lauf nennt die Fußleiste „Metadaten: 0 von 33.000 gelesen“. Nicht geprüft:
+Abbrechen per Mausklick in der Oberfläche (nur der Kern-Test), Hell-Design, sehr langsame
+Netzlaufwerke, ein Lauf mit echter ExifTool-Anreicherung und die Automatik „Bei automatischen
+Läufen zuerst Metadaten lesen“ in der Oberfläche, Rechner ohne Virenscanner.
+Beim Start mit einem noch nicht indizierten Ordner melden die ersten lesenden Abfragen
+„unable to open database file“ (vorbestehendes Verhalten, nicht Teil dieser Änderung).
