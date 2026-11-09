@@ -1,7 +1,9 @@
 //! Oberfläche für den zentralen Personenbestand (ADR 0062): Einstellung, Abgleich,
 //! Rückfragen und Übernahme fehlender Personen. Alle Arbeit läuft auf Workern.
 use super::*;
-use crate::core::central::{self, Central, Conflict, Side, SyncNote, SyncReport};
+use crate::core::central::{
+    self, Central, Conflict, RelChoice, RelConflict, Side, SyncNote, SyncReport,
+};
 
 /// Zustand der zentralen Ansicht.
 #[derive(Default)]
@@ -37,6 +39,18 @@ impl PhotoApp {
                 egui::TextEdit::singleline(&mut self.settings.central_path)
                     .hint_text(crate::config::Settings::default_central_path().to_string_lossy())
                     .desired_width(570.0),
+            );
+            ui.add_enabled(
+                self.settings.central_enabled,
+                egui::Checkbox::new(
+                    &mut self.settings.central_relations,
+                    "Beziehungen zentral mitführen",
+                ),
+            );
+            ui.label(
+                RichText::new("Eltern, Partner, Freunde usw. werden zwischen Sammlungen über die zentralen Personen abgeglichen; nichts wird überschrieben oder still gelöscht. Abschalten verändert keine Sammlung. Beziehungen enthalten keine Biometrie.")
+                    .small()
+                    .weak(),
             );
             ui.checkbox(
                 &mut self.settings.central_images,
@@ -78,6 +92,7 @@ impl PhotoApp {
                     ui.colored_label(ui.visuals().warn_fg_color, warning);
                 }
                 self.central_conflicts(ui);
+                self.central_relations_section(ui);
                 self.central_missing(ui);
             });
     }
@@ -165,6 +180,71 @@ impl PhotoApp {
                 });
             });
         }
+    }
+
+    /// Beziehungsabgleich: Zähler und Rückfragen zu widersprüchlichen Beziehungen.
+    fn central_relations_section(&mut self, ui: &mut egui::Ui) {
+        let Some(report) = self.central_ui.report.as_ref().map(|r| r.relations.clone()) else {
+            return;
+        };
+        if !report.active {
+            return;
+        }
+        ui.label(RichText::new(report.summary()).strong());
+        for (index, conflict) in report.conflicts.iter().enumerate() {
+            ui.group(|ui| {
+                ui.label(RichText::new(&conflict.reason).weak());
+                for text in &conflict.local_text {
+                    ui.label(format!("lokal: {text}"));
+                }
+                ui.label(&conflict.central_text);
+                ui.horizontal_wrapped(|ui| {
+                    let busy = self.busy();
+                    let stale = conflict.central.is_none();
+                    let keep = if stale {
+                        "Lokal behalten und zentral wiederherstellen"
+                    } else {
+                        "Lokal behalten und zentral ersetzen"
+                    };
+                    let take = if stale {
+                        "Lokal entfernen"
+                    } else {
+                        "Zentral übernehmen"
+                    };
+                    let mut choice = None;
+                    if ui.add_enabled(!busy, egui::Button::new(keep)).clicked() {
+                        choice = Some(RelChoice::KeepLocal);
+                    }
+                    if ui
+                        .add_enabled(!busy && conflict.can_take_central, egui::Button::new(take))
+                        .on_disabled_hover_text(if busy {
+                            self.busy_reason()
+                        } else {
+                            "Die zentrale Beziehung passt auch ohne die lokale nicht in den Stammbaum".into()
+                        })
+                        .clicked()
+                    {
+                        choice = Some(RelChoice::TakeCentral);
+                    }
+                    if !stale
+                        && ui
+                            .add_enabled(!busy, egui::Button::new("Keine von beiden"))
+                            .clicked()
+                    {
+                        choice = Some(RelChoice::Neither);
+                    }
+                    if let Some(choice) = choice {
+                        self.resolve_relation_conflict(report.conflicts[index].clone(), choice);
+                    }
+                });
+            });
+        }
+    }
+
+    fn resolve_relation_conflict(&mut self, conflict: RelConflict, choice: RelChoice) {
+        self.run_central(move |c, central| {
+            central::resolve_relation(c, central, &conflict, choice)
+        });
     }
 
     fn central_missing(&mut self, ui: &mut egui::Ui) {

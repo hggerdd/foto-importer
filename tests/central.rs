@@ -24,6 +24,7 @@ fn setup() -> anyhow::Result<Setup> {
         enabled: true,
         path: dir.path().join("profile").join("central.sqlite"),
         images: false,
+        relations: true,
     };
     Ok(Setup {
         _dir: dir,

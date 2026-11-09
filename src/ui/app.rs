@@ -385,7 +385,13 @@ impl PhotoApp {
         }
         // Sichtprüfung: startet z. B. "scan" gleich nach dem Öffnen (docs/validierung.md).
         if let Ok(action) = std::env::var("FOTO_IMPORTER_ACTION") {
-            app.collection_action(&action);
+            if action == "central_sync" {
+                // Sichtprüfung des zentralen Bestands: Bereich öffnen und einmal abgleichen.
+                app.people_ui.panel = people_table::Panel::Central;
+                app.run_central(crate::core::central::sync);
+            } else {
+                app.collection_action(&action);
+            }
         }
         app
     }
@@ -790,9 +796,12 @@ impl PhotoApp {
                         }
                         self.central_ui.accept(note);
                         // Nach einem Abgleich mit offenen Punkten den Bereich zeigen.
-                        if self.central_ui.report.as_ref().is_some_and(|r| {
-                            !r.missing.is_empty() || !r.conflicts.is_empty() || r.ambiguous > 0
-                        }) {
+                        if self
+                            .central_ui
+                            .report
+                            .as_ref()
+                            .is_some_and(|r| r.pending() > 0)
+                        {
                             self.people_ui.panel = people_table::Panel::Central;
                         }
                     }

@@ -131,3 +131,4 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0062](0062-zentraler-personenbestand.md) | Zentraler Personenbestand im Benutzerprofil, Abgleich vor dem Anlegen | Akzeptiert |
 | [0063](0063-personentabelle-und-tippfilter.md) | Personentabelle mit Detailspalte und Tippfilter-Auswahlfeldern; ergänzt 0038/0045, ersetzt die Bedienung der Personenliste und Beziehungseingabe aus 0060/0061 | Akzeptiert |
 | [0064](0064-gestufte-indizierung-mit-fortschritt.md) | Gestufte Indizierung in Stapeln, ehrlicher Fortschritt mit Phasen/Rate/Restzeit; ergänzt 0010 und 0059 | Akzeptiert |
+| [0065](0065-zentrale-beziehungen.md) | Beziehungen zentral speichern und abgleichen (Schema 2, Grabsteine, Rückfragen); setzt Phase 2 aus 0062 um | Akzeptiert |

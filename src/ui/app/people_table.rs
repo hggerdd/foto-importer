@@ -458,9 +458,7 @@ impl PhotoApp {
             }
             // Zentraler Bestand: Abgleich, Konflikte und fehlende Personen an einem Ort.
             if self.settings.central_enabled {
-                let pending = self.central_ui.report.as_ref().map_or(0, |r| {
-                    r.missing.len() + r.conflicts.len() + r.ambiguous
-                });
+                let pending = self.central_ui.report.as_ref().map_or(0, |r| r.pending());
                 let label = if pending > 0 {
                     format!("Zentraler Bestand · {pending}")
                 } else {

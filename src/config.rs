@@ -76,6 +76,8 @@ pub struct Settings {
     pub central_path: String,
     /// Opt-in: Referenzausschnitte zentral speichern (Biometrie, Standard aus).
     pub central_images: bool,
+    /// Beziehungen zentral mitführen (ADR 0065); wirkt nur bei `central_enabled`.
+    pub central_relations: bool,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -101,6 +103,7 @@ impl Default for Settings {
             central_enabled: true,
             central_path: String::new(),
             central_images: false,
+            central_relations: true,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
@@ -137,6 +140,7 @@ impl Settings {
                 PathBuf::from(self.central_path.trim())
             },
             images: self.central_images,
+            relations: self.central_relations,
         }
     }
     pub fn load() -> Self {

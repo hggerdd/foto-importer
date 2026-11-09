@@ -669,6 +669,128 @@ pub fn validate_add(edges: &[Edge], new: Edge) -> Result<bool, Conflict> {
     Ok(true)
 }
 
+/// Inkrementeller Prüfer für viele Einfügungen hintereinander (Abgleich mit der Zentrale).
+/// Entscheidet genau wie [`validate_add`], hält aber Adjazenzen vor, statt je Prüfung alle
+/// Kanten zu durchlaufen. Behelfsverbindungen (Geschwister/Cousin) verlangen den Baumvergleich;
+/// sobald eine vorhanden ist oder neu käme, wird an [`validate_add`] zurückgegeben.
+pub struct Validator {
+    edges: Vec<Edge>,
+    known: std::collections::HashSet<Edge>,
+    parents: std::collections::HashMap<i64, Vec<i64>>,
+    children: std::collections::HashMap<i64, Vec<i64>>,
+    pairs: std::collections::HashMap<(i64, i64), Vec<Kind>>,
+    /// Familiäre symmetrische Kanten je Person (Index in `edges`).
+    family: std::collections::HashMap<i64, Vec<usize>>,
+    shortcuts: usize,
+}
+
+impl Validator {
+    pub fn new(edges: &[Edge]) -> Self {
+        let mut validator = Self {
+            edges: Vec::with_capacity(edges.len()),
+            known: Default::default(),
+            parents: Default::default(),
+            children: Default::default(),
+            pairs: Default::default(),
+            family: Default::default(),
+            shortcuts: 0,
+        };
+        for edge in edges {
+            validator.insert(*edge);
+        }
+        validator
+    }
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+    fn insert(&mut self, edge: Edge) {
+        let index = self.edges.len();
+        self.edges.push(edge);
+        self.known.insert(edge);
+        if edge.kind == Kind::Parent {
+            self.parents.entry(edge.to).or_default().push(edge.from);
+            self.children.entry(edge.from).or_default().push(edge.to);
+        }
+        self.pairs
+            .entry((edge.from.min(edge.to), edge.from.max(edge.to)))
+            .or_default()
+            .push(edge.kind);
+        if is_family_symmetric(edge.kind) {
+            self.family.entry(edge.from).or_default().push(index);
+            self.family.entry(edge.to).or_default().push(index);
+        }
+        if matches!(edge.kind, Kind::Sibling | Kind::Cousin) {
+            self.shortcuts += 1;
+        }
+    }
+    fn reach(&self, start: i64, up: bool) -> BTreeSet<i64> {
+        let map = if up { &self.parents } else { &self.children };
+        let mut seen = BTreeSet::new();
+        let mut open = vec![start];
+        while let Some(next) = open.pop() {
+            for &id in map.get(&next).into_iter().flatten() {
+                if seen.insert(id) {
+                    open.push(id);
+                }
+            }
+        }
+        seen
+    }
+    /// Prüft wie [`validate_add`] und nimmt die Kante bei `Ok(true)` auf.
+    pub fn try_add(&mut self, new: Edge) -> Result<bool, Conflict> {
+        let fresh = self.check(new)?;
+        if fresh {
+            self.insert(new);
+        }
+        Ok(fresh)
+    }
+    fn check(&self, new: Edge) -> Result<bool, Conflict> {
+        if self.shortcuts > 0 || matches!(new.kind, Kind::Sibling | Kind::Cousin) {
+            return validate_add(&self.edges, new);
+        }
+        if new.from == new.to {
+            return Err(Conflict::SelfRelation);
+        }
+        if self.known.contains(&new) {
+            return Ok(false);
+        }
+        if new.kind == Kind::Parent && self.reach(new.to, false).contains(&new.from) {
+            return Err(Conflict::Cycle);
+        }
+        let key = (new.from.min(new.to), new.from.max(new.to));
+        for &kind in self.pairs.get(&key).into_iter().flatten() {
+            if kinds_conflict(kind, new.kind) {
+                return Err(Conflict::Pair(kind, new.kind));
+            }
+        }
+        if is_family_symmetric(new.kind)
+            && (self.reach(new.from, true).contains(&new.to)
+                || self.reach(new.to, true).contains(&new.from))
+        {
+            return Err(Conflict::Lineage(new.kind));
+        }
+        if new.kind == Kind::Parent {
+            let mut ancestors = self.reach(new.from, true);
+            ancestors.insert(new.from);
+            let mut descendants = self.reach(new.to, false);
+            descendants.insert(new.to);
+            let hit = ancestors
+                .iter()
+                .flat_map(|a| self.family.get(a).into_iter().flatten())
+                .filter(|&&i| {
+                    let e = self.edges[i];
+                    (ancestors.contains(&e.from) && descendants.contains(&e.to))
+                        || (ancestors.contains(&e.to) && descendants.contains(&e.from))
+                })
+                .min();
+            if let Some(&index) = hit {
+                return Err(Conflict::Lineage(self.edges[index].kind));
+            }
+        }
+        Ok(true)
+    }
+}
+
 /// Ergebnis der Beziehungsübernahme bei einer Personenzusammenführung.
 pub struct MergePlan {
     /// Kanten, die auf die Zielperson umgehängt werden (kanonisch, doppelfrei).
@@ -985,5 +1107,53 @@ mod tests {
         // Widerspruch: Quelle ist Geschwister von X, Ziel Elternteil von X.
         let bad = [e(1, Kind::Sibling, 5), e(2, Kind::Parent, 5)];
         assert!(plan_merge(&bad, 1, 2).is_err());
+    }
+
+    #[test]
+    fn incremental_validator_matches_validate_add() {
+        // Pseudozufällige Einfügefolgen über wenige Personen: gleiche Entscheidung wie validate_add.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for round in 0..300 {
+            let mut edges: Vec<Edge> = Vec::new();
+            let mut fast = Validator::new(&[]);
+            for _ in 0..40 {
+                let kind = if round % 3 == 0 {
+                    Kind::ALL[next(7) as usize]
+                } else {
+                    [
+                        Kind::Parent,
+                        Kind::Partner,
+                        Kind::FormerPartner,
+                        Kind::Friend,
+                        Kind::Acquaintance,
+                    ][next(5) as usize]
+                };
+                let (a, b) = (next(8) as i64, next(8) as i64);
+                let edge = if kind.symmetric() {
+                    Edge {
+                        from: a.min(b),
+                        kind,
+                        to: a.max(b),
+                    }
+                } else {
+                    Edge {
+                        from: a,
+                        kind,
+                        to: b,
+                    }
+                };
+                let expected = validate_add(&edges, edge);
+                assert_eq!(fast.try_add(edge), expected, "{edges:?} + {edge:?}");
+                if expected == Ok(true) {
+                    edges.push(edge);
+                }
+            }
+        }
     }
 }

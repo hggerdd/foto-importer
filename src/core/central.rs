@@ -9,6 +9,12 @@ use super::{
     faces::{self, NewPerson, Undo},
     files::fold,
 };
+mod rels;
+pub use rels::{
+    CentralDecisions, CentralEdge, RelChoice, RelConflict, RelationReport, add_relation_synced,
+    remove_relation_synced, resolve_relation, sync_relations,
+};
+
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, TransactionBehavior, params};
 use std::{
@@ -17,7 +23,8 @@ use std::{
     time::Duration,
 };
 
-pub const SCHEMA_VERSION: i64 = 1;
+/// Schema 2 ergänzt Beziehungen (ADR 0065); Schema 1 bleibt als Teilmenge erhalten.
+pub const SCHEMA_VERSION: i64 = 2;
 /// Zentral geführte Felder, identisch mit den Personenattributen der Sammlung.
 pub const FIELDS: [&str; 4] = ["name", "gender", "birth_year", "note"];
 const GLOBAL_ID: &str = "global_id";
@@ -33,6 +40,8 @@ pub struct CentralConfig {
     pub path: PathBuf,
     /// Opt-in: Gesichtsausschnitte zentral speichern (Standard aus).
     pub images: bool,
+    /// Beziehungen zentral mitführen (ADR 0065); wirkt nur bei `enabled`.
+    pub relations: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -61,6 +70,7 @@ enum Op {
 pub struct Central {
     db: Connection,
     images: bool,
+    relations: bool,
 }
 
 fn now() -> String {
@@ -100,33 +110,66 @@ impl Central {
                 "Der zentrale Bestand hat Schema {version}; diese Version kennt höchstens {SCHEMA_VERSION}"
             );
         }
-        let mut central = Self { db, images };
-        if version == 0 {
-            let tx = central
-                .db
-                .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let again: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if again == 0 {
-                tx.execute_batch(
-                    "CREATE TABLE people(gid TEXT PRIMARY KEY, name TEXT NOT NULL,
-                        gender TEXT NOT NULL DEFAULT '', birth_year TEXT NOT NULL DEFAULT '',
-                        note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL, merged_into TEXT);
-                     CREATE TABLE refs(id INTEGER PRIMARY KEY, gid TEXT NOT NULL,
-                        model_key TEXT NOT NULL, jpeg BLOB NOT NULL, created_at TEXT NOT NULL);
-                     CREATE INDEX refs_gid ON refs(gid);
-                     CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                     INSERT INTO meta VALUES('created_by','foto-importer');
-                     PRAGMA user_version=1;",
-                )?;
-            }
-            tx.commit()?;
+        let mut central = Self {
+            db,
+            images,
+            relations: false,
+        };
+        if version < SCHEMA_VERSION {
+            central.migrate(path, version)?;
         }
         Ok(central)
     }
 
     pub fn open_config(config: &CentralConfig) -> Result<Self> {
-        Self::open(&config.path, config.images)
+        Ok(Self::open(&config.path, config.images)?.with_relations(config.relations))
+    }
+
+    /// Schaltet den Beziehungsabgleich für diese Verbindung ein (ADR 0065).
+    pub fn with_relations(mut self, on: bool) -> Self {
+        self.relations = on;
+        self
+    }
+    pub fn relations_enabled(&self) -> bool {
+        self.relations
+    }
+
+    /// Legt Schema 1 an bzw. erweitert es additiv auf Schema 2. Eine bestehende Version-1-Datei
+    /// wird vorher best-effort mit `VACUUM INTO` gesichert; scheitert die Sperre oder fehlt das
+    /// Schreibrecht, bleibt die Datei unverändert (die Transaktion wird nicht committet).
+    fn migrate(&mut self, path: &Path, version: i64) -> Result<()> {
+        if version == 1 {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let backup = path.with_file_name(format!("{name}.v1.bak"));
+            if !backup.exists() {
+                let target = backup.to_string_lossy().replace('\'', "''");
+                let _ = self.db.execute_batch(&format!("VACUUM INTO '{target}'"));
+            }
+        }
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if current == 0 {
+            tx.execute_batch(
+                "CREATE TABLE people(gid TEXT PRIMARY KEY, name TEXT NOT NULL,
+                    gender TEXT NOT NULL DEFAULT '', birth_year TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, merged_into TEXT);
+                 CREATE TABLE refs(id INTEGER PRIMARY KEY, gid TEXT NOT NULL,
+                    model_key TEXT NOT NULL, jpeg BLOB NOT NULL, created_at TEXT NOT NULL);
+                 CREATE INDEX refs_gid ON refs(gid);
+                 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES('created_by','foto-importer');
+                 PRAGMA user_version=1;",
+            )?;
+        }
+        if current < 2 {
+            rels::create_tables(&tx)?;
+            tx.execute_batch("PRAGMA user_version=2;")?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Aktive (nicht zusammengeführte) Personen, nach Name sortiert.
@@ -216,6 +259,7 @@ impl Central {
             "UPDATE people SET merged_into=?,updated_at=? WHERE gid=?",
             params![to, now(), from],
         )?;
+        rels::rehang(&tx, from, to)?;
         tx.commit()?;
         Ok(())
     }
@@ -411,10 +455,16 @@ pub struct SyncReport {
     pub conflicts: Vec<Conflict>,
     /// Zentrale Personen, die in dieser Sammlung noch fehlen.
     pub missing: Vec<CentralPerson>,
+    /// Ergebnis des Beziehungsabgleichs (leer, wenn zentrale Beziehungen aus sind).
+    pub relations: RelationReport,
 }
 impl SyncReport {
+    /// Offene Punkte, die der Nutzer entscheiden muss (für Zähler und Hinweis).
+    pub fn pending(&self) -> usize {
+        self.missing.len() + self.conflicts.len() + self.ambiguous + self.relations.conflicts.len()
+    }
     pub fn summary(&self) -> String {
-        format!(
+        let mut text = format!(
             "Abgleich: {} verknüpft, {} zentral angelegt, {} lokal ergänzt, {} zentral ergänzt, {} Rückfragen, {} fehlen lokal",
             self.linked,
             self.created_central,
@@ -422,7 +472,12 @@ impl SyncReport {
             self.filled_central,
             self.conflicts.len(),
             self.missing.len()
-        )
+        );
+        if self.relations.active {
+            text.push_str(". ");
+            text.push_str(&self.relations.summary());
+        }
+        text
     }
 }
 /// Ergebnis der Abgleiche rund ums Anlegen: Hinweis statt Blockade.
@@ -596,6 +651,17 @@ pub fn sync(collection: &mut Collection, central: &mut Central) -> Result<SyncRe
         .into_iter()
         .filter(|c| !linked.contains(&c.gid) && !pending_names.contains(&norm(&c.name)))
         .collect();
+    if central.relations {
+        // Ein Fehler hier darf den Personenabgleich nicht entwerten.
+        report.relations = match sync_relations(collection, central) {
+            Ok(relations) => relations,
+            Err(error) => RelationReport {
+                active: true,
+                error: Some(format!("{error:#}")),
+                ..Default::default()
+            },
+        };
+    }
     Ok(report)
 }
 
@@ -651,6 +717,11 @@ pub fn adopt(collection: &mut Collection, central: &Central, gids: &[String]) ->
         }
     }
     tx.commit()?;
+    if central.relations && !ids.is_empty() {
+        // Beziehungen der übernommenen Personen zu vorhandenen Personen direkt nachziehen;
+        // Widersprüche erscheinen beim nächsten Abgleich als Rückfrage.
+        rels::pull_after_adopt(collection, central)?;
+    }
     Ok(ids)
 }
 

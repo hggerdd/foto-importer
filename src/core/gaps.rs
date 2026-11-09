@@ -250,7 +250,7 @@ pub fn load_decisions(collection: &Collection) -> Result<Decisions> {
     Ok(decisions)
 }
 
-fn save_decisions(collection: &Collection, decisions: &Decisions) -> Result<()> {
+pub fn save_decisions(collection: &Collection, decisions: &Decisions) -> Result<()> {
     super::faces::save_setting(&collection.db, SETTING_KEY, &decisions.encode())?;
     super::faces::save_setting(
         &collection.db,

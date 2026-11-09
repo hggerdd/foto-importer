@@ -4,6 +4,7 @@
 - **Erfasst am:** 2026-11-09
 - **Art:** Neue Entscheidung
 - **Entscheidungsdatum:** 2026-11-09
+- **Ergänzt durch:** [0065](0065-zentrale-beziehungen.md) (Phase 2 für Beziehungen umgesetzt)
 - **Bezieht sich auf:** [0008](0008-lokale-sqlite-sammlung.md), [0013](0013-konfigurationsbereiche.md), [0019](0019-personen-und-beziehungsgraph.md), [0042](0042-native-bestandsmigrationen.md), [0061](0061-stammbaum-als-normalisiertes-modell.md)
 
 ## Kontext
@@ -19,7 +20,7 @@ biometrisch; langsame Arbeit gehört auf Worker.
 
 **Datei und Ort.** Eigene SQLite-Datei `central.sqlite` neben `settings.json`
 (`Settings::central_path` ändert den Ort, z. B. Netzlaufwerk; `central_enabled` schaltet ab).
-`PRAGMA user_version` trägt das Schema (1); eine neuere Version wird abgelehnt, nicht
+`PRAGMA user_version` trägt das Schema (1, seit ADR 0065: 2); eine neuere Version wird abgelehnt, nicht
 verändert. WAL, `busy_timeout` 5 s, Schreibzugriffe nur als kurze `BEGIN IMMEDIATE`-Transaktionen;
 Verbindungen werden je Vorgang geöffnet und sofort geschlossen. Auf UNC-Pfaden wird statt WAL
 ein Rollback-Journal verwendet, weil WAL über Netzfreigaben nicht zuverlässig ist.
@@ -60,9 +61,11 @@ Neu-Einbetten. „Biometrie entfernen“ bietet eine Option, die zentralen Aussc
 Personen (Name, Jahr) bleiben, weil sie keine Biometrie sind. Die Anbindung, die Ausschnitte
 aus einer Sammlung automatisch zentral ablegt und beim Neu-Einbetten nutzt, ist offen.
 
-**Beziehungen (Phase 2, nicht umgesetzt).** Eltern/Partner/Freund zentral zu führen hätte
-Konfliktregeln für Graphen (Zyklen, Widersprüche, ADR 0061) und Rückfragen zwischen
-Sammlungen zur Folge. Phase 1 bleibt ohne; Beziehungen verbleiben in der Sammlung.
+**Beziehungen (Phase 2, für Beziehungen umgesetzt in [ADR 0065](0065-zentrale-beziehungen.md)).**
+Eltern/Partner/Freund zentral zu führen hatte Konfliktregeln für Graphen (Zyklen, Widersprüche,
+ADR 0061) und Rückfragen zwischen Sammlungen zur Folge. Phase 1 blieb ohne; seit ADR 0065 trägt
+Schema 2 die Tabellen `rels`, `rel_tombstones` und `rel_decisions` (additiv, `user_version` 2) und
+`central::sync` gleicht Beziehungen über `gid`s ab. `PRAGMA user_version` trägt damit Schema 2.
 
 ## Alternativen
 

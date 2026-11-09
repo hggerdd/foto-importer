@@ -3,6 +3,7 @@
 //! Alle Verwandtschaft wird aus den gespeicherten Basisfakten berechnet
 //! (`core::kinship`, `core::tree_layout`); die Oberfläche zeichnet nur.
 use super::*;
+use crate::core::central;
 use crate::core::gaps::Suggestion;
 use crate::core::kinship::{Family, Relation};
 use crate::core::relations::{self, Gender, Role};
@@ -560,10 +561,15 @@ impl PhotoApp {
         {
             let root = self.settings.collection.clone();
             self.undo.clear();
+            let config = self.settings.central();
             self.launch("Beziehung speichern", true, "mutation", move |_| {
                 let mut c = Collection::open(Path::new(&root), true)?;
-                relations::add(&mut c, person, role, object)?;
-                Ok(Outcome::Done("Beziehung gespeichert".into()))
+                let (_, note) =
+                    central::add_relation_synced(&mut c, &config, person, role, object)?;
+                Ok(Outcome::Synced(
+                    Box::new(Outcome::Done("Beziehung gespeichert".into())),
+                    note,
+                ))
             });
         }
     }
@@ -706,10 +712,14 @@ impl PhotoApp {
         if let Some((subject, role, object)) = action {
             let root = self.settings.collection.clone();
             self.undo.clear();
+            let config = self.settings.central();
             self.launch("Beziehung entfernen", true, "mutation", move |_| {
                 let c = Collection::open(Path::new(&root), true)?;
-                relations::remove(&c, subject, role, object)?;
-                Ok(Outcome::Done("Beziehung entfernt".into()))
+                let note = central::remove_relation_synced(&c, &config, subject, role, object)?;
+                Ok(Outcome::Synced(
+                    Box::new(Outcome::Done("Beziehung entfernt".into())),
+                    note,
+                ))
             });
         }
     }
