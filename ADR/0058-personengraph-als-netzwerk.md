@@ -109,3 +109,7 @@ bewerten.
 [Layouttests](../tests/graph_layout.rs), [Netztests](../tests/relationship_graph.rs).
 Sichtprüfung mit synthetischen Demodaten (`examples/demo_faces.rs`) siehe
 [Prüfprotokoll](../docs/validierung.md).
+
+## Ergänzung 2026-11-09: Geschwister aus dem Stammbaum
+
+Geschwister und Halbgeschwister erscheinen im Graphen als gepunktete Linie, auch wenn sie nicht eingetragen sind. Sie werden im Netzwerk-Worker aus gemeinsamen Eltern berechnet (`kinship::Family::relationship`, Schritte 1/1) und nicht gespeichert. Eine direkt eingetragene Geschwisterkante wird nicht zusätzlich abgeleitet. Die Linie zählt wie eine eingetragene Beziehung für Ebene und Layout; höchstens 20.000 Geschwisterpaare werden geprüft.

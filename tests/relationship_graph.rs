@@ -170,3 +170,59 @@ fn network_contains_all_people_and_matches_the_photo_counts() -> anyhow::Result<
     assert_eq!(network.positions, again.positions);
     Ok(())
 }
+
+#[test]
+fn siblings_follow_from_shared_parents_without_being_recorded() -> anyhow::Result<()> {
+    use foto_importer::core::relationship_graph::Recorded;
+    let root = tempfile::tempdir()?;
+    let collection = Collection::open(root.path(), true)?;
+    collection.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2),(3),(4),(5),(6),(8),(9),(11),(12),(13);
+         -- 3 und 4: beide Eltern gemeinsam. 5 und 6: nur Elternteil 1 gemeinsam, beide haben
+         -- einen weiteren Elternteil (Halbgeschwister). 11 und 12: gemeinsames Elternteil 13
+         -- und zusätzlich direkt als Geschwister eingetragen.
+         INSERT INTO relations VALUES(1,1,3),(2,1,3),(1,1,4),(2,1,4),
+            (1,1,5),(8,1,5),(1,1,6),(9,1,6),(13,1,11),(13,1,12),(11,4,12);",
+    )?;
+    let network = relationship_graph::network(&collection)?;
+    let kinds = |a: i64, b: i64| -> Vec<Recorded> {
+        let (x, y) = (
+            network.index_of(a).expect("Person a"),
+            network.index_of(b).expect("Person b"),
+        );
+        let (low, high) = (x.min(y), x.max(y));
+        network
+            .edges
+            .iter()
+            .find(|e| e.a == low && e.b == high)
+            .map(|e| e.recorded.clone())
+            .unwrap_or_default()
+    };
+    assert!(kinds(3, 4).contains(&Recorded::DerivedSibling { half: false }));
+    assert!(kinds(5, 6).contains(&Recorded::DerivedSibling { half: true }));
+    // Eine eingetragene Geschwisterkante wird nicht zusätzlich abgeleitet.
+    let recorded = kinds(11, 12);
+    assert!(recorded.contains(&Recorded::Sibling), "{recorded:?}");
+    assert!(
+        !recorded
+            .iter()
+            .any(|k| matches!(k, Recorded::DerivedSibling { .. })),
+        "{recorded:?}"
+    );
+    // Eltern und Kind sind keine Geschwister.
+    assert!(
+        !kinds(1, 3)
+            .iter()
+            .any(|k| matches!(k, Recorded::DerivedSibling { .. }))
+    );
+    // Die abgeleitete Linie zieht Geschwister im Layout näher zusammen als Unverbundene.
+    let distance = |a: i64, b: i64| {
+        let (p, q) = (
+            network.positions[network.index_of(a).expect("Person a")],
+            network.positions[network.index_of(b).expect("Person b")],
+        );
+        ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()
+    };
+    assert!(distance(3, 4) < distance(3, 9));
+    Ok(())
+}

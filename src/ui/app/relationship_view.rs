@@ -125,6 +125,10 @@ fn recorded_label(kind: &Recorded) -> String {
         Recorded::Child => "Kind von".into(),
         Recorded::Partner => "Partner".into(),
         Recorded::Sibling => "Geschwister".into(),
+        Recorded::DerivedSibling { half: false } => "Geschwister (gemeinsame Eltern)".into(),
+        Recorded::DerivedSibling { half: true } => {
+            "Halbgeschwister (ein gemeinsamer Elternteil)".into()
+        }
         Recorded::Other(name, _) => {
             let text = name.replace('_', " ");
             let mut chars = text.chars();
@@ -531,7 +535,7 @@ fn canvas(
             let colour = match kind {
                 Recorded::Parent | Recorded::Child => colours.parent,
                 Recorded::Partner => colours.partner,
-                Recorded::Sibling => colours.sibling,
+                Recorded::Sibling | Recorded::DerivedSibling { .. } => colours.sibling,
                 Recorded::Other(..) => colours.other,
             }
             .gamma_multiply(alpha);
@@ -540,7 +544,7 @@ fn canvas(
                 Recorded::Partner => {
                     painter.extend(egui::Shape::dashed_line(&[a, b], stroke, 7.0, 4.0))
                 }
-                Recorded::Sibling => {
+                Recorded::Sibling | Recorded::DerivedSibling { .. } => {
                     painter.extend(egui::Shape::dashed_line(&[a, b], stroke, 2.0, 4.0))
                 }
                 Recorded::Other(..) => {
@@ -860,7 +864,12 @@ fn legend(ui: &mut egui::Ui, network: &Network, colours: &Palette) {
             Line::Arrow,
         );
         legend_row(ui, colours.partner, "Partner", Line::Dashed);
-        legend_row(ui, colours.sibling, "Geschwister", Line::Dotted);
+        legend_row(
+            ui,
+            colours.sibling,
+            "Geschwister (auch aus gemeinsamen Eltern)",
+            Line::Dotted,
+        );
         // Weitere Beziehungstypen aus der Datenbank erscheinen neutral und mit eigenem Namen.
         let mut others: Vec<String> = network
             .edges

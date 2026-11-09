@@ -98,7 +98,13 @@ pub enum Recorded {
     /// Die erste Person ist Kind der zweiten.
     Child,
     Partner,
+    /// Direkt eingetragene Geschwisterverbindung (Behelf).
     Sibling,
+    /// Aus gemeinsamen Eltern im Stammbaum abgeleitet, nicht gespeichert; `half`: nur
+    /// ein gemeinsamer Elternteil.
+    DerivedSibling {
+        half: bool,
+    },
     /// Weitere Typen aus `relation_types` (Name, Name der Umkehrung), neutral dargestellt.
     Other(String, String),
 }
@@ -182,6 +188,41 @@ fn photo_people() -> String {
 /// Alle Personen mit gemeinsamen Fotos und eingetragenen Beziehungen samt Layout.
 /// Zählregeln wie in `for_person`: eindeutige Fotos, bestätigte Zuordnungen,
 /// keine historischen Gesichter, keine zusammengeführten Personen.
+/// Höchstzahl geprüfter Geschwisterpaare (Schutz bei sehr großen Kinderlisten).
+const MAX_SIBLING_PAIRS: usize = 20_000;
+
+/// Geschwisterpaare `(kleinere ID, größere ID, Halbgeschwister)` aus gemeinsamen Eltern
+/// des Stammbaums. Fehler beim Lesen des Stammbaums verhindern den Graphen nicht.
+fn derived_siblings(collection: &Collection, people: &[(i64, String)]) -> Vec<(i64, i64, bool)> {
+    use super::kinship::Relation;
+    let Ok(family) = super::relations::load_family(collection) else {
+        return Vec::new();
+    };
+    let mut candidates: std::collections::BTreeSet<(i64, i64)> = Default::default();
+    'parents: for (parent, _) in people {
+        let children: Vec<i64> = family.children_of(*parent).iter().copied().collect();
+        for (i, a) in children.iter().enumerate() {
+            for b in &children[i + 1..] {
+                candidates.insert((*a.min(b), *a.max(b)));
+                if candidates.len() >= MAX_SIBLING_PAIRS {
+                    break 'parents;
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(a, b)| match family.relationship(a, b)?.relation {
+            Relation::Blood {
+                a_gen: 1,
+                b_gen: 1,
+                half,
+            } => Some((a, b, half)),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn network(collection: &Collection) -> Result<Network> {
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     let people: Vec<(i64, String)> = collection
@@ -241,6 +282,14 @@ pub fn network(collection: &Collection) -> Result<Network> {
             ((to, from), kind.reversed())
         };
         pairs.entry(key).or_default().1.insert(kind);
+    }
+
+    // Geschwister ergeben sich aus gemeinsamen Eltern und müssen nicht eingetragen sein.
+    for (a, b, half) in derived_siblings(collection, &people) {
+        let set = &mut pairs.entry((a, b)).or_default().1;
+        if !set.contains(&Recorded::Sibling) {
+            set.insert(Recorded::DerivedSibling { half });
+        }
     }
 
     // Wichtigste Personen zuerst: Fotos, Beziehungen, Name, ID. Das ist auch die
