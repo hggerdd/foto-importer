@@ -1,3 +1,4 @@
+use super::progress::{PhaseState, Progress};
 use anyhow::{Result, bail};
 use std::sync::{
     Arc, Mutex,
@@ -14,6 +15,9 @@ pub struct Control {
     pub foreground: Arc<AtomicUsize>,
     pub background: bool,
     pub face_phase: Arc<Mutex<Option<FacePhase>>>,
+    pub phase: Arc<Mutex<PhaseState>>,
+    /// Entries committed so far by a batched write job; readers refresh when it grows.
+    pub committed: Arc<AtomicUsize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,6 +45,8 @@ impl Default for Control {
             foreground: foreground_count(),
             background: false,
             face_phase: Arc::new(Mutex::new(None)),
+            phase: Arc::new(Mutex::new(PhaseState::default())),
+            committed: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -92,7 +98,7 @@ impl Drop for Lane {
 }
 impl Control {
     pub fn set_face_phase(&self, phase: FacePhase) {
-        self.progress(0, 0);
+        self.phase("", "");
         if let Ok(mut current) = self.face_phase.lock() {
             *current = Some(phase);
         }
@@ -118,6 +124,39 @@ impl Control {
     pub fn progress(&self, done: usize, total: usize) {
         self.total.store(total, Ordering::Relaxed);
         self.done.store(done, Ordering::Relaxed);
+        if let Ok(mut phase) = self.phase.lock() {
+            phase.record(done);
+        }
+    }
+    /// Start a named phase: the count restarts, speed and remaining time are measured anew.
+    pub fn phase(&self, name: &str, unit: &'static str) {
+        self.total.store(0, Ordering::Relaxed);
+        self.done.store(0, Ordering::Relaxed);
+        if let Ok(mut phase) = self.phase.lock() {
+            phase.begin(name, unit);
+        }
+    }
+    /// Consistent view of phase, counts, smoothed speed and remaining time.
+    pub fn snapshot(&self) -> Progress {
+        let done = self.done.load(Ordering::Relaxed);
+        let total = self.total.load(Ordering::Relaxed);
+        self.phase
+            .lock()
+            .map(|phase| phase.snapshot(done, total))
+            .unwrap_or_else(|_| PhaseState::default().snapshot(done, total))
+    }
+    /// Duration of each phase in seconds, for measurements.
+    pub fn timings(&self) -> Vec<(String, f64)> {
+        self.phase
+            .lock()
+            .map(|phase| {
+                phase
+                    .timings()
+                    .into_iter()
+                    .map(|(name, time)| (name, time.as_secs_f64()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     pub fn stop(&self) {
         self.cancel.store(true, Ordering::Relaxed);

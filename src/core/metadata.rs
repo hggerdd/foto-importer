@@ -120,9 +120,13 @@ pub fn enrich_scoped(
     scope: &Scope,
 ) -> Result<String> {
     collection.writable()?;
+    control.phase("Reihenfolge festlegen (neueste zuerst)", "");
     let order = super::scope::metadata_order(collection, scope)?;
     let total = order.len();
     let mut done = 0;
+    let mut processed = 0;
+    control.phase("Metadaten lesen (ExifTool)", "Dateien");
+    control.progress(0, total);
     let mut position = 0;
     loop {
         control.checkpoint()?;
@@ -247,8 +251,10 @@ pub fn enrich_scoped(
             done += 1;
         }
         tx.commit()?;
-        control.progress(done, total);
+        processed += rows.len();
+        control.progress(processed, total);
     }
+    control.phase("Sicherung schreiben", "");
     collection.backup()?;
     Ok(format!("{done} Dateien mit Metadaten angereichert"))
 }
