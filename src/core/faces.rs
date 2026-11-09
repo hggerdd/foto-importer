@@ -137,8 +137,15 @@ pub(crate) fn save_setting(db: &rusqlite::Connection, key: &str, value: &str) ->
     Ok(())
 }
 pub fn people(collection: &Collection) -> Result<Vec<Person>> {
-    Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),(SELECT count(*) FROM faces f WHERE f.person_id=p.id AND f.assignment='user' AND f.retained=0),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='gender'),''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='note'),'') FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
-        .query_map([],|r|Ok(Person{id:r.get(0)?,name:r.get(1)?,birth:r.get(2)?,count:r.get(3)?,gender:r.get(4)?,note:r.get(5)?}))?.collect::<rusqlite::Result<_>>()?)
+    // Bestätigte Gesichter je Person in einer Gruppierung (Teilindex ix_faces_user_counts)
+    // statt einer korrelierten Unterabfrage je Person (ADR 0066).
+    let counts: BTreeMap<i64, usize> = collection
+        .db
+        .prepare("SELECT person_id,count(*) FROM faces WHERE assignment='user' AND retained=0 AND person_id IS NOT NULL GROUP BY person_id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='gender'),''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='note'),'') FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
+        .query_map([],|r|{let id:i64=r.get(0)?;Ok(Person{id,name:r.get(1)?,birth:r.get(2)?,count:counts.get(&id).copied().unwrap_or(0),gender:r.get(3)?,note:r.get(4)?})})?.collect::<rusqlite::Result<_>>()?)
 }
 pub fn configure_automatic(
     collection: &mut Collection,
@@ -180,7 +187,24 @@ pub fn configure_models(
     Ok(())
 }
 pub fn status(collection: &Collection) -> Result<Status> {
-    let mut status=collection.db.query_row("SELECT count(*),coalesce(sum(assignment='user'),0),coalesce(sum(person_id IS NULL AND ignored=0),0),coalesce(sum(assignment IN ('auto','suggested') AND ignored=0),0),coalesce(sum(ignored=1),0) FROM faces WHERE retained=0",[],|r|Ok(Status{total:r.get(0)?,confirmed:r.get(1)?,unknown:r.get(2)?,review:r.get(3)?,ignored:r.get(4)?,..Default::default()}))?;
+    let count =
+        |sql: &str| -> Result<usize> { Ok(collection.db.query_row(sql, [], |r| r.get(0))?) };
+    // Jede Zählung nutzt einen passenden Teilindex statt die ganze Gesichtstabelle zu lesen
+    // (ADR 0066); die Bedingungen entsprechen wörtlich den Indexdefinitionen.
+    let mut status = Status {
+        total: count(
+            "SELECT (SELECT count(*) FROM faces)-(SELECT count(*) FROM faces WHERE retained=1)",
+        )?,
+        confirmed: count("SELECT count(*) FROM faces WHERE assignment='user' AND retained=0")?,
+        unknown: count(
+            "SELECT count(*) FROM faces WHERE ignored=0 AND retained=0 AND person_id IS NULL",
+        )?,
+        review: count(
+            "SELECT count(*) FROM faces WHERE ignored=0 AND retained=0 AND assignment IN ('suggested','auto')",
+        )?,
+        ignored: count("SELECT count(*) FROM faces WHERE ignored=1 AND retained=0")?,
+        ..Default::default()
+    };
     status.detector = active_detector_key(collection)?.unwrap_or_default();
     status.embedder = setting(collection, "rust.embedder_key")?.unwrap_or_default();
     status.detector_id = setting(collection, "active_detector")?.unwrap_or_else(|| "yunet".into());
@@ -215,7 +239,7 @@ pub fn status(collection: &Collection) -> Result<Status> {
         |r| r.get(0),
     )?;
     status.analysed_photos = collection.db.query_row(
-        "SELECT count(*) FROM face_jobs j JOIN photos p ON p.id=j.photo_id WHERE p.status='present' AND j.stage='detect' AND j.model_id=? AND j.status='done'",
+        "SELECT count(*) FROM face_jobs j WHERE j.status='done' AND j.stage='detect' AND j.model_id=? AND EXISTS(SELECT 1 FROM photos p WHERE p.id=j.photo_id AND p.status='present')",
         [&status.detector], |r| r.get(0),
     )?;
     status.present_photos = collection.db.query_row(
@@ -455,20 +479,35 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             }
         }
     } else {
+        // Teilgruppen je Person zu höchstens `max` Gesichtern; die Reihenfolge (größte zuerst,
+        // dann Person, dann Teil) entsteht aus den Zählungen je Person statt aus Fensterfunktionen
+        // über alle Gesichter des Reiters (ADR 0066).
         let predicate = match mode {
-            "review" => "f.assignment IN ('auto','suggested') AND f.ignored=0",
+            "review" => "f.assignment IN ('suggested','auto') AND f.ignored=0",
             "ignored" => "f.ignored=1",
             "confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
         };
-        total_groups = collection.db.query_row(
-            &format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT count(*) FROM (SELECT 1 FROM ranked GROUP BY person_id,part)"),
-            [],
-            |r| r.get::<_, i64>(0),
-        )? as usize;
-        let parts=collection.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT {per_page} OFFSET ?"))?.query_map([(page as i64)*per_page],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        for (person, part) in parts {
-            let rows=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate}) r ON r.id=f.id WHERE r.rn>? AND r.rn<=? ORDER BY r.rn LIMIT {max}"))?.query_map(params![person,part*max,(part+1)*max],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let counts: Vec<(Option<i64>, i64)> = collection
+            .db
+            .prepare(&format!("SELECT f.person_id,count(*) FROM faces f WHERE f.retained=0 AND {predicate} GROUP BY f.person_id ORDER BY f.person_id"))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut parts: Vec<(i64, Option<i64>, i64)> = Vec::new();
+        for (person, count) in &counts {
+            for part in 0..(count + max - 1) / max {
+                parts.push(((count - part * max).min(max), *person, part));
+            }
+        }
+        // SQLite ordnet NULL vor Zahlen; `Option` verhält sich ebenso.
+        parts.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        total_groups = parts.len();
+        for (_, person, part) in parts
+            .into_iter()
+            .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
+            .take(crate::config::FACE_GROUPS_PER_PAGE)
+        {
+            let rows=collection.db.prepare_cached(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate} ORDER BY f.id LIMIT {max} OFFSET ?"))?.query_map(params![person,part*max],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !rows.is_empty() {
                 groups.push(rows);
             }
@@ -476,12 +515,16 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
     }
     let mut suggestions = BTreeMap::new();
     if !status.embedder.is_empty() {
+        let mut cache = super::recognition::SuggestionCache::default();
         for group in groups.iter().filter(|g| g[0].person.is_none()) {
             let ids: Vec<i64> = group.iter().map(|f| f.id).collect();
             // Fehlende Vorschläge dürfen die Gruppenansicht nicht blockieren.
-            if let Ok(found) =
-                super::recognition::group_suggestions(collection, &ids, &status.embedder)
-                && !found.items.is_empty()
+            if let Ok(found) = super::recognition::group_suggestions_cached(
+                collection,
+                &mut cache,
+                &ids,
+                &status.embedder,
+            ) && !found.items.is_empty()
             {
                 suggestions.insert(group[0].id, found);
             }

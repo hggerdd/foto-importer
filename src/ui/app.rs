@@ -438,7 +438,9 @@ impl PhotoApp {
             task: Task::start_control(
                 label,
                 Control {
-                    background: write,
+                    // Nutzeraktionen (Benennen, Rücknahme, Einzeländerung) warten nicht auf
+                    // laufende Lesevorgänge: nur lange Hintergrundaufträge geben nach (ADR 0066).
+                    background: write && !matches!(kind, "naming" | "undo" | "mutation"),
                     ..Default::default()
                 },
                 move |control| {

@@ -57,6 +57,11 @@ impl Collection {
             )?;
             db.busy_timeout(Duration::from_secs(5))?;
             db.execute_batch("PRAGMA cache_size=-16384; PRAGMA temp_store=FILE;")?;
+            if !write {
+                // Lesende Verbindungen sind kurzlebig und beginnen mit leerem Seitencache;
+                // Speicherabbildung vermeidet das erneute Kopieren der Seiten (ADR 0066).
+                db.execute_batch("PRAGMA mmap_size=536870912;")?;
+            }
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
             if version == 0 && write {
                 let tables:i64=db.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r|r.get(0))?;
@@ -80,6 +85,7 @@ impl Collection {
             }
             if write {
                 db.execute_batch("PRAGMA journal_mode=WAL;")?;
+                super::migrations::ensure_indexes(&db)?;
                 // Neue Beziehungstypen sind nur Zeilen; ältere Sammlungen erhalten sie beim
                 // Öffnen mit Schreibrecht. Schreibgeschützt bleibt alles unverändert.
                 db.execute_batch(&super::relations::seed_sql())?;

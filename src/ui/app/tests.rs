@@ -263,6 +263,28 @@ fn all_empty_workspaces_render_without_external_tools() {
     }
 }
 #[test]
+fn interactive_writes_do_not_yield_to_readers_but_maintenance_does() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let folder = tempfile::tempdir().expect("Ordner");
+    app.settings.collection = folder.path().to_string_lossy().into_owned();
+    app.launch("Benennen", true, "naming", |_| {
+        Ok(Outcome::Done(String::new()))
+    });
+    app.launch("Wartung", true, "maintenance", |_| {
+        Ok(Outcome::Done(String::new()))
+    });
+    let background = |kind: &str| {
+        app.tasks
+            .iter()
+            .find(|t| t.kind == kind)
+            .map(|t| t.task.control.background)
+    };
+    assert_eq!(background("naming"), Some(false));
+    assert_eq!(background("maintenance"), Some(true));
+}
+#[test]
 fn late_naming_result_from_another_collection_cannot_enter_undo() {
     let context = egui::Context::default();
     let creation = eframe::CreationContext::_new_kittest(context.clone());
