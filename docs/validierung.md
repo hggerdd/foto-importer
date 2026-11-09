@@ -142,6 +142,34 @@ Sichtprüfung am 09.11.2026 (Debug-Build, synthetische Demodaten, 61 Personen, 1
 Sichtbar: Tabelle mit Porträts, Sortierdreieck, Auswahlzeile, Detailspalte mit gefiltertem Auswahlfeld.
 Nicht geprüft: 980 × 680 per Bild (nur per Layouttest), Hell-Design, Mausrad, Screenreader. Die Demodaten
 enthalten weder Geburtsjahre noch Aufnahmedaten, daher zeigen diese Spalten dort „–“ (per Test mit Daten abgedeckt).
+## Zentrale Beziehungen (ADR 0065)
+
+Regressionen (`tests/central_relations.rs`, offline, `tempfile`): zwei Sammlungen und eine Zentraldatei;
+Beziehung in A erscheint nach dem Abgleich in B, zweiter Abgleich ohne Dublette; Löschen in A
+schreibt einen Grabstein, B behält seine Kante und meldet sie, nichts kehrt zentral zurück, Neuanlegen
+hebt den Grabstein auf; Zyklus über mehrere Personen und Eltern-Kante in Gegenrichtung werden nicht
+angelegt, sondern gemeldet (Wahl „zentral übernehmen“ scheitert dort ohne Änderung); die drei Wahlen
+„Lokal behalten und zentral ersetzen“, „Zentral übernehmen“, „Keine von beiden“; fehlende Person wird
+übersprungen und beim Übernehmen nachgezogen; Entscheidungen beider Sammlungen vereinigt;
+Zusammenführen mitten im Baum (zentral und in einer frischen dritten Sammlung); Migration einer
+Version-1-Datei mit Personen und Referenzausschnitten (Sicherung `*.v1.bak`, idempotent); neuere Version
+abgelehnt ohne Änderung; gesperrte und schreibgeschützte Datei; Parallelität (zwei Sammlungen, vier
+Schreiber-Threads); 5.000 Personen und rund 10.000 Beziehungen (Debug-Build: hoch ca. 1,1 s, herunter
+inkl. Personen ca. 0,6 s, Leerlauf ca. 0,5 s); Berichtszähler. Zusätzlich ein Gleichheitstest
+`Validator` gegen `validate_add` in `src/core/relations.rs`.
+
+Zwei-Sammlungen-Prüfung wiederholen: `cargo test -j 1 --test central_relations -- --nocapture`
+(die Zeiten des großen Tests stehen auf der Fehlerausgabe). Sichtprüfung: `cargo run -j 1 --example central_demo`
+erzeugt unter `tmp/central-demo` zwei synthetische Sammlungen, eine **temporäre** Zentraldatei im selben Ordner
+(`central_path` in den Demo-Einstellungen, nie der echte Bestand im Benutzerprofil) und drei Konflikte in B
+(Eltern-Kind gegen zentral Partner, Zyklus, zentral gelöschte Freundschaft). Start:
+`FOTO_IMPORTER_SETTINGS=tmp/central-demo/settings.json FOTO_IMPORTER_VIEW=people FOTO_IMPORTER_FACE_MODE=persons
+FOTO_IMPORTER_ACTION=central_sync FOTO_IMPORTER_CAPTURE=<Datei> FOTO_IMPORTER_CAPTURE_DELAY=8 cargo run`
+(`central_sync` öffnet den Bereich und gleicht einmal ab). Bild vom 09.11.2026 (Debug-Build, 1920 × 1200,
+dunkel): [Zentrale Beziehungen](screenshots/zentrale-beziehungen.png): Zähler „Beziehungen: …“, Konfliktgruppe
+mit „lokal: Anna ist Mutter von Ben“ / „zentral: Anna und Ben sind Partner“ und den drei Knöpfen. Nicht geprüft:
+Klick auf die Knöpfe per Maus (Kernlogik per Test), Hell-Design, 980 × 680, Liste mit vielen Konflikten.
+
 ## Indizierung in Stapeln mit Fortschritt (ADR 0064)
 
 Anlass: Ein Ordner mit über 30.000 Bildern zeigte nur „34195 gefunden, 356 s“.

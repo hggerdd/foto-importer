@@ -463,8 +463,9 @@ impl SyncReport {
     pub fn pending(&self) -> usize {
         self.missing.len() + self.conflicts.len() + self.ambiguous + self.relations.conflicts.len()
     }
-    pub fn summary(&self) -> String {
-        let mut text = format!(
+    /// Zusammenfassung des Personenabgleichs ohne den Beziehungsteil.
+    pub fn people_summary(&self) -> String {
+        format!(
             "Abgleich: {} verknüpft, {} zentral angelegt, {} lokal ergänzt, {} zentral ergänzt, {} Rückfragen, {} fehlen lokal",
             self.linked,
             self.created_central,
@@ -472,7 +473,10 @@ impl SyncReport {
             self.filled_central,
             self.conflicts.len(),
             self.missing.len()
-        );
+        )
+    }
+    pub fn summary(&self) -> String {
+        let mut text = self.people_summary();
         if self.relations.active {
             text.push_str(". ");
             text.push_str(&self.relations.summary());

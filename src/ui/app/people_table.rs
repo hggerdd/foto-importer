@@ -768,7 +768,10 @@ impl PhotoApp {
             ui.label("Der zentrale Bestand ist in den Einstellungen ausgeschaltet.");
             return;
         }
-        self.central_panel(ui);
+        egui::ScrollArea::vertical()
+            .id_salt("central-panel-scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.central_panel(ui));
     }
 
     fn panel_new_person(&mut self, ui: &mut egui::Ui) {

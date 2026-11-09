@@ -85,7 +85,7 @@ impl PhotoApp {
                         self.run_central(central::sync);
                     }
                     if let Some(report) = &self.central_ui.report {
-                        ui.label(RichText::new(report.summary()).small().weak());
+                        ui.label(RichText::new(report.people_summary()).small().weak());
                     }
                 });
                 if let Some(warning) = &self.central_ui.warning {
