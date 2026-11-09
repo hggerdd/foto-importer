@@ -678,7 +678,7 @@ impl PhotoApp {
         ui.label(RichText::new(format!("Rückfragen · {}", open.len())).strong());
         ui.label(
             RichText::new(
-                "Das könnte im Stammbaum fehlen. Nichts wird ohne deine Antwort ergänzt.",
+                "Das könnte im Stammbaum oder bei den Freundschaften fehlen. Nichts wird ohne deine Antwort ergänzt.",
             )
             .weak(),
         );
@@ -718,6 +718,17 @@ impl PhotoApp {
                         names(&s.targets)
                     ),
                     "Nein – Stiefbeziehung",
+                ),
+                SuggestionKind::FriendOfPartner => (
+                    format!(
+                        "{} ist mit {} befreundet. Ist {} (Partner von {}) auch mit {} befreundet?",
+                        names(&s.targets),
+                        names(&s.via),
+                        names(&s.candidates),
+                        names(&s.via),
+                        names(&s.targets)
+                    ),
+                    "Nein",
                 ),
             };
             ui.group(|ui| {

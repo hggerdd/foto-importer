@@ -1,9 +1,10 @@
-//! Rückfragen zu wahrscheinlich fehlenden Eltern-Kanten (ADR 0061).
+//! Rückfragen zu wahrscheinlich fehlenden Eltern-Kanten und Freundschaften (ADR 0061).
 //!
 //! Die App ergänzt nie stillschweigend. Sie findet Lücken und stellt eine Frage;
-//! die Antwort wird gespeichert: "Ja" legt Eltern-Kanten an, "Nein" speichert eine
-//! Ablehnung je (Kind, Elternteil)-Paar in `face_settings` (keine Schemaänderung),
-//! damit dieselbe Frage nie wiederkehrt.
+//! die Antwort wird gespeichert: "Ja" legt die Kanten an, "Nein" speichert eine
+//! Ablehnung je Paar in `face_settings` (keine Schemaänderung), damit dieselbe Frage
+//! nie wiederkehrt. Freundschaften: Ist Z mit X befreundet und X hat einen Partner Y,
+//! wird gefragt, ob Y auch mit Z befreundet ist.
 use super::collection::Collection;
 use super::kinship::Family;
 use super::relations::{self, Edge, Kind, Role, validate_add};
@@ -13,11 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Höchstzahl gleichzeitig angezeigter Rückfragen.
 pub const MAX_SUGGESTIONS: usize = 30;
 const SETTING_KEY: &str = "family.declined_parents";
+const FRIENDS_KEY: &str = "family.declined_friends";
 
 /// Gespeicherte Nutzerentscheidungen: (Kind, Elternteil) ist ausdrücklich abgelehnt.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Decisions {
     pub declined: BTreeSet<(i64, i64)>,
+    /// Ausdrücklich verneinte Freundschaften als Paar (kleinere ID, größere ID).
+    pub declined_friends: BTreeSet<(i64, i64)>,
 }
 
 impl Decisions {
@@ -30,15 +34,31 @@ impl Decisions {
     }
     fn decode(text: &str) -> Decisions {
         Decisions {
-            declined: text
-                .split(';')
-                .filter_map(|pair| {
-                    let (child, parent) = pair.split_once(':')?;
-                    Some((child.parse().ok()?, parent.parse().ok()?))
-                })
-                .collect(),
+            declined: decode_pairs(text),
+            ..Default::default()
         }
     }
+}
+
+fn decode_pairs(text: &str) -> BTreeSet<(i64, i64)> {
+    text.split(';')
+        .filter_map(|pair| {
+            let (first, second) = pair.split_once(':')?;
+            Some((first.parse().ok()?, second.parse().ok()?))
+        })
+        .collect()
+}
+
+fn encode_pairs(pairs: &BTreeSet<(i64, i64)>) -> String {
+    pairs
+        .iter()
+        .map(|(first, second)| format!("{first}:{second}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn friend_pair(a: i64, b: i64) -> (i64, i64) {
+    (a.min(b), a.max(b))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -47,6 +67,9 @@ pub enum SuggestionKind {
     SiblingParents,
     /// C hat Partner D und Kinder, D hat keine eigenen Kinder: ist D Elternteil?
     PartnerParent,
+    /// Z ist mit X befreundet, Y ist Partner von X: ist Y auch mit Z befreundet?
+    /// (`candidates` = Y, `targets` = Z, `via` = X.)
+    FriendOfPartner,
 }
 
 /// Eine Rückfrage: "Sind `candidates` auch Eltern von `targets`?"
@@ -72,14 +95,18 @@ pub enum Answer {
 /// Was eine Antwort bewirkt: Eltern-Kanten (Elternteil, Kind) und Ablehnungen (Kind, Elternteil).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
+    /// Kanten: (Elternteil, Kind) bzw. bei Freundschaften (Person, Person).
     pub add: Vec<(i64, i64)>,
     pub decline: Vec<(i64, i64)>,
+    /// Es geht um Freundschaften statt um Eltern-Kanten.
+    pub friend: bool,
 }
 
 pub fn plan(suggestion: &Suggestion, answer: Answer) -> Plan {
     let mut plan = Plan {
         add: vec![],
         decline: vec![],
+        friend: suggestion.kind == SuggestionKind::FriendOfPartner,
     };
     for &child in &suggestion.targets {
         for &parent in &suggestion.candidates {
@@ -181,6 +208,31 @@ pub fn suggestions(edges: &[Edge], decisions: &Decisions) -> Vec<Suggestion> {
             via: vec![c],
         });
     }
+    // 3. Freunde von Partnern: Z ist Freund von X, Y ist Partner von X.
+    let mut friends_of: BTreeMap<(i64, i64), BTreeSet<i64>> = BTreeMap::new();
+    for e in edges.iter().filter(|e| e.kind == Kind::Friend) {
+        for (x, z) in [(e.from, e.to), (e.to, e.from)] {
+            for &y in family.partners_of(x) {
+                if y != z
+                    && !decisions.declined_friends.contains(&friend_pair(y, z))
+                    && matches!(
+                        validate_add(edges, relations::canonical(y, Role::Friend, z)),
+                        Ok(true)
+                    )
+                {
+                    friends_of.entry((y, z)).or_default().insert(x);
+                }
+            }
+        }
+    }
+    for ((partner, friend), via) in friends_of {
+        out.push(Suggestion {
+            kind: SuggestionKind::FriendOfPartner,
+            candidates: vec![partner],
+            targets: vec![friend],
+            via: via.into_iter().collect(),
+        });
+    }
     out.sort_by(|x, y| {
         (x.kind, &x.targets, &x.candidates).cmp(&(y.kind, &y.targets, &y.candidates))
     });
@@ -189,13 +241,22 @@ pub fn suggestions(edges: &[Edge], decisions: &Decisions) -> Vec<Suggestion> {
 }
 
 pub fn load_decisions(collection: &Collection) -> Result<Decisions> {
-    Ok(super::faces::setting(collection, SETTING_KEY)?
+    let mut decisions = super::faces::setting(collection, SETTING_KEY)?
         .map(|text| Decisions::decode(&text))
-        .unwrap_or_default())
+        .unwrap_or_default();
+    decisions.declined_friends = super::faces::setting(collection, FRIENDS_KEY)?
+        .map(|text| decode_pairs(&text))
+        .unwrap_or_default();
+    Ok(decisions)
 }
 
 fn save_decisions(collection: &Collection, decisions: &Decisions) -> Result<()> {
-    super::faces::save_setting(&collection.db, SETTING_KEY, &decisions.encode())
+    super::faces::save_setting(&collection.db, SETTING_KEY, &decisions.encode())?;
+    super::faces::save_setting(
+        &collection.db,
+        FRIENDS_KEY,
+        &encode_pairs(&decisions.declined_friends),
+    )
 }
 
 /// Wendet eine Antwort an: legt Eltern-Kanten an (mit voller Prüfung) und speichert
@@ -203,12 +264,23 @@ fn save_decisions(collection: &Collection, decisions: &Decisions) -> Result<()> 
 pub fn apply(collection: &mut Collection, suggestion: &Suggestion, answer: Answer) -> Result<()> {
     collection.writable()?;
     let plan = plan(suggestion, answer);
-    for (parent, child) in &plan.add {
-        relations::add(collection, *parent, Role::Parent, *child)?;
+    let role = if plan.friend {
+        Role::Friend
+    } else {
+        Role::Parent
+    };
+    for (subject, object) in &plan.add {
+        relations::add(collection, *subject, role, *object)?;
     }
     if !plan.decline.is_empty() {
         let mut decisions = load_decisions(collection)?;
-        decisions.declined.extend(plan.decline);
+        if plan.friend {
+            decisions
+                .declined_friends
+                .extend(plan.decline.iter().map(|(a, b)| friend_pair(*a, *b)));
+        } else {
+            decisions.declined.extend(plan.decline);
+        }
         save_decisions(collection, &decisions)?;
     }
     Ok(())

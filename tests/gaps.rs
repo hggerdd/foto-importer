@@ -201,3 +201,93 @@ fn questions_are_bounded_and_ordered() {
     sorted.sort();
     assert_eq!(targets, sorted);
 }
+
+fn friend(a: i64, b: i64) -> Edge {
+    canonical(a, Role::Friend, b)
+}
+fn partner(a: i64, b: i64) -> Edge {
+    canonical(a, Role::Partner, b)
+}
+fn friend_questions(edges: &[Edge]) -> Vec<Suggestion> {
+    ask(edges)
+        .into_iter()
+        .filter(|s| s.kind == SuggestionKind::FriendOfPartner)
+        .collect()
+}
+
+#[test]
+fn a_new_friend_of_one_partner_is_asked_for_the_other_partner() {
+    // 1 und 2 sind Partner, 3 ist Freund von 1.
+    let found = friend_questions(&[partner(1, 2), friend(3, 1)]);
+    assert_eq!(
+        found,
+        vec![Suggestion {
+            kind: SuggestionKind::FriendOfPartner,
+            candidates: vec![2],
+            targets: vec![3],
+            via: vec![1],
+        }]
+    );
+    // Auch von der anderen Seite: 3 hat den Partner 4, dann gilt dieselbe Frage für 1.
+    let both = friend_questions(&[partner(1, 2), partner(3, 4), friend(3, 1)]);
+    let mut asked: Vec<(Vec<i64>, Vec<i64>)> = both
+        .iter()
+        .map(|s| (s.candidates.clone(), s.targets.clone()))
+        .collect();
+    asked.sort();
+    // Genau zwei Fragen: 2 zu Freund 3 und 4 zu Freund 1.
+    assert_eq!(asked, vec![(vec![2], vec![3]), (vec![4], vec![1])]);
+}
+
+#[test]
+fn nothing_is_asked_when_it_is_already_known_or_does_not_apply() {
+    // Schon befreundet oder bekannt, Partner untereinander, ehemaliger Partner, Selbstbezug.
+    assert!(friend_questions(&[partner(1, 2), friend(3, 1), friend(3, 2)]).is_empty());
+    assert!(
+        friend_questions(&[
+            partner(1, 2),
+            friend(3, 1),
+            canonical(3, Role::Acquaintance, 2)
+        ])
+        .is_empty()
+    );
+    assert!(friend_questions(&[partner(1, 2), friend(2, 1)]).is_empty());
+    assert!(friend_questions(&[canonical(1, Role::FormerPartner, 2), friend(3, 1)]).is_empty());
+    assert!(friend_questions(&[friend(3, 1)]).is_empty());
+}
+
+#[test]
+fn yes_adds_the_friendship_and_no_is_never_asked_again() -> anyhow::Result<()> {
+    let (_temp, mut c) = collection(4)?;
+    relations::add(&mut c, 1, Role::Partner, 2)?;
+    relations::add(&mut c, 3, Role::Friend, 1)?;
+    let question = friend_questions(&relations::load_edges(&c)?)
+        .into_iter()
+        .next()
+        .expect("Frage");
+    gaps::apply(&mut c, &question, Answer::All)?;
+    let edges = relations::load_edges(&c)?;
+    assert!(friend_questions(&edges).is_empty(), "Frage ist beantwortet");
+    // 2 ist jetzt mit 3 befreundet (symmetrisch gespeichert).
+    assert!(edges.contains(&friend(2, 3)) || edges.contains(&friend(3, 2)));
+
+    // Zweiter Fall: 4 ist Freund von 1; die Antwort Nein bleibt dauerhaft.
+    relations::add(&mut c, 4, Role::Friend, 1)?;
+    let question = friend_questions(&relations::load_edges(&c)?)
+        .into_iter()
+        .find(|s| s.targets == vec![4])
+        .expect("Frage zu 4");
+    gaps::apply(&mut c, &question, Answer::None)?;
+    let edges = relations::load_edges(&c)?;
+    let decisions = gaps::load_decisions(&c)?;
+    assert!(decisions.declined_friends.contains(&(2, 4)));
+    assert!(
+        gaps::suggestions(&edges, &decisions)
+            .iter()
+            .all(|s| !(s.kind == SuggestionKind::FriendOfPartner && s.targets == vec![4])),
+        "abgelehnt, nicht erneut fragen"
+    );
+    // Die Ablehnung der Eltern-Fragen bleibt davon unberührt.
+    assert!(decisions.declined.is_empty());
+    Ok(())
+}

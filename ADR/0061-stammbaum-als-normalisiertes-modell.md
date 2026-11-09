@@ -189,3 +189,7 @@ Tests: [Verwandtschaft](../tests/kinship.rs), [Rückfragen](../tests/gaps.rs),
 [Layout](../tests/tree_layout.rs), [Personen](../tests/people.rs),
 [Beziehungen, Altzeilen, Zusammenführung](../tests/relations.rs). Sichtprüfung mit synthetischen Daten
 (`examples/demo_faces.rs`) siehe [Prüfprotokoll](../docs/validierung.md). Echte Sammlungen wurden nicht geprüft.
+
+## Ergänzung 2026-11-09: Freunde der Partner
+
+Die Rückfragen erhalten einen dritten Typ. Ist Z mit X befreundet und Y Partner von X (aktueller Partner, kein früherer), fragt die App, ob Y auch mit Z befreundet ist. „Ja“ legt die Freundschaft an, „Nein“ speichert das Paar (kleinere, größere ID) in `face_settings` unter `family.declined_friends`, ohne Schemaänderung; die Frage kehrt nie wieder. Nicht gefragt wird bei bestehender Freundschaft oder Bekanntschaft, bei Selbstbezug und wenn `validate_add` die Kante ablehnen würde. Die Frage gilt für jede vorhandene Freundschaftskante, auch für ältere, und in beide Richtungen (Partner von X und Partner von Z).
