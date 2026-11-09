@@ -842,9 +842,12 @@ impl PhotoApp {
                 {
                     let root = self.settings.collection.clone();
                     self.undo.clear();
+                    let config = self.settings.central();
                     self.launch("Person anlegen", true, "mutation", move |_| {
                         let mut c = Collection::open(Path::new(&root), true)?;
-                        Ok(Outcome::PersonAdded(faces::add_person(&mut c, &new)?))
+                        let (id, note) =
+                            crate::core::central::add_person_synced(&mut c, &config, &new)?;
+                        Ok(Outcome::Synced(Box::new(Outcome::PersonAdded(id)), note))
                     });
                     state.new_name.clear();
                     state.new_birth.clear();

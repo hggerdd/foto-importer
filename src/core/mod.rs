@@ -1,3 +1,4 @@
+pub mod central;
 pub mod classifier;
 pub mod collection;
 pub mod dng_updates;

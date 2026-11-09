@@ -254,6 +254,10 @@ impl PhotoApp {
                 });
                 egui::CollapsingHeader::new("Biometrie entfernen").show(ui, |ui| {
                     ui.label("Entfernt Gesichter, Personen und bekannte Biometrie-Sicherungen. Fotos und Inventar bleiben erhalten.");
+                    ui.checkbox(
+                        &mut self.central_ui.wipe_references,
+                        "Auch zentral gespeicherte Referenzbilder löschen (Personen im zentralen Bestand bleiben)",
+                    );
                     ui.horizontal_wrapped(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut self.delete_phrase).hint_text("BIOMETRIE eingeben"));
                         if ui.add_enabled(!self.busy() && self.delete_phrase == "BIOMETRIE", egui::Button::new("Dauerhaft entfernen")).clicked() {

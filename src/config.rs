@@ -66,6 +66,12 @@ pub struct Settings {
     pub folder_tree_open: bool,
     /// Breite des Ordnerbaums in Punkten, begrenzt auf [`FOLDER_TREE_WIDTH`].
     pub folder_tree_width: f32,
+    /// Zentralen Personenbestand verwenden (ADR 0062).
+    pub central_enabled: bool,
+    /// Ort der Zentraldatei; leer bedeutet `central.sqlite` neben der Einstellungsdatei.
+    pub central_path: String,
+    /// Opt-in: Referenzausschnitte zentral speichern (Biometrie, Standard aus).
+    pub central_images: bool,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -88,6 +94,9 @@ impl Default for Settings {
             work_in_folder: false,
             folder_tree_open: true,
             folder_tree_width: 230.0,
+            central_enabled: true,
+            central_path: String::new(),
+            central_images: false,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
@@ -110,6 +119,21 @@ impl Settings {
                     .join("FotoImporter")
                     .join("settings.json")
             })
+    }
+    /// Standardort der Zentraldatei im Benutzerprofil.
+    pub fn default_central_path() -> PathBuf {
+        Self::path().with_file_name("central.sqlite")
+    }
+    pub fn central(&self) -> crate::core::central::CentralConfig {
+        crate::core::central::CentralConfig {
+            enabled: self.central_enabled,
+            path: if self.central_path.trim().is_empty() {
+                Self::default_central_path()
+            } else {
+                PathBuf::from(self.central_path.trim())
+            },
+            images: self.central_images,
+        }
     }
     pub fn load() -> Self {
         std::fs::read(Self::path())
