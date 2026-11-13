@@ -1,123 +1,164 @@
-//! Lazily loaded folder tree of a collection (ADR-0057).
+//! Folder tree of a collection (ADR-0057, ADR-0067).
 //!
-//! One call returns one page of the direct subfolders of one folder, each with the
-//! number of photos below it. The whole tree is never materialised.
+//! The complete overview (every folder with the number of photos below it) is read in one pass
+//! and kept in memory; expanding and collapsing happens without database access.
 
 use super::collection::Collection;
 use anyhow::Result;
-use rusqlite::{ToSql, types::Null};
 
-/// Maximum number of subfolders per page and level.
-pub const FOLDER_PAGE: usize = 200;
-
+/// One folder with the photos in it and all folders below it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FolderNode {
-    /// Name of the folder (a single path segment).
-    pub name: String,
-    /// Photos in this folder and all folders below it, one per photo (preferred variant).
-    pub photos: usize,
-    /// True if the folder contains at least one subfolder with photos.
-    pub has_children: bool,
+struct Node {
+    name: String,
+    path: String,
+    photos: usize,
+    children: Vec<Node>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FolderPage {
-    pub folders: Vec<FolderNode>,
-    pub more: bool,
-}
-
-/// SQL on the existing `ix_files_directory_name` index: a range over `files.dir`, joined to the
-/// preferred variant in `metadata_photos` through its primary key. The same projection and the
-/// same relpath prefix semantics as the folder filter of `metadata::search` apply, so the
-/// counts match the number of photos shown after selecting the folder.
-fn sql(root: bool) -> String {
-    let bounds = if root {
-        "f.dir>''"
+/// Photos per directory (`""` is the collection root), one row per photo (preferred variant,
+/// no sidecars). One pass over the collection: the whole overview is read at once, because the
+/// number of directories is small compared to the number of photos.
+///
+/// With the covering index `ix_files_dir_cover` (additive, see ADR 0067) the scan stays inside
+/// the index; without it (read-only collection of an older version) the same result comes from
+/// the relative paths in `metadata_photos`.
+pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
+    let covered: bool = collection.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='ix_files_dir_cover')",
+        [],
+        |r| r.get(0),
+    )?;
+    let sql = if covered {
+        "SELECT f.dir,count(*) FROM files f INDEXED BY ix_files_dir_cover
+         JOIN metadata_photos p ON p.photo_id=f.photo_id AND p.file_id=f.id GROUP BY f.dir"
     } else {
-        "f.dir>=?1 AND f.dir<?2"
+        "SELECT rtrim(rtrim(relpath,replace(relpath,'/','')),'/'),count(*) FROM metadata_photos GROUP BY 1"
     };
-    format!(
-        "SELECT child,count(*),max(instr(sub,'/')>0) FROM (
-            SELECT substr(f.dir,?3,instr(substr(f.dir,?3)||'/','/')-1) child, substr(f.dir,?3) sub
-            FROM files f INDEXED BY ix_files_directory_name
-            JOIN metadata_photos p ON p.photo_id=f.photo_id AND p.file_id=f.id
-            WHERE {bounds})
-         GROUP BY child ORDER BY child COLLATE NOCASE,child LIMIT ?4 OFFSET ?5"
-    )
-}
-
-fn arguments(parent: &str, page: usize) -> (bool, Vec<Box<dyn ToSql>>) {
-    let root = parent.is_empty();
-    let prefix = if root {
-        String::new()
-    } else {
-        format!("{parent}/")
-    };
-    let start = prefix.chars().count() as i64 + 1;
-    let offset = page.saturating_mul(FOLDER_PAGE).min(i64::MAX as usize) as i64;
-    let limit = FOLDER_PAGE as i64 + 1;
-    if root {
-        (
-            root,
-            vec![
-                Box::new(Null),
-                Box::new(Null),
-                Box::new(start),
-                Box::new(limit),
-                Box::new(offset),
-            ],
-        )
-    } else {
-        // '0' is the successor of '/', so [prefix, upper) covers exactly the paths below `parent`.
-        (
-            root,
-            vec![
-                Box::new(prefix),
-                Box::new(format!("{parent}0")),
-                Box::new(start),
-                Box::new(limit),
-                Box::new(offset),
-            ],
-        )
-    }
-}
-
-/// Direct subfolders of `parent` (`""` is the collection root, otherwise a relative path with `/`).
-/// `page` counts from 0. Cancellation works through [`Collection::cancel_with`].
-pub fn children(collection: &Collection, parent: &str, page: usize) -> Result<FolderPage> {
-    let (root, args) = arguments(parent, page);
-    let mut statement = collection.db.prepare(&sql(root))?;
-    let mut rows = statement.query(rusqlite::params_from_iter(args.iter().map(|a| &**a)))?;
-    let mut folders = Vec::new();
+    let mut statement = collection.db.prepare(sql)?;
+    let mut rows = statement.query([])?;
+    let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        folders.push(FolderNode {
-            name: row.get(0)?,
-            photos: row.get::<_, i64>(1)? as usize,
-            has_children: row.get::<_, i64>(2)? != 0,
-        });
+        out.push((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize));
     }
-    let more = folders.len() > FOLDER_PAGE;
-    folders.truncate(FOLDER_PAGE);
-    Ok(FolderPage { folders, more })
+    Ok(out)
 }
 
-/// EXPLAIN QUERY PLAN lines of the child query, used by the regression test.
-pub fn plan(collection: &Collection, parent: &str) -> Result<Vec<String>> {
-    let (root, args) = arguments(parent, 0);
-    let mut statement = collection
-        .db
-        .prepare(&format!("EXPLAIN QUERY PLAN {}", sql(root)))?;
-    let rows = statement.query_map(rusqlite::params_from_iter(args.iter().map(|a| &**a)), |r| {
-        r.get::<_, String>(3)
-    })?;
+/// EXPLAIN QUERY PLAN lines of the directory query on the covering index (regression test).
+pub fn plan(collection: &Collection) -> Result<Vec<String>> {
+    let mut statement = collection.db.prepare(
+        "EXPLAIN QUERY PLAN SELECT f.dir,count(*) FROM files f INDEXED BY ix_files_dir_cover
+         JOIN metadata_photos p ON p.photo_id=f.photo_id AND p.file_id=f.id GROUP BY f.dir",
+    )?;
+    let rows = statement.query_map([], |r| r.get::<_, String>(3))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-#[derive(Clone, Debug, Default)]
-struct Level {
-    folders: Vec<FolderNode>,
-    next_page: usize,
-    more: bool,
+fn char_class(c: char) -> u8 {
+    if c.is_ascii_digit() {
+        1
+    } else if c.is_alphabetic() {
+        2
+    } else {
+        0
+    }
+}
+
+/// Lower-case letter without the common umlaut/accent, so `Ä` sorts next to `a`.
+fn base_letter(c: char) -> char {
+    match c.to_lowercase().next().unwrap_or(c) {
+        'ä' | 'á' | 'à' | 'â' | 'ã' | 'å' => 'a',
+        'ö' | 'ó' | 'ò' | 'ô' | 'õ' => 'o',
+        'ü' | 'ú' | 'ù' | 'û' => 'u',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ç' => 'c',
+        'ñ' => 'n',
+        other => other,
+    }
+}
+
+fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut digits = String::new();
+    while let Some(&ch) = it.peek() {
+        if !ch.is_ascii_digit() {
+            break;
+        }
+        digits.push(ch);
+        it.next();
+    }
+    digits.trim_start_matches('0').to_owned()
+}
+
+/// Order of the Windows Explorer: symbols such as `_` first, then digits (as numbers, so `2`
+/// before `10`), then letters without regard to case.
+pub fn explorer_order(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => break,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let (m, n) = (digit_run(&mut x), digit_run(&mut y));
+                let order = m.len().cmp(&n.len()).then_with(|| m.cmp(&n));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(c), Some(d)) => {
+                let order = char_class(c)
+                    .cmp(&char_class(d))
+                    .then_with(|| base_letter(c).cmp(&base_letter(d)));
+                if order != Ordering::Equal {
+                    return order;
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
+    a.cmp(b)
+}
+
+#[derive(Default)]
+struct Draft {
+    photos: usize,
+    children: std::collections::BTreeMap<String, Draft>,
+}
+
+fn finish(parent: &str, draft: Draft) -> Vec<Node> {
+    let mut nodes: Vec<Node> = draft
+        .children
+        .into_iter()
+        .map(|(name, child)| {
+            let path = if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}/{name}")
+            };
+            Node {
+                photos: child.photos,
+                children: finish(&path, child),
+                name,
+                path,
+            }
+        })
+        .collect();
+    nodes.sort_by(|a, b| explorer_order(&a.name, &b.name));
+    nodes
+}
+
+fn build(directories: &[(String, usize)]) -> Vec<Node> {
+    let mut root = Draft::default();
+    for (dir, count) in directories {
+        let mut at = &mut root;
+        for part in dir.split('/').filter(|part| !part.is_empty()) {
+            at = at.children.entry(part.to_owned()).or_default();
+            at.photos += count;
+        }
+    }
+    finish("", root)
 }
 
 /// One visible line of the tree, in display order.
@@ -131,11 +172,6 @@ pub enum Row {
         has_children: bool,
         expanded: bool,
     },
-    /// "weitere …": the next page of the level below `parent` is still missing.
-    More {
-        parent: String,
-        depth: usize,
-    },
     Loading {
         depth: usize,
     },
@@ -144,26 +180,24 @@ pub enum Row {
     },
 }
 
-/// Loaded levels and expansion state of the folder tree, independent of the UI toolkit.
-/// A level is only requested once its parent is expanded; pages append to a level.
+/// Folder overview and expansion state, independent of the UI toolkit. The complete tree is
+/// read in one worker request and kept in memory; expanding and collapsing never touches the
+/// database. After a change of the collection the old tree stays visible until the new one
+/// arrives.
 #[derive(Clone, Debug, Default)]
 pub struct FolderTree {
-    levels: std::collections::BTreeMap<String, Level>,
+    nodes: Option<Vec<Node>>,
     expanded: std::collections::BTreeSet<String>,
-    queued: Vec<(String, usize)>,
-    inflight: Vec<(String, usize)>,
-    failed: std::collections::BTreeSet<String>,
+    stale: bool,
+    loading: bool,
+    failed: bool,
 }
 
-/// Upper bound of levels per worker request.
-const BATCH: usize = 24;
-
 impl FolderTree {
-    /// Forget loaded levels (contents changed) but keep what the user expanded.
+    /// Contents changed: read again, but keep what is shown and what the user expanded.
     pub fn reset(&mut self) {
-        let expanded = std::mem::take(&mut self.expanded);
-        *self = Self::default();
-        self.expanded = expanded;
+        self.stale = true;
+        self.failed = false;
     }
 
     /// Expands the ancestors of `folder` so that the selected folder is reachable.
@@ -195,118 +229,78 @@ impl FolderTree {
         self.expanded.insert(path.to_owned());
     }
 
-    /// Asks for the next page of a level ("weitere …").
-    pub fn request_more(&mut self, parent: &str) {
-        if let Some(level) = self.levels.get(parent)
-            && level.more
-        {
-            let request = (parent.to_owned(), level.next_page);
-            if !self.queued.contains(&request) && !self.inflight.contains(&request) {
-                self.queued.push(request);
-            }
-        }
+    /// True if a worker should read the overview now.
+    pub fn needs_load(&self) -> bool {
+        (self.nodes.is_none() || self.stale) && !self.loading && !self.failed
     }
 
-    /// Levels to load now: the root, expanded folders and queued pages, bounded per request.
-    pub fn wanted(&self) -> Vec<(String, usize)> {
-        let mut wanted = Vec::new();
-        for path in std::iter::once(&String::new()).chain(self.expanded.iter()) {
-            if !self.levels.contains_key(path)
-                && !self.failed.contains(path)
-                && !self.inflight.iter().any(|(p, _)| p == path)
-            {
-                wanted.push((path.clone(), 0));
-            }
-        }
-        for request in &self.queued {
-            if !self.inflight.contains(request) {
-                wanted.push(request.clone());
-            }
-        }
-        wanted.truncate(BATCH);
-        wanted
-    }
-
-    /// Marks a batch as handed to a worker.
-    pub fn begin(&mut self, batch: &[(String, usize)]) {
-        self.queued.retain(|request| !batch.contains(request));
-        self.inflight = batch.to_vec();
+    /// Marks the read as handed to a worker.
+    pub fn begin(&mut self) {
+        self.loading = true;
+        self.stale = false;
     }
 
     pub fn is_loading(&self) -> bool {
-        !self.inflight.is_empty()
+        self.loading
     }
 
-    pub fn apply(&mut self, results: Vec<(String, usize, FolderPage)>) {
-        for (parent, page, loaded) in results {
-            let level = self.levels.entry(parent).or_default();
-            if page == 0 {
-                level.folders.clear();
-            } else if page != level.next_page {
-                continue;
-            }
-            level.folders.extend(loaded.folders);
-            level.next_page = page + 1;
-            level.more = loaded.more;
-        }
-        self.inflight.clear();
+    pub fn apply(&mut self, directories: &[(String, usize)]) {
+        self.nodes = Some(build(directories));
+        self.loading = false;
+        self.failed = false;
     }
 
-    /// A worker failed: do not retry the same levels in a loop.
+    /// A worker failed: do not retry in a loop.
     pub fn fail(&mut self) {
-        for (parent, _) in std::mem::take(&mut self.inflight) {
-            self.failed.insert(parent);
-        }
+        self.loading = false;
+        self.failed = true;
     }
 
     pub fn retry_failed(&mut self) {
-        self.failed.clear();
+        self.failed = false;
     }
 
     pub fn has_failures(&self) -> bool {
-        !self.failed.is_empty()
+        self.failed
     }
 
-    /// Visible rows below the root, depth first. Only loaded and expanded levels appear.
+    /// Number of folders in the tree (all levels).
+    pub fn folder_count(&self) -> usize {
+        fn count(nodes: &[Node]) -> usize {
+            nodes.iter().map(|n| 1 + count(&n.children)).sum()
+        }
+        self.nodes.as_deref().map_or(0, count)
+    }
+
+    /// Visible rows below the root, depth first. Only expanded folders show their children.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
-        self.collect("", 0, &mut rows);
+        match &self.nodes {
+            None => rows.push(if self.failed {
+                Row::Failed { depth: 0 }
+            } else {
+                Row::Loading { depth: 0 }
+            }),
+            Some(nodes) => self.collect(nodes, 0, &mut rows),
+        }
         rows
     }
 
-    fn collect(&self, parent: &str, depth: usize, rows: &mut Vec<Row>) {
-        let Some(level) = self.levels.get(parent) else {
-            rows.push(if self.failed.contains(parent) {
-                Row::Failed { depth }
-            } else {
-                Row::Loading { depth }
-            });
-            return;
-        };
-        for node in &level.folders {
-            let path = if parent.is_empty() {
-                node.name.clone()
-            } else {
-                format!("{parent}/{}", node.name)
-            };
-            let expanded = node.has_children && self.expanded.contains(&path);
+    fn collect(&self, nodes: &[Node], depth: usize, rows: &mut Vec<Row>) {
+        for node in nodes {
+            let has_children = !node.children.is_empty();
+            let expanded = has_children && self.expanded.contains(&node.path);
             rows.push(Row::Node {
-                path: path.clone(),
+                path: node.path.clone(),
                 name: node.name.clone(),
                 depth,
                 photos: node.photos,
-                has_children: node.has_children,
+                has_children,
                 expanded,
             });
             if expanded {
-                self.collect(&path, depth + 1, rows);
+                self.collect(&node.children, depth + 1, rows);
             }
-        }
-        if level.more {
-            rows.push(Row::More {
-                parent: parent.to_owned(),
-                depth,
-            });
         }
     }
 }
@@ -315,85 +309,108 @@ impl FolderTree {
 mod tests {
     use super::*;
 
-    fn page(names: &[(&str, usize, bool)], more: bool) -> FolderPage {
-        FolderPage {
-            folders: names
-                .iter()
-                .map(|(name, photos, has_children)| FolderNode {
-                    name: (*name).into(),
-                    photos: *photos,
-                    has_children: *has_children,
-                })
-                .collect(),
-            more,
-        }
+    fn dirs(list: &[(&str, usize)]) -> Vec<(String, usize)> {
+        list.iter().map(|(d, n)| ((*d).to_owned(), *n)).collect()
+    }
+
+    fn names(tree: &FolderTree) -> Vec<String> {
+        tree.rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                Row::Node { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn levels_load_only_when_their_parent_is_expanded() {
+    fn the_whole_tree_is_built_at_once_and_expansion_needs_no_loading() {
         let mut tree = FolderTree::default();
-        assert_eq!(tree.wanted(), [(String::new(), 0)]);
-        tree.begin(&tree.wanted());
-        assert!(tree.wanted().is_empty() && tree.is_loading());
-        tree.apply(vec![(String::new(), 0, page(&[("2024", 5, true)], false))]);
-        assert!(tree.wanted().is_empty());
+        assert!(tree.needs_load());
+        tree.begin();
+        assert!(!tree.needs_load() && tree.is_loading());
         assert!(matches!(
             tree.rows().as_slice(),
-            [Row::Node {
-                expanded: false,
-                ..
-            }]
+            [Row::Loading { depth: 0 }]
         ));
+        tree.apply(&dirs(&[
+            ("", 2),
+            ("2024/05", 4),
+            ("2024/06", 1),
+            ("2025", 3),
+        ]));
+        assert_eq!(names(&tree), ["2024", "2025"]);
         tree.toggle("2024");
-        assert_eq!(tree.wanted(), [("2024".to_owned(), 0)]);
-        assert!(matches!(
-            tree.rows().last(),
-            Some(Row::Loading { depth: 1 })
-        ));
-        tree.begin(&tree.wanted());
-        tree.apply(vec![("2024".into(), 0, page(&[("05", 4, false)], false))]);
-        assert_eq!(tree.rows().len(), 2);
+        assert_eq!(names(&tree), ["2024", "2024/05", "2024/06", "2025"]);
+        assert!(!tree.needs_load());
+        let Row::Node { photos, .. } = &tree.rows()[0] else {
+            panic!("expected a folder row")
+        };
+        assert_eq!(*photos, 5, "photos below a folder are summed up");
         tree.toggle("2024");
-        assert_eq!(tree.rows().len(), 1);
+        assert_eq!(names(&tree), ["2024", "2025"]);
+        assert_eq!(tree.folder_count(), 4);
     }
 
     #[test]
-    fn reveal_expands_only_ancestors_and_pages_append() {
+    fn reveal_expands_only_ancestors_and_reset_keeps_the_old_tree_visible() {
         let mut tree = FolderTree::default();
         tree.reveal("a/b/c");
         assert!(tree.is_expanded("a") && tree.is_expanded("a/b") && !tree.is_expanded("a/b/c"));
-        let wanted = tree.wanted();
-        assert_eq!(wanted.len(), 3, "{wanted:?}");
-        tree.begin(&wanted);
-        tree.apply(vec![(String::new(), 0, page(&[("a", 1, true)], true))]);
-        assert!(
-            tree.rows()
-                .iter()
-                .any(|row| matches!(row, Row::Loading { depth: 1 }))
+        tree.begin();
+        tree.apply(&dirs(&[("a/b/c", 1)]));
+        assert_eq!(names(&tree), ["a", "a/b", "a/b/c"]);
+        tree.reset();
+        assert!(tree.needs_load());
+        assert_eq!(
+            names(&tree).len(),
+            3,
+            "old tree stays until the new one arrives"
         );
-        tree.request_more("");
-        assert!(tree.wanted().contains(&(String::new(), 1)));
-        tree.begin(&[(String::new(), 1)]);
-        tree.apply(vec![(String::new(), 1, page(&[("b", 2, false)], false))]);
-        let names: Vec<_> = tree
-            .rows()
-            .into_iter()
-            .filter_map(|row| match row {
-                Row::Node { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(names, ["a", "b"]);
     }
 
     #[test]
-    fn failed_levels_are_not_retried_in_a_loop() {
+    fn failed_reads_are_not_retried_in_a_loop() {
         let mut tree = FolderTree::default();
-        tree.begin(&tree.wanted());
+        tree.begin();
         tree.fail();
-        assert!(tree.wanted().is_empty() && tree.has_failures());
+        assert!(!tree.needs_load() && tree.has_failures());
         assert!(matches!(tree.rows().as_slice(), [Row::Failed { .. }]));
         tree.retry_failed();
-        assert_eq!(tree.wanted().len(), 1);
+        assert!(tree.needs_load());
+    }
+
+    #[test]
+    fn folders_are_sorted_like_the_explorer() {
+        let mut list = vec![
+            "Zebra",
+            "apfel",
+            "10 Urlaub",
+            "2 Urlaub",
+            "_Sortiert",
+            "-neu",
+            "2024",
+            "02",
+            "Äpfel",
+            "_alt",
+            "2024-05",
+        ];
+        list.sort_by(|a, b| explorer_order(a, b));
+        assert_eq!(
+            list,
+            [
+                "-neu",
+                "_alt",
+                "_Sortiert",
+                "02",
+                "2 Urlaub",
+                "10 Urlaub",
+                "2024",
+                "2024-05",
+                "apfel",
+                "Äpfel",
+                "Zebra"
+            ]
+        );
     }
 }

@@ -20,7 +20,7 @@ use crate::{
         collection::{Collection, CollectionStatus},
         faces::{self, Face, FacePage, Undo},
         files::{self, Scan, SourceFile},
-        folders::{FolderPage, FolderTree},
+        folders::FolderTree,
         jobs::{Control, FacePhase, Task},
         metadata::{self, Photo, Rule, Search, SearchPage},
         previews::PreviewRequest,
@@ -61,7 +61,7 @@ enum Pick {
 enum Outcome {
     Scan(u64, Scan),
     Search(u64, CollectionStatus, SearchPage, Search),
-    Folders(u64, Vec<(String, usize, FolderPage)>),
+    Folders(u64, Vec<(String, usize)>),
     Faces(u64, usize, FacePage),
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
@@ -888,7 +888,7 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Folders(revision, levels)) if revision == self.folder_revision => {
-                    self.folder_tree.apply(levels);
+                    self.folder_tree.apply(&levels);
                 }
                 Ok(Outcome::Faces(revision, index, page)) if revision == self.face_revision => {
                     if self.view != View::Settings

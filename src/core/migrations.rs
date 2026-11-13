@@ -107,6 +107,10 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
 /// bleibt unverändert. Name und Definition müssen zu `schema.sql` passen (Test).
 pub const ADDITIVE_INDEXES: &[(&str, &str)] = &[
     (
+        "ix_files_dir_cover",
+        "CREATE INDEX IF NOT EXISTS ix_files_dir_cover ON files(dir,photo_id,id)",
+    ),
+    (
         "ix_faces_user_counts",
         "CREATE INDEX IF NOT EXISTS ix_faces_user_counts ON faces(person_id) WHERE assignment='user' AND retained=0",
     ),

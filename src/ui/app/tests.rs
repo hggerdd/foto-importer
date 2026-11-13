@@ -25,7 +25,7 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
 }
 
 #[test]
-fn folder_tree_loads_levels_lazily_on_a_worker_and_reveals_the_selection() -> anyhow::Result<()> {
+fn folder_tree_loads_completely_on_a_worker_and_reveals_the_selection() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     {
         let c = Collection::open(root.path(), true)?;
@@ -46,7 +46,7 @@ fn folder_tree_loads_levels_lazily_on_a_worker_and_reveals_the_selection() -> an
         for _ in 0..2000 {
             app.sync_folder_tree();
             app.poll(&ctx);
-            if app.tasks.is_empty() && app.folder_tree.wanted().is_empty() {
+            if app.tasks.is_empty() && !app.folder_tree.needs_load() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -63,7 +63,7 @@ fn folder_tree_loads_levels_lazily_on_a_worker_and_reveals_the_selection() -> an
             })
             .collect::<Vec<_>>()
     };
-    // Root and the path to the selected folder are loaded, siblings stay collapsed.
+    // The whole tree is loaded at once; only the path to the selected folder is expanded.
     assert_eq!(names(&app), ["2024", "2024/05", "2024/06", "2025"]);
     app.folder_tree.collapse("2024");
     assert_eq!(names(&app), ["2024", "2025"]);

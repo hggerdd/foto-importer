@@ -98,6 +98,8 @@ CREATE INDEX ix_files_photo ON files(photo_id);
 
 CREATE INDEX ix_files_directory_name ON files(dir,name);
 
+CREATE INDEX ix_files_dir_cover ON files(dir,photo_id,id);
+
 CREATE INDEX ix_embeddings_model ON face_embeddings(embedder_id,face_id);
 
 CREATE INDEX ix_training_model ON training_set(embedder_id,split,person_id,face_id);
