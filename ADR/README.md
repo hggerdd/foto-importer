@@ -134,4 +134,5 @@ Die ADRs 0001–0034 dokumentieren die Python-Referenz; deren Codebelege verlink
 | [0065](0065-zentrale-beziehungen.md) | Beziehungen zentral speichern und abgleichen (Schema 2, Grabsteine, Rückfragen); setzt Phase 2 aus 0062 um | Akzeptiert |
 | [0066](0066-schnelles-speichern-von-gesichtsgruppen.md) | Schnelles Speichern von Gesichtsgruppen: Referenzen je Lesestand einmal, Seiten ohne Fensterfunktionen, additive Teilindizes, Nutzerschreibaufträge ohne Wartezeit; ergänzt 0004, 0022, 0024, 0042, 0064 | Akzeptiert |
 | [0067](0067-kompletter-ordnerbaum.md) | Kompletter Ordnerbaum in einem Durchgang, Abdeckungsindex, Explorer-Sortierung | Akzeptiert |
+| [0068](0068-schnelle-personenseite-gesichtskacheln-und-sofortiges-bestaetigen.md) | Schnelle Personenseite: Gesichtskachel-Cache (Dateien, ohne Schemaänderung), parallele Vorschau, sofortiges Bestätigen mit Hintergrund-Schreibauftrag; ergänzt 0004, 0008, 0066 | Akzeptiert |
 | [0070](0070-agenten-arbeiten-im-projektordner.md) | Unteragenten arbeiten ausschließlich im Projektordner (worktrees/, Build-Ausgaben, tmp) | Akzeptiert |

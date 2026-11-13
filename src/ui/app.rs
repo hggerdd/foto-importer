@@ -2,6 +2,7 @@ mod central_view;
 mod collection_view;
 mod folder_tree;
 mod import_view;
+mod optimistic;
 mod people_table;
 mod people_view;
 mod progress_view;
@@ -87,6 +88,8 @@ struct Running {
     write: bool,
     kind: &'static str,
     collection: String,
+    /// Gesichter, die bis zum Ende dieses Auftrags aus den Seiten ausgeblendet bleiben.
+    hides: Vec<i64>,
 }
 impl Running {
     fn is_face_matching(&self) -> bool {
@@ -425,6 +428,16 @@ impl PhotoApp {
         kind: &'static str,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
+        self.launch_hiding(label, write, kind, Vec::new(), work);
+    }
+    fn launch_hiding(
+        &mut self,
+        label: &str,
+        write: bool,
+        kind: &'static str,
+        hides: Vec<i64>,
+        work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
+    ) {
         if write && kind != "copy" && kind != "maintenance" {
             for task in &self.tasks {
                 if task.kind == "maintenance" {
@@ -475,6 +488,7 @@ impl PhotoApp {
             write,
             kind,
             collection: self.settings.collection.clone(),
+            hides,
         });
     }
     fn message(&mut self, text: String, error: bool) {
@@ -817,6 +831,14 @@ impl PhotoApp {
                     self.folder_tree.fail();
                 }
                 Err(e) => {
+                    // Misslungene Benennung: die Gesichter erscheinen beim Neulesen wieder.
+                    if running.kind == "naming"
+                        && running.collection == self.settings.collection
+                        && !self.closing
+                        && !self.naming_pending()
+                    {
+                        self.refresh_faces();
+                    }
                     if (running.is_face_matching() || running.kind == "face-analysis")
                         && running.collection == self.settings.collection
                     {
@@ -912,6 +934,8 @@ impl PhotoApp {
                     }
                     self.face_index = index;
                     self.face_page = page;
+                    // Noch nicht geschriebene Entscheidungen bleiben ausgeblendet (ADR 0068).
+                    self.hide_pending_faces();
                     self.face_page_serial += 1;
                 }
                 Ok(Outcome::Detail(revision, detail, faces, analysed))
@@ -985,7 +1009,10 @@ impl PhotoApp {
                         self.undo.remove(0);
                     }
                     self.message("Gesichtsentscheidung gespeichert".into(), false);
-                    self.refresh_faces();
+                    // Erst nach dem letzten vorgemerkten Auftrag neu lesen (ADR 0068).
+                    if !self.naming_pending() {
+                        self.refresh_faces();
+                    }
                     if let Some(photo) = self.selected_photo.clone() {
                         self.choose_photo(photo);
                     }

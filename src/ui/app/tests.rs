@@ -567,3 +567,76 @@ fn filter_select_popup_stays_open_for_the_visual_check() {
     draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
     assert!(egui::Popup::is_any_open(&context), "popup stays open");
 }
+
+fn test_face(id: i64) -> Face {
+    Face {
+        id,
+        photo: id,
+        source: String::new(),
+        bbox: [0.0; 4],
+        person: None,
+        assignment: None,
+        ignored: false,
+        score: 0.0,
+    }
+}
+fn page_ids(app: &PhotoApp) -> Vec<Vec<i64>> {
+    app.face_page
+        .groups
+        .iter()
+        .map(|g| g.iter().map(|f| f.id).collect())
+        .collect()
+}
+
+/// ADR 0068: Die Gruppe verschwindet sofort, mehrere Aufträge dürfen gleichzeitig vorgemerkt
+/// sein, eine neu gelesene Seite zeigt ausgeblendete Gesichter nicht, und nach dem Ende
+/// (auch bei Fehlern) gilt wieder die Datenbank.
+#[test]
+fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let folder = tempfile::tempdir().expect("Ordner");
+    app.settings.collection = folder.path().to_string_lossy().into_owned();
+    app.face_mode = "unknown".into();
+    app.face_page.groups = vec![
+        vec![test_face(1), test_face(2)],
+        vec![test_face(3)],
+        vec![test_face(4), test_face(5)],
+    ];
+    app.face_page.total_groups = 3;
+    app.face_page.status.nameable = 5;
+    let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = release.clone();
+    let started = std::time::Instant::now();
+    app.queue_hiding("Erste", vec![1, 2], move |_| {
+        while !gate.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(Outcome::Done(String::new()))
+    });
+    app.queue_hiding("Zweite", vec![3], |_| {
+        anyhow::bail!("Schreiben fehlgeschlagen")
+    });
+    assert!(started.elapsed() < Duration::from_millis(100));
+    // Beide Aufträge sind vorgemerkt und die Seite zeigt nur noch die verbleibende Gruppe.
+    assert_eq!(app.tasks.len(), 2);
+    assert!(!app.naming_blocked());
+    assert_eq!(page_ids(&app), vec![vec![4, 5]]);
+    assert_eq!(app.face_page.total_groups, 1);
+    assert_eq!(app.face_page.status.nameable, 2);
+    // Eine frisch gelesene Seite (noch ohne die Schreibvorgänge) wird gefiltert.
+    app.face_page.groups = vec![vec![test_face(1), test_face(2)], vec![test_face(6)]];
+    app.hide_pending_faces();
+    assert_eq!(page_ids(&app), vec![vec![6]]);
+    // Nach dem Ende der Aufträge endet das Ausblenden.
+    release.store(true, Ordering::Relaxed);
+    for _ in 0..3000 {
+        app.poll(&context);
+        if app.tasks.iter().all(|t| t.kind != "naming") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.hidden_faces().is_empty());
+}

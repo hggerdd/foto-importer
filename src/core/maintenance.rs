@@ -233,6 +233,12 @@ pub fn delete_biometrics(collection: &Collection) -> Result<String> {
     if folder.exists() {
         validate_tree(&collection.root, &folder)?;
     }
+    // Gesichtskacheln (ADR 0068) sind abgeleitete Gesichtsbilder und gehören dazu.
+    let tiles = collection.root.join(super::previews::TILE_DIR);
+    generated_path(&collection.root, &tiles)?;
+    if tiles.exists() {
+        validate_tree(&collection.root, &tiles)?;
+    }
     scrub(&collection.db)?;
     let mut backups = Vec::new();
     for entry in std::fs::read_dir(&collection.root)? {
@@ -254,6 +260,9 @@ pub fn delete_biometrics(collection: &Collection) -> Result<String> {
     }
     if folder.exists() {
         std::fs::remove_dir_all(&folder)?;
+    }
+    if tiles.exists() {
+        std::fs::remove_dir_all(&tiles)?;
     }
     Ok(
         "Biometrie und bekannte App-Sicherungen bereinigt. Fotos und Inventar bleiben erhalten."
