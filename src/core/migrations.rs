@@ -118,6 +118,10 @@ pub const ADDITIVE_INDEXES: &[(&str, &str)] = &[
         "ix_faces_retained",
         "CREATE INDEX IF NOT EXISTS ix_faces_retained ON faces(id) WHERE retained=1",
     ),
+    (
+        "ix_jobs_detect_done",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_detect_done ON face_jobs(model_id,photo_id) WHERE stage='detect' AND status='done'",
+    ),
 ];
 
 /// Legt fehlende Zusatzindizes an; wiederholbar. Nur mit Schreibrecht aufrufen.

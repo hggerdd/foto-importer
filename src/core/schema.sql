@@ -144,6 +144,8 @@ CREATE INDEX ix_faces_ignored ON faces(id) WHERE ignored=1 AND retained=0;
 
 CREATE INDEX ix_faces_retained ON faces(id) WHERE retained=1;
 
+CREATE INDEX ix_jobs_detect_done ON face_jobs(model_id,photo_id) WHERE stage='detect' AND status='done';
+
 CREATE TRIGGER browse_files_insert AFTER INSERT ON files BEGIN DELETE FROM metadata_photos WHERE photo_id=new.photo_id;INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
  m.dt_original,m.model,m.lens,m.iso,NULLIF(TRIM(m.model),'') AS camera
