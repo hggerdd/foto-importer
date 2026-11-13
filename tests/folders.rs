@@ -1,6 +1,6 @@
 use foto_importer::core::{
     collection::Collection,
-    folders::{self, FOLDER_PAGE},
+    folders::{self, FolderTree, Row},
     metadata::{self, Search},
 };
 use rusqlite::params;
@@ -17,8 +17,25 @@ fn add(c: &Collection, id: i64, relpath: &str, ext: &str, photo: i64) -> anyhow:
     Ok(())
 }
 
+fn names(tree: &FolderTree) -> Vec<(String, usize)> {
+    tree.rows()
+        .into_iter()
+        .filter_map(|row| match row {
+            Row::Node { path, photos, .. } => Some((path, photos)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn load(c: &Collection) -> anyhow::Result<FolderTree> {
+    let mut tree = FolderTree::default();
+    tree.begin();
+    tree.apply(&folders::directories(c)?);
+    Ok(tree)
+}
+
 #[test]
-fn children_count_photos_below_each_folder() -> anyhow::Result<()> {
+fn the_tree_counts_photos_below_each_folder_and_sorts_like_the_explorer() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;
     add(&c, 1, "root.jpg", "jpg", 1)?;
@@ -28,36 +45,31 @@ fn children_count_photos_below_each_folder() -> anyhow::Result<()> {
     add(&c, 5, "2024-x/d.jpg", "jpg", 5)?;
     add(&c, 6, "2024 und mehr/e.jpg", "jpg", 6)?;
     add(&c, 7, "Zebra/f.jpg", "jpg", 7)?;
+    add(&c, 11, "_Sortiert/h.jpg", "jpg", 9)?;
+    add(&c, 12, "10 Urlaub/i.jpg", "jpg", 10)?;
+    add(&c, 13, "2 Urlaub/j.jpg", "jpg", 11)?;
+    add(&c, 14, "apfel/k.jpg", "jpg", 12)?;
     // A RAW+JPG pair counts once, a sidecar not at all.
     add(&c, 8, "2024/05/g.nef", "nef", 8)?;
     add(&c, 9, "2024/05/g.jpg", "jpg", 8)?;
     add(&c, 10, "2024/05/g.xmp", "xmp", 8)?;
-    let root = folders::children(&c, "", 0)?;
-    let names: Vec<_> = root
-        .folders
-        .iter()
-        .map(|f| (f.name.as_str(), f.photos, f.has_children))
-        .collect();
+    let mut tree = load(&c)?;
+    tree.expand("2024");
+    let rows = names(&tree);
     assert_eq!(
-        names,
+        rows,
         [
-            ("2024", 4, true),
-            ("2024 und mehr", 1, false),
-            ("2024-x", 1, false),
-            ("Zebra", 1, false)
+            ("_Sortiert".to_string(), 1),
+            ("2 Urlaub".to_string(), 1),
+            ("10 Urlaub".to_string(), 1),
+            ("2024".to_string(), 4),
+            ("2024/05".to_string(), 3),
+            ("2024 und mehr".to_string(), 1),
+            ("2024-x".to_string(), 1),
+            ("apfel".to_string(), 1),
+            ("Zebra".to_string(), 1),
         ]
     );
-    assert!(!root.more);
-    let year = folders::children(&c, "2024", 0)?;
-    assert_eq!(
-        year.folders,
-        [folders::FolderNode {
-            name: "05".into(),
-            photos: 3,
-            has_children: false
-        }]
-    );
-    assert!(folders::children(&c, "2024/05", 0)?.folders.is_empty());
     // Counts equal the gallery total after choosing the folder.
     for (folder, expected) in [("2024", 4), ("2024/05", 3), ("2024-x", 1)] {
         let filter = Search {
@@ -70,11 +82,19 @@ fn children_count_photos_below_each_folder() -> anyhow::Result<()> {
             "{folder}"
         );
     }
+    // Without the additive index (read-only collection of an older version) the result is equal.
+    let covered = folders::directories(&c)?;
+    c.db.execute_batch("DROP INDEX ix_files_dir_cover")?;
+    let mut fallback = folders::directories(&c)?;
+    let mut covered = covered;
+    covered.sort();
+    fallback.sort();
+    assert_eq!(covered, fallback);
     Ok(())
 }
 
 #[test]
-fn large_synthetic_tree_is_paged_and_uses_the_directory_index() -> anyhow::Result<()> {
+fn large_synthetic_tree_loads_in_one_pass_on_the_covering_index() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let mut c = Collection::open(temp.path(), true)?;
     let folders_total = 20_000i64;
@@ -99,28 +119,18 @@ fn large_synthetic_tree_is_paged_and_uses_the_directory_index() -> anyhow::Resul
         }
     }
     tx.commit()?;
-    let plan = folders::plan(&c, "")?.join(" | ");
-    assert!(plan.contains("ix_files_directory_name"), "{plan}");
-    let plan = folders::plan(&c, "Ordner 00007")?.join(" | ");
+    let plan = folders::plan(&c)?.join(" | ");
     assert!(
-        plan.contains("USING INDEX ix_files_directory_name (dir>? AND dir<?)"),
+        plan.contains("COVERING INDEX ix_files_dir_cover") || plan.contains("ix_files_dir_cover"),
         "{plan}"
     );
     let started = Instant::now();
-    let first = folders::children(&c, "", 0)?;
-    let root_time = started.elapsed();
-    assert_eq!(first.folders.len(), FOLDER_PAGE);
-    assert!(first.more && first.folders.iter().all(|f| f.has_children));
-    assert_eq!(first.folders[0].name, "Ordner 00000");
-    assert_eq!(first.folders[0].photos, 5);
-    let last = folders::children(&c, "", 99)?;
-    assert_eq!(last.folders.len(), FOLDER_PAGE);
-    assert!(!last.more);
-    assert!(folders::children(&c, "", 100)?.folders.is_empty());
-    let started = Instant::now();
-    let below = folders::children(&c, "Ordner 00007", 0)?;
-    let below_time = started.elapsed();
-    assert_eq!(below.folders.len(), 3);
-    eprintln!("root page: {root_time:?}, subfolder level: {below_time:?}");
+    let tree = load(&c)?;
+    let elapsed = started.elapsed();
+    assert_eq!(tree.folder_count(), 20_000 + 60_000);
+    let rows = names(&tree);
+    assert_eq!(rows.len(), 20_000, "nothing is expanded");
+    assert_eq!(rows[0], ("Ordner 00000".to_string(), 5));
+    eprintln!("whole tree of 100000 photos in 60000 folders: {elapsed:?}");
     Ok(())
 }

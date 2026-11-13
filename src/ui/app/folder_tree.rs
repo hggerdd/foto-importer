@@ -11,7 +11,6 @@ const INDENT: f32 = 14.0;
 enum Action {
     Select(Option<String>),
     Toggle(String),
-    More(String),
     Retry,
 }
 
@@ -48,26 +47,23 @@ impl PhotoApp {
             }
             self.folder_revealed = self.applied.folder.clone();
         }
-        if self.folder_tree.is_loading() || self.tasks.iter().any(|task| task.kind == "folders") {
+        if self.folder_tree.is_loading()
+            || self.tasks.iter().any(|task| task.kind == "folders")
+            || !self.folder_tree.needs_load()
+        {
             return;
         }
-        let batch = self.folder_tree.wanted();
-        if batch.is_empty() {
-            return;
-        }
-        self.folder_tree.begin(&batch);
+        self.folder_tree.begin();
         let revision = self.folder_revision;
         let root = PathBuf::from(&self.settings.collection);
         self.launch("Ordner lesen", false, "folders", move |control| {
             let collection = Collection::open(&root, false)?;
             collection.cancel_with(&control);
-            let mut levels = Vec::new();
-            for (parent, page) in batch {
-                control.checkpoint()?;
-                let loaded = folders::children(&collection, &parent, page)?;
-                levels.push((parent, page, loaded));
-            }
-            Ok(Outcome::Folders(revision, levels))
+            control.checkpoint()?;
+            Ok(Outcome::Folders(
+                revision,
+                folders::directories(&collection)?,
+            ))
         });
     }
 
@@ -164,22 +160,6 @@ impl PhotoApp {
                                         });
                                     }
                                 }
-                                Row::More { parent, depth } => {
-                                    let enabled = !self.folder_tree.is_loading();
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(8.0 + (*depth + 1) as f32 * INDENT);
-                                        if ui
-                                            .add_enabled(
-                                                enabled,
-                                                egui::Button::new("weitere …").small(),
-                                            )
-                                            .on_hover_text("Nächste Ordner dieser Ebene laden")
-                                            .clicked()
-                                        {
-                                            action = Some(Action::More(parent.clone()));
-                                        }
-                                    });
-                                }
                                 Row::Loading { depth } => {
                                     ui.horizontal(|ui| {
                                         ui.add_space(8.0 + (*depth + 1) as f32 * INDENT);
@@ -204,7 +184,6 @@ impl PhotoApp {
                 match action {
                     Some(Action::Select(folder)) => self.navigate_collection(0, folder),
                     Some(Action::Toggle(path)) => self.folder_tree.toggle(&path),
-                    Some(Action::More(parent)) => self.folder_tree.request_more(&parent),
                     Some(Action::Retry) => self.folder_tree.retry_failed(),
                     None => {}
                 }
