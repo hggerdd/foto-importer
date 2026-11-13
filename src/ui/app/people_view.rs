@@ -283,7 +283,8 @@ impl PhotoApp {
 
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
         let key = draft_key(group);
-        let busy = self.busy();
+        // Vorgemerkte Benennungen blockieren weitere Entscheidungen nicht (ADR 0068).
+        let busy = self.naming_blocked();
         let hover_enabled = self.settings.hover_preview;
         let tile_pref = tile_size_for(self.settings.face_tile_scale);
         let root = self.settings.collection.clone();
@@ -446,7 +447,7 @@ impl PhotoApp {
             let name = draft.name.clone();
             let person = draft.person;
             let config = self.settings.central();
-            self.launch("Gesichtsgruppe speichern", true, "naming", move |_| {
+            self.queue_hiding("Gesichtsgruppe speichern", ids.clone(), move |_| {
                 let mut c = Collection::open(Path::new(&root), true)?;
                 let (undo, note) = crate::core::central::name_group_synced(
                     &mut c, &config, &ids, &selected, person, &name, ignore,
