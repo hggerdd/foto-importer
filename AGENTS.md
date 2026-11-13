@@ -10,3 +10,4 @@ Langsame Arbeit und Prozesse ausschließlich auf Workern; Ergebnisse mit Revisio
 Prüfungen: cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo test.
 Echte Modelle/Adobe getrennt von Offline-Regressionen validieren; fehlende Parität dokumentieren.
 
+Unteragenten arbeiten nur im Projektordner: Worktree unter worktrees/<aufgabe>, Build-Ausgaben und Zwischendateien ebenfalls dort (ADR 0070).

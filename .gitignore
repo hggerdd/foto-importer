@@ -6,3 +6,4 @@
 *.myfotomanager*
 
 /dist/
+/worktrees/
