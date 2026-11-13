@@ -1,6 +1,7 @@
 # Konzept: Seite „06 Zeitreise“ (Personen über die Zeit verfolgen)
 
-Status: Entwurf, kein Code. Stand 2026-11-13. Vor einer Umsetzung entsteht ein ADR.
+Status: umgesetzt in den Stufen 1 bis 7, Entscheidung in [ADR 0069](../ADR/0069-zeitreise.md).
+Stand 2026-11-13. Abweichungen und offene Punkte stehen im Abschnitt "Umsetzungsstand" am Ende.
 
 ## Ziel
 
@@ -17,7 +18,7 @@ Die Seite liest nur. Originale, Namen und Bestätigungen werden nicht verändert
 | Gesichtsgröße | `faces.bbox_*` und Pixelmaße des Quellbilds (`meta.width/height`) | Daraus folgt die Gesichtsauflösung in Pixeln |
 | Güte | `faces.quality`, `det_score`, Landmarks (5 Punkte) | Landmarks erlauben Ausrichtung und Frontalprüfung |
 | Hochauflösende Neuberechnung | ADR 0059 (3200 px für kleine, klare Gesichter) | Die Seite nutzt, was dort schon bewertet wurde |
-| Geburtsjahr | Personenmerkmal `birth_year` (auch zentral) | Macht aus Datum ein **Alter** |
+| Geburtsjahr, Geburtsmonat | Personenmerkmal `birth_year` (auch zentral), optional `birth_month` (nur lokal) | Macht aus Datum ein **Alter**, auf Monate genau; ohne Monat nur auf Jahre |
 | Bestätigte Zuordnung | `faces.assignment='user'` | Nur bestätigte (optional auch sichere automatische) Gesichter zählen |
 | Ordnernamen | `files.dir` | Als Ereignismarken (Urlaub 2019, Einschulung) |
 
@@ -37,13 +38,16 @@ Qualität berechnet. Er dient nur zum Vorschlagen des schönsten Gesichts je Zei
 
 ## Ansichten
 
-1. **Zeitstrahl (Hauptansicht).** Waagerechte Achse, zoombar: Jahrzehnte, Jahre, Monate.
+1. **Zeitstrahl (Hauptansicht).** Waagerechte Achse in Jahren oder Monaten. Die Körnung wählt
+   die Seite nach Datenlage (kurze Spanne oder viel Material: Monate, sonst Jahre) und lässt
+   sich manuell umschalten.
    Je Zeitabschnitt erscheint das beste Gesicht als Kachel. Darüber eine **Dichtekurve**
    (Gesichter je Monat), die zeigt, wo viel Material liegt und wo Lücken sind.
    Klick auf eine Kachel öffnet alle Gesichter des Abschnitts und das Originalfoto (wie
    die Vorschau auf der Personenseite).
 2. **Altersleiste.** Gleiche Achse, aber in Lebensalter (0, 1, 2 …, Monate im ersten Jahr)
-   statt in Datum. Erfordert Geburtsjahr, besser Geburtsdatum. Ideal für Kinder: „mit 3“.
+   statt in Datum. Erfordert das Geburtsjahr; mit Geburtsmonat auf Monate genau (Entscheidung des Nutzers: ein
+   Tag ist nicht nötig). Ideal für Kinder: „mit 3“.
 3. **Zeitraffer.** Die Gesichter werden an den Augen ausgerichtet, gleich groß beschnitten
    und nacheinander abgespielt (Wiedergabe, Pause, Geschwindigkeit, Bild für Bild). Ein
    Schieberegler springt in der Zeit. Das ist der „Wie hat sich X verändert“-Moment.
@@ -103,8 +107,9 @@ Qualität berechnet. Er dient nur zum Vorschlagen des schönsten Gesichts je Zei
   Hilfsansicht.
 - **Datenschutz:** Exporte erzeugen neue Dateien nur im vom Nutzer gewählten Ordner;
   nichts verlässt den Rechner.
-- Fragen an den Nutzer: Genügt das Geburtsjahr, oder soll ein Geburtsdatum (Tag) möglich
-  sein? Standard-Schwelle 160 px richtig? Zeitraffer als Video wichtig oder reicht
+- Entschieden: Geburtsjahr plus optional Geburtsmonat genügen, kein Tag. Der Monat gilt
+  vorerst nur lokal (kein zentrales Feld, keine Schemaänderung).
+- Fragen an den Nutzer: Standard-Schwelle 160 px richtig? Zeitraffer als Video wichtig oder reicht
   Bildschirmwiedergabe? Soll die Seite auch Haustiere/andere Objekte kennen (nein, nur
   Personen)?
 
@@ -120,3 +125,17 @@ Qualität berechnet. Er dient nur zum Vorschlagen des schönsten Gesichts je Zei
 
 Jede Stufe auf eigenem `codex/`-Branch mit ADR (nächste freie Nummer), Test und
 Sichtprüfung per Fensteraufnahme.
+
+## Umsetzungsstand (2026-11-13)
+
+- Stufe 1 Kern (`src/core/timeline.rs`): Abfrage, Datumsquelle/-qualität, Gesichtsgröße in
+  Pixeln, Frontalität, Zeitreise-Wert, Schwellen (`config.rs`), Abschnitte Jahr/Monat/Altersjahr,
+  bestes Gesicht, Dichte, Lücken, Teilindex `ix_faces_timeline` (additiv, kein Schema 7).
+- Stufe 2 bis 7: Seite "06 Zeitreise" mit Zeitstrahl, Dichtekurve, Detail, Altersleiste,
+  Kontaktbogen, Zeitraffer, Vorher/Nachher, Familienvergleich, Festnageln/Ersetzen/
+  Ausblenden, Lückenhinweisen und Export (PNG-Collage, PNG-Kontaktbogen, Zeitraffer als GIF
+  oder PNG-Bildfolge; kein PDF und kein Video, weil das neue schwere Abhängigkeiten wären).
+- Abweichungen: keine Schärfemessung (nicht gespeichert; der Erkennungswert dient als Ersatz);
+  keine Datumskorrektur je Foto; keine Ereignismarken (Ansicht 7), keine Verlaufskurve der
+  Ähnlichkeit (Ansicht 8); Tastatursteuerung nur teilweise; Zoom des Zeitstrahls ersetzt
+  durch die Umschaltung Jahr/Monat.

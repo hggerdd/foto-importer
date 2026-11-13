@@ -15,6 +15,13 @@ pub const CACHE_ENTRIES: usize = 512;
 pub const GROUP_MAX: usize = 28;
 /// Gruppen je Seite in den Gesichtsreitern.
 pub const FACE_GROUPS_PER_PAGE: usize = 8;
+/// Zeitreise (ADR 0069): kürzere Gesichtsseite im Quellbild in Pixeln (kleinster, Standard,
+/// größter Wert des Reglers).
+pub const TIMELINE_MIN_PX: (u32, u32, u32) = (96, 160, 320);
+/// Zeitreise: Mindestgüte, Mindest-Erkennungswert und Mindest-Frontalität eines Gesichts.
+pub const TIMELINE_MIN_QUALITY: f32 = 0.5;
+pub const TIMELINE_MIN_DETECTION: f32 = 0.8;
+pub const TIMELINE_MIN_FRONTAL: f32 = 0.5;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
@@ -78,6 +85,8 @@ pub struct Settings {
     pub central_images: bool,
     /// Beziehungen zentral mitführen (ADR 0065); wirkt nur bei `central_enabled`.
     pub central_relations: bool,
+    /// Zeitreise: Mindestauflösung eines Gesichts in Pixeln (kürzere Seite).
+    pub timeline_min_px: u32,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
 }
@@ -104,6 +113,7 @@ impl Default for Settings {
             central_path: String::new(),
             central_images: false,
             central_relations: true,
+            timeline_min_px: TIMELINE_MIN_PX.1,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
