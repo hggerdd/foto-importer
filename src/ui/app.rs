@@ -10,6 +10,7 @@ mod relationship_view;
 mod settings_view;
 #[cfg(test)]
 mod tests;
+mod time_view;
 mod tree_view;
 mod windows;
 
@@ -41,6 +42,7 @@ enum View {
     Collection,
     People,
     Tasks,
+    Time,
     Settings,
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -81,6 +83,7 @@ enum Outcome {
     /// Ergebnis plus Hinweis/Bericht des zentralen Abgleichs (ADR 0062).
     Synced(Box<Outcome>, crate::core::central::SyncNote),
     Pick(Pick, Option<PathBuf>),
+    Time(time_view::TimeOutcome),
 }
 struct Running {
     task: Task<Outcome>,
@@ -201,6 +204,7 @@ pub struct PhotoApp {
     family_ui: tree_view::FamilyUi,
     central_ui: central_view::CentralUi,
     people_ui: people_table::PeopleUi,
+    time_ui: time_view::TimeUi,
     /// Zählt übernommene `face_page`-Stände; Tabellenansicht berechnet sich daran neu.
     face_page_serial: u64,
     relationship_graph: relationship_view::RelationshipView,
@@ -296,6 +300,7 @@ impl PhotoApp {
             family_ui: Default::default(),
             central_ui: Default::default(),
             people_ui: Default::default(),
+            time_ui: time_view::TimeUi::from_env(),
             face_page_serial: 0,
             relationship_graph: Default::default(),
             report: None,
@@ -380,6 +385,7 @@ impl PhotoApp {
             Ok("collection") => app.view = View::Collection,
             Ok("people") => app.view = View::People,
             Ok("tasks") => app.view = View::Tasks,
+            Ok("time") => app.view = View::Time,
             Ok("settings") => app.view = View::Settings,
             _ => {}
         }
@@ -812,6 +818,12 @@ impl PhotoApp {
                 other => other,
             };
             match result {
+                Err(e) if running.kind == "timeline" => {
+                    if !running.task.control.cancel.load(Ordering::Relaxed) {
+                        self.time_ui.failed(format!("{e:#}"));
+                    }
+                }
+                Ok(Outcome::Time(outcome)) => self.accept_time(outcome),
                 Err(_) if running.kind == "folders" => {
                     // Never retry a failing or cancelled level in a loop; "Aktualisieren" retries.
                     self.folder_tree.fail();
@@ -1238,6 +1250,7 @@ impl PhotoApp {
                     (View::Collection, "02  Sammlung", "Fotos finden & verstehen"),
                     (View::People, "03  Personen", "Namen & Beziehungen"),
                     (View::Tasks, "04  Aufgaben", "Fortschritt & Verlauf"),
+                    (View::Time, "06  Zeitreise", "Personen über die Zeit"),
                 ] {
                     let response =
                         theme::nav_item(ui, title, self.view == view, 150.0).on_hover_text(hint);
@@ -1406,6 +1419,7 @@ impl eframe::App for PhotoApp {
                 View::Collection => self.collection_view(ui),
                 View::People => self.people_view(ui),
                 View::Tasks => self.tasks_view(ui),
+                View::Time => self.time_view(ui),
                 View::Settings => self.settings_view(ui),
             });
         self.windows(ctx);
