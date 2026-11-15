@@ -77,9 +77,6 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   **und** mindestens **0,05** vor der zweitbesten Person liegt. Beide Werte sind je Sammlung
   überschreibbar und unter Einstellungen (Erweitert) einstellbar. Der Bonus für gemeinsames
   Auftreten hebt kein Gesicht über die Schwelle.
-- Der trainierte Softmax-Klassifikator (`classifier.rs`) entfällt: gemessen Platz 1 96,1 %
-  gegenüber 96,9 % des Kosinus-Vergleichs. Bis dahin sortiert er nur die drei
-  Vorschlagsschaltflächen und entscheidet nichts.
 - Ein Messwerkzeug (`examples/face_eval.rs`) erzeugt die Tabelle oben reproduzierbar.
 
 ## Grenzen

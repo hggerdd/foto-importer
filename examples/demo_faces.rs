@@ -414,12 +414,11 @@ fn main() -> anyhow::Result<()> {
     let status = faces::status(&collection)?;
     println!("Stammbaum: FOTO_IMPORTER_FACE_MODE=tree FOTO_IMPORTER_TREE_PERSON={mia}");
     println!(
-        "{} · bestätigt {} · unbekannt {} · Vorschläge {} · Modell: {}",
+        "{} · bestätigt {} · unbekannt {} · Vorschläge {}",
         path.canonicalize()?.display(),
         status.confirmed,
         status.unknown,
-        status.review,
-        status.classifier.is_some()
+        status.review
     );
     Ok(())
 }
