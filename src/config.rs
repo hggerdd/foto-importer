@@ -15,6 +15,14 @@ pub const CACHE_ENTRIES: usize = 512;
 pub const THUMBNAIL_WORKERS: usize = 4;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
 pub const GROUP_MAX: usize = 28;
+/// Namensvorschläge im Abgleich: Mindestähnlichkeit, Mindestabstand zur zweitbesten Person
+/// und Grenze für „sicher“. Gemessen am 2026-11-15 (SFace, eine Sammlung): bei 0,60 mit
+/// Abstand 0,05 erreichen 88 % der richtigen Personen den Vorschlag, eine unbekannte Person
+/// wird in 10 % der Fälle fälschlich zugeordnet; bei 0,70 in 1 %. Siehe
+/// `examples/face_eval.rs`.
+pub const FACE_REVIEW_MIN: f32 = 0.60;
+pub const FACE_REVIEW_MARGIN: f32 = 0.05;
+pub const FACE_SURE_MIN: f32 = 0.70;
 /// Gruppen je Seite in den Gesichtsreitern.
 pub const FACE_GROUPS_PER_PAGE: usize = 8;
 /// Zeitreise (ADR 0069): kürzere Gesichtsseite im Quellbild in Pixeln (kleinster, Standard,
