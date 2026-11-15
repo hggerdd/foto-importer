@@ -17,9 +17,9 @@ Außerdem wurden versehentlich Programme außerhalb der Sitzung gestartet.
 
 1. **Ein Ort:** Jeder Unteragent arbeitet in einer eigenen Git-Arbeitskopie (Worktree) unter
    `<Projektordner>\worktrees\<aufgabe>` auf einem eigenen `codex/`-Branch
-   (`git worktree add worktrees/<aufgabe> -b codex/<aufgabe> rust-main`).
+   (`git worktree add worktrees/<aufgabe> -b codex/<aufgabe> main`).
    Der Ordner `worktrees/` ist über `.gitignore` ausgeschlossen. Der Hauptordner selbst
-   bleibt auf `rust-main` und wird nur für Merges und Releases verwendet.
+   bleibt auf `main` und wird nur für Merges und Releases verwendet.
 2. **Build-Ausgaben im Projektordner:** `CARGO_TARGET_DIR=<Projektordner>\worktrees\.target\<aufgabe>`
    (oder ein gemeinsames `…\worktrees\.target\shared`, wenn nur ein Agent gleichzeitig baut).
    Keine Build-Verzeichnisse außerhalb des Projektordners. Platzsparend bauen
