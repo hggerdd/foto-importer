@@ -57,6 +57,8 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 - Gruppen mit höchstens zwei Gesichtern werden der ähnlichsten Gruppe angeschlossen
   (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3).
 - Gruppen sind abgeleitet und jederzeit neu erzeugbar; Trigger pflegen die Mitgliedschaft.
+  Offene Gesichter werden zu Beginn jedes Referenz- und Abgleichlaufs gruppiert, nicht erst
+  an dessen Ende.
 
 **Messung 2026-11-15** (eine Sammlung, SFace, 4.501 bestätigte Gesichter, 1.537 Referenzen,
 35 Personen; Person-auslassen-Test, daher obere Schätzung für Fehlannahmen):
@@ -78,7 +80,6 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 - Der trainierte Softmax-Klassifikator (`classifier.rs`) entfällt: gemessen Platz 1 96,1 %
   gegenüber 96,9 % des Kosinus-Vergleichs. Bis dahin sortiert er nur die drei
   Vorschlagsschaltflächen und entscheidet nichts.
-- Offene Gruppeneinträge werden vor dem Abgleich gruppiert, nicht erst danach.
 - Ein Messwerkzeug (`examples/face_eval.rs`) erzeugt die Tabelle oben reproduzierbar.
 
 ## Grenzen

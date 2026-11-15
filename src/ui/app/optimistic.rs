@@ -72,3 +72,44 @@ impl PhotoApp {
         }
     }
 }
+
+/// Rückmeldung nach einer gespeicherten Gesichtsentscheidung. Sie nennt, wohin abgelehnte
+/// Gesichter gegangen sind, damit sie nicht als verschwunden gelten.
+pub(super) fn decision_message(summary: crate::core::faces::DecisionSummary) -> String {
+    let mut parts = Vec::new();
+    if summary.confirmed > 0 {
+        parts.push(format!("{} bestätigt", summary.confirmed));
+    }
+    if summary.rejected > 0 {
+        parts.push(format!(
+            "{} abgelehnt, jetzt unter Benennen",
+            summary.rejected
+        ));
+    }
+    if summary.ignored > 0 {
+        parts.push(format!("{} ignoriert", summary.ignored));
+    }
+    if parts.is_empty() {
+        "Gesichtsentscheidung gespeichert".into()
+    } else {
+        parts.join(" · ")
+    }
+}
+#[cfg(test)]
+mod message_tests {
+    use super::decision_message;
+    use crate::core::faces::DecisionSummary;
+    #[test]
+    fn message_names_where_rejected_faces_went() {
+        let text = decision_message(DecisionSummary {
+            confirmed: 5,
+            rejected: 2,
+            ignored: 0,
+        });
+        assert_eq!(text, "5 bestätigt · 2 abgelehnt, jetzt unter Benennen");
+        assert_eq!(
+            decision_message(DecisionSummary::default()),
+            "Gesichtsentscheidung gespeichert"
+        );
+    }
+}

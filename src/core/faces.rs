@@ -1064,7 +1064,9 @@ pub fn name_group(
     if ids.is_empty() || ids.len() > max {
         bail!("Gruppe muss 1 bis {max} sichtbare Gesichter enthalten");
     }
-    if !ignore && selected.is_empty() {
+    // Ohne Auswahl ist nur „keines davon ist diese Person“ sinnvoll: Dafür muss die Person
+    // schon bestehen, sonst entstünde eine Person ohne Gesicht.
+    if !ignore && selected.is_empty() && person.is_none() {
         bail!("Bitte mindestens ein Gesicht auswählen");
     }
     let tx = collection.db.transaction()?;
@@ -1123,6 +1125,13 @@ pub fn name_group(
                 "INSERT OR IGNORE INTO face_rejections VALUES(?,?)",
                 params![id, person],
             )?;
+            // Die Ablehnung wirkt sofort: Trägt das Gesicht genau diese Person (vorgeschlagen
+            // oder bestätigt), wird es unbenannt und kehrt über `face_group_dirty` in eine
+            // Gruppe unter „Benennen“ zurück, statt auf den nächsten Abgleich zu warten.
+            tx.execute(
+                "UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL,assigned_at=NULL WHERE id=? AND person_id IS ?",
+                params![id, person],
+            )?;
         }
         tx.execute("DELETE FROM training_set WHERE face_id=?", [id])?;
     }
@@ -1131,11 +1140,78 @@ pub fn name_group(
         .map(|id| snapshot(&tx, *id))
         .collect::<Result<Vec<_>>>()?;
     tx.commit()?;
-    Ok(Undo {
+    let undo = Undo {
         before,
         after,
         created,
-    })
+    };
+    if undo.summary().rejected > 0 {
+        regroup_released(collection, ids);
+    }
+    Ok(undo)
+}
+/// Gerade freigegebene Gesichter sofort gruppieren, damit sie unter „Benennen“ erscheinen.
+/// Begrenzt auf wenige Schritte; was liegen bleibt, erledigt die Hintergrundwartung.
+/// Gruppen sind abgeleitet, ein Fehler hier darf die gespeicherte Entscheidung nicht gefährden.
+fn regroup_released(collection: &mut Collection, ids: &[i64]) {
+    let Ok(Some(key)) = setting(collection, "rust.embedder_key") else {
+        return;
+    };
+    let marks = vec!["?"; ids.len()].join(",");
+    let pending = |collection: &Collection| -> bool {
+        let mut values: Vec<rusqlite::types::Value> = vec![key.clone().into()];
+        values.extend(ids.iter().map(|id| rusqlite::types::Value::from(*id)));
+        collection
+            .db
+            .query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM face_group_dirty WHERE embedder_id=? AND face_id IN ({marks}))"),
+                rusqlite::params_from_iter(values),
+                |r| r.get(0),
+            )
+            .unwrap_or(false)
+    };
+    let control = Control::default();
+    for _ in 0..4 {
+        if !pending(collection)
+            || !matches!(prepare_groups(collection, &key, &control), Ok(n) if n > 0)
+        {
+            break;
+        }
+    }
+}
+/// Was eine Entscheidung bewirkt hat, für die Rückmeldung an den Nutzer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecisionSummary {
+    pub confirmed: usize,
+    pub rejected: usize,
+    pub ignored: usize,
+}
+impl Undo {
+    pub fn summary(&self) -> DecisionSummary {
+        let mut summary = DecisionSummary::default();
+        for (before, after) in self.before.iter().zip(&self.after) {
+            let user = after.assignment.as_deref() == Some("user");
+            if user
+                && !after.ignored
+                && (before.assignment.as_deref() != Some("user")
+                    || before.person != after.person
+                    || before.ignored)
+            {
+                summary.confirmed += 1;
+            }
+            if after
+                .rejections
+                .iter()
+                .any(|person| !before.rejections.contains(person))
+            {
+                summary.rejected += 1;
+            }
+            if after.ignored && !before.ignored {
+                summary.ignored += 1;
+            }
+        }
+        summary
+    }
 }
 pub fn undo(collection: &mut Collection, undo: &Undo) -> Result<()> {
     collection.writable()?;
