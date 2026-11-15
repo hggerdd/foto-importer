@@ -16,6 +16,11 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   gespeicherte Ablehnung für diese Person (`face_rejections`), die jeder spätere Abgleich
   beachtet. Ein neuer Name legt eine Person an; bei mehreren gleichnamigen Personen muss die
   konkrete Person gewählt werden.
+- **Ablehnen wirkt sofort:** Trägt ein abgewähltes Gesicht die abgelehnte Person
+  (vorgeschlagen oder bestätigt), wird es in derselben Transaktion unbenannt und gleich
+  wieder gruppiert; es erscheint unter „Benennen“. Die Statusmeldung nennt das
+  („2 abgelehnt, jetzt unter Benennen“). Ohne jede Auswahl gilt „keines davon ist diese
+  Person“; das setzt eine bestehende Person voraus, damit keine Person ohne Gesicht entsteht.
 - **Nicht interessiert** setzt `ignored=1` für die ganze Gruppe. Vorkommen, Rahmen und
   Vektoren bleiben; bestätigte Identitäten bleiben; maschinelle Zuordnungen entfallen.
   Ignorierte Gesichter sind weder Referenz noch negatives Beispiel. Interesse und Identität
@@ -43,9 +48,7 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 
 ## Beschlossen, noch nicht umgesetzt (2026-11-15)
 
-- **Ablehnen wirkt sofort:** Ein abgewähltes Gesicht, das die abgelehnte Person trägt, wird
-  in derselben Transaktion unbenannt (auch im Reiter „Bestätigt“), erscheint unter
-  „Benennen“ und zeigt dort „nicht X“.
+- Abgelehnte Gesichter zeigen unter „Benennen“ den Hinweis „nicht X“.
 - **„Vorschläge prüfen“** enthält nur sichere Treffer (Schwelle und Abstand siehe
   Gesichtserkennung), sicherste zuerst, mit Personenfilter, Referenzporträt und den Aktionen
   „Alle sind X“ und „Keines ist X“.

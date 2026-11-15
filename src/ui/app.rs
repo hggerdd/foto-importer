@@ -1016,11 +1016,12 @@ impl PhotoApp {
                     self.naming = None;
                     self.relationship_graph.stale = true;
                     self.prepare_group_advance(&undo);
+                    let saved = optimistic::decision_message(undo.summary());
                     self.undo.push(undo);
                     if self.undo.len() > 20 {
                         self.undo.remove(0);
                     }
-                    self.message("Gesichtsentscheidung gespeichert".into(), false);
+                    self.message(saved, false);
                     // Erst nach dem letzten vorgemerkten Auftrag neu lesen (ADR 0068).
                     if !self.naming_pending() {
                         self.refresh_faces();

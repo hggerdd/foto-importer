@@ -266,6 +266,9 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
     control.set_face_phase(super::jobs::FacePhase::References);
     let key =
         faces::setting(collection, "rust.embedder_key")?.context("Zuerst Fotos analysieren")?;
+    // Offene Gesichter zuerst gruppieren: Abgelehnte und neu analysierte Gesichter sollen
+    // nach Sekunden unter „Benennen“ stehen, nicht erst nach dem vollen Abgleich.
+    while faces::prepare_groups(collection, &key, control)? > 0 {}
     if reset {
         collection.db.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
     }

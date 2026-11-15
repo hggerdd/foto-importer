@@ -297,3 +297,151 @@ fn a_large_group_can_be_confirmed_with_only_part_of_its_faces() -> anyhow::Resul
     assert_eq!(rejected, 11);
     Ok(())
 }
+
+/// Drei Vorschläge für Person 1 („Anna“) im aktiven Modellraum `test`.
+fn suggested_for_anna(c: &Collection, count: i64) -> anyhow::Result<()> {
+    seed(c, count)?;
+    c.db.execute_batch(
+        "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key','\"test\"');
+         INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs VALUES(1,'name','Anna');
+         UPDATE faces SET person_id=1,assignment='suggested',confidence=0.5;",
+    )?;
+    Ok(())
+}
+fn state(c: &Collection, id: i64) -> anyhow::Result<(Option<i64>, Option<String>)> {
+    Ok(c.db.query_row(
+        "SELECT person_id,assignment FROM faces WHERE id=?",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
+}
+fn count(c: &Collection, sql: &str) -> anyhow::Result<i64> {
+    Ok(c.db.query_row(sql, [], |r| r.get(0))?)
+}
+
+#[test]
+fn rejecting_a_suggestion_releases_the_face_at_once_and_undo_restores_it() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 3)?;
+    let undo = faces::name_group(
+        &mut c,
+        &[1, 2, 3],
+        &BTreeSet::from([1, 2]),
+        Some(1),
+        "",
+        false,
+    )?;
+    assert_eq!(
+        undo.summary(),
+        faces::DecisionSummary {
+            confirmed: 2,
+            rejected: 1,
+            ignored: 0
+        }
+    );
+    assert_eq!(state(&c, 1)?, (Some(1), Some("user".into())));
+    assert_eq!(
+        state(&c, 3)?,
+        (None, None),
+        "abgelehnt heißt sofort unbenannt"
+    );
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM face_rejections WHERE face_id=3 AND person_id=1"
+        )?,
+        1,
+        "die Ablehnung bleibt gespeichert"
+    );
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM face_group_members WHERE face_id=3"
+        )?,
+        1,
+        "das Gesicht steht ohne Hintergrundlauf in einer Gruppe unter Benennen"
+    );
+    let open: Vec<Vec<i64>> = faces::page(&c, "unknown", 0)?
+        .groups
+        .iter()
+        .map(|group| group.iter().map(|face| face.id).collect())
+        .collect();
+    assert_eq!(open, vec![vec![3]]);
+    faces::undo(&mut c, &undo)?;
+    assert_eq!(state(&c, 3)?, (Some(1), Some("suggested".into())));
+    assert_eq!(
+        c.db.query_row("SELECT confidence FROM faces WHERE id=3", [], |r| r
+            .get::<_, f64>(0))?,
+        0.5
+    );
+    assert_eq!(count(&c, "SELECT count(*) FROM face_rejections")?, 0);
+    Ok(())
+}
+
+#[test]
+fn deselecting_a_confirmed_face_removes_the_confirmation() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 2)?;
+    c.db.execute_batch("UPDATE faces SET assignment='user',confidence=1")?;
+    faces::name_group(&mut c, &[1, 2], &BTreeSet::from([1]), Some(1), "", false)?;
+    assert_eq!(state(&c, 1)?, (Some(1), Some("user".into())));
+    assert_eq!(state(&c, 2)?, (None, None));
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM face_reference_dirty WHERE person_id=1"
+        )?,
+        1,
+        "die Referenzen der Person werden neu gewählt"
+    );
+    assert_eq!(count(&c, "SELECT count(*) FROM face_maintenance")?, 1);
+    Ok(())
+}
+
+#[test]
+fn none_of_them_needs_an_existing_person() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 2)?;
+    assert!(
+        faces::name_group(&mut c, &[1, 2], &BTreeSet::new(), None, "Neu", false).is_err(),
+        "ohne Auswahl entsteht keine Person ohne Gesicht"
+    );
+    assert_eq!(count(&c, "SELECT count(*) FROM persons")?, 1);
+    let undo = faces::name_group(&mut c, &[1, 2], &BTreeSet::new(), Some(1), "", false)?;
+    assert_eq!(undo.summary().rejected, 2);
+    assert_eq!(state(&c, 1)?, (None, None));
+    assert_eq!(state(&c, 2)?, (None, None));
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM face_rejections WHERE person_id=1")?,
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn a_later_rematch_never_suggests_the_rejected_person_again() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 4)?;
+    // 1 und 2 bestätigt, 3 abgelehnt, 4 bleibt ein offener Vorschlag als Gegenprobe.
+    faces::name_group(
+        &mut c,
+        &[1, 2, 3],
+        &BTreeSet::from([1, 2]),
+        Some(1),
+        "",
+        false,
+    )?;
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 3)?, (None, None));
+    assert_eq!(
+        state(&c, 4)?.0,
+        Some(1),
+        "nicht abgelehnte Gesichter erhalten weiter Vorschläge"
+    );
+    Ok(())
+}
