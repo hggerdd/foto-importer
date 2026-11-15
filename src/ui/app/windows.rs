@@ -156,7 +156,8 @@ impl PhotoApp {
                         let name = self.name_input.clone();
                         let person = self.name_person;
                         let config = self.settings.central();
-                        self.launch("Gesicht benennen", true, "naming", move |_| {
+                        let hidden = vec![face.id];
+                        self.queue_hiding("Gesicht benennen", hidden, move |_| {
                             let mut c = Collection::open(Path::new(&root), true)?;
                             let (undo, note) = crate::core::central::name_group_synced(
                                 &mut c,

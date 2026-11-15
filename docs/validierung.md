@@ -298,3 +298,42 @@ idempotent und schreibgeschützt wirkungslos), `src/ui/app/tests.rs` (Nutzerschr
 Hintergrundauftrag). Nicht geprüft: echte Modelle, echte Sammlungen, Netzlaufwerke (mmap), ein
 Testfall mit absichtlich langem Wartungsauftrag in der Oberfläche (nur der Kern-Abbruch im
 Benchmark), Benchmarks der zentralen Synchronisierung.
+
+## Personenseite laden (ADR 0068)
+
+Zwei Messreihen, beide ausschließlich synthetisch (nie private Daten):
+
+```text
+cargo run -j 1 --release --example face_save_bench -- gen tmp/bench-faces
+cargo run -j 1 --release --example face_save_bench -- run tmp/bench-faces tmp/bench-faces-work 1
+cargo run -j 1 --release --example face_thumb_bench -- tmp/bench-thumbs 24 6000 4000 4
+```
+
+Gesichtskacheln (24 synthetische 6000x4000-JPEGs mit Rauschen, 160-px-Kachel, Release, 16 Kerne;
+Rauschen macht die Dekodierung eher teurer als bei echten Fotos):
+
+| Schritt | Vorher | Nachher |
+|---|---|---|
+| Kachel ohne Zwischenspeicher, ein Thread (Median) | 255 bis 300 ms | unverändert (Erstansicht) |
+| 24 Kacheln erstmals, ein Thread | 6.500 bis 6.900 ms | 6.400 ms |
+| 24 Kacheln erstmals, vier Arbeiter | (ein Arbeiter) 6.500 ms | 2.100 bis 2.400 ms |
+| Kachel aus dem Zwischenspeicher (Median) | nicht vorhanden (jede Ansicht 255 ms) | 0,4 ms (24 Kacheln: 11 ms) |
+
+Datenbankseite (synthetische Sammlung wie ADR 0066, 90.000 Fotos, 200.000 Gesichter): Der Engpass
+der Personenseite lag nicht in SQL. `page(unknown)` 180 bis 280 ms, `page(review)` 70 bis 125 ms,
+`page(confirmed)` 75 bis 135 ms, `page(ignored)` 180 bis 240 ms (Messung vor der Änderung). Einziger
+sauber vergleichbarer Gewinn: die Zählung „analysierte Fotos" in `status()` von 182 ms (Scan über
+alle Fotos) auf 0,1 ms durch `ix_jobs_detect_done`. Die Wiederholung nach der Änderung lief auf
+einem stark ausgelasteten Rechner (andere Builds, Datenträger fast voll) und streut zwischen 60 und
+500 ms je Seite; sie ist deshalb nicht als Vorher/Nachher-Vergleich belastbar.
+
+Sofortiges Bestätigen: `queue_hiding` blendet die Gruppe im selben Aufruf aus (Test: zwei
+vorgemerkte Aufträge, Seite sofort ohne die Gesichter, unter 100 ms ohne auf die Aufträge zu
+warten; Ausblenden endet mit dem Auftrag auch bei Fehler). Die Dauer bis zum Neuzeichnen in der
+echten Oberfläche wurde nicht gemessen.
+
+Tests: Kachel-Cache in `src/core/previews.rs` (erstes gleich zweites Ergebnis, Invalidierung durch
+Änderung von Quelle/Ausschnitt, beschädigte Kachel, Original unverändert), Löschen der Kacheln in
+`tests/maintenance.rs`, neuer Zusatzindex im bestehenden Idempotenztest (`tests/face_save_performance.rs`),
+Ausblenden in `src/ui/app/tests.rs`. Nicht geprüft: echte Fotos/RAW, echte Modelle, Netzlaufwerke,
+echte Oberfläche mit mehreren Aufträgen nacheinander, Verhalten bei vollem Datenträger.

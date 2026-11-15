@@ -165,3 +165,241 @@ pub fn preview(request: PreviewRequest, exiftool: &str, control: &Control) -> Re
         rgba: image.to_rgba8().into_raw(),
     })
 }
+
+/// Ordner der Gesichtskachel-Zwischenspeicher in der Sammlung (ADR 0068). Reine, jederzeit
+/// neu berechenbare Ableitung; „Biometrie löschen“ entfernt ihn mit.
+pub const TILE_DIR: &str = ".myfotomanager_tiles";
+
+/// Schlüssel einer Kachel: Quelldatei (relativ, Größe, Änderungszeit), Ausschnitt, Kantenlänge
+/// und Ausrichtung. Ändert sich eines davon, entsteht eine neue Kachel.
+fn tile_key(request: &PreviewRequest, root: &Path, bbox: &[f32; 4]) -> Option<String> {
+    let meta = request.path.metadata().ok()?;
+    let nanos = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let resolved = request.path.canonicalize().ok()?;
+    let relative = resolved.strip_prefix(root).ok()?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"tile-v1\0");
+    hash.update(relative.to_string_lossy().as_bytes());
+    hash.update(&meta.len().to_le_bytes());
+    hash.update(&nanos.to_le_bytes());
+    for value in bbox {
+        hash.update(&value.to_bits().to_le_bytes());
+    }
+    hash.update(&request.edge.to_le_bytes());
+    hash.update(&request.orientation.to_le_bytes());
+    Some(hash.finalize().to_hex().to_string())
+}
+
+fn tile_file(root: &Path, key: &str) -> PathBuf {
+    root.join(TILE_DIR)
+        .join(&key[..2])
+        .join(format!("{key}.tile"))
+}
+
+fn decode_tile(bytes: &[u8]) -> Result<DynamicImage> {
+    Ok(image::load_from_memory(bytes)?)
+}
+
+fn encode_tile(image: &DynamicImage) -> Result<Vec<u8>> {
+    let rgba = image.to_rgba8();
+    let mut out = Vec::new();
+    if rgba.pixels().all(|p| p.0[3] == 255) {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&DynamicImage::ImageRgba8(rgba).to_rgb8())?;
+    } else {
+        // Ausschnitte über den Bildrand haben Transparenz; sie bleiben verlustfrei.
+        rgba.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)?;
+    }
+    Ok(out)
+}
+
+/// Wie [`preview`], aber Gesichtsausschnitte kommen aus dem Kachel-Zwischenspeicher: Ein
+/// Treffer liest nur eine kleine Datei statt das ganze Foto zu entschlüsseln (ADR 0068).
+/// Frisch berechnete Kacheln werden durch dieselbe Kodierung geführt wie gespeicherte, damit
+/// das Bild beim ersten und späteren Anzeigen identisch ist. Fehler beim Zwischenspeichern
+/// (nur lesbarer Datenträger, Verknüpfung statt Ordner) werden ignoriert.
+pub fn cached_preview(
+    request: PreviewRequest,
+    exiftool: &str,
+    control: &Control,
+) -> Result<Preview> {
+    let (Some(bbox), Some(root)) = (request.crop, request.root.clone()) else {
+        return preview(request, exiftool, control);
+    };
+    if bbox.iter().any(|v| !v.is_finite()) || request.edge == 0 {
+        return preview(request, exiftool, control);
+    }
+    let root = root.canonicalize()?;
+    let Some(key) = tile_key(&request, &root, &bbox) else {
+        return preview(request, exiftool, control);
+    };
+    let file = tile_file(&root, &key);
+    let from = |request: PreviewRequest, image: DynamicImage| Preview {
+        request,
+        width: image.width() as usize,
+        height: image.height() as usize,
+        rgba: image.to_rgba8().into_raw(),
+    };
+    if let Ok(bytes) = std::fs::read(&file) {
+        match decode_tile(&bytes) {
+            Ok(image) if image.width() == request.edge && image.height() == request.edge => {
+                return Ok(from(request, image));
+            }
+            // Beschädigte Kachel (abgeleitet, nie ein Original): neu berechnen.
+            _ => {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+    }
+    let fresh = preview(request, exiftool, control)?;
+    let request = fresh.request.clone();
+    let Some(image) =
+        image::RgbaImage::from_raw(fresh.width as u32, fresh.height as u32, fresh.rgba)
+    else {
+        bail!("Ungültige Gesichtskachel");
+    };
+    let image = DynamicImage::ImageRgba8(image);
+    let Ok(bytes) = encode_tile(&image) else {
+        return Ok(from(request, image));
+    };
+    store_tile(&root, &file, &bytes);
+    Ok(from(request, decode_tile(&bytes).unwrap_or(image)))
+}
+
+/// Schreibt eine Kachel atomar und ersetzt nie eine vorhandene Datei.
+fn store_tile(root: &Path, file: &Path, bytes: &[u8]) {
+    let Some(folder) = file.parent() else { return };
+    let base = root.join(TILE_DIR);
+    if base
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return;
+    }
+    if std::fs::create_dir_all(folder).is_err() {
+        return;
+    }
+    let Ok(mut temp) = tempfile::NamedTempFile::new_in(folder) else {
+        return;
+    };
+    if std::io::Write::write_all(&mut temp, bytes).is_ok() {
+        let _ = temp.persist_noclobber(file);
+    }
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::*;
+
+    fn photo(root: &Path, name: &str, shade: u8) -> PathBuf {
+        let path = root.join(name);
+        image::RgbImage::from_fn(400, 300, |x, y| {
+            image::Rgb([shade, (x % 256) as u8, (y % 256) as u8])
+        })
+        .save(&path)
+        .expect("Foto");
+        path
+    }
+    fn request(root: &Path, path: PathBuf, bbox: [f32; 4]) -> PreviewRequest {
+        PreviewRequest {
+            root: Some(root.to_path_buf()),
+            path,
+            orientation: 1,
+            crop: Some(bbox),
+            edge: 64,
+            generation: 0,
+        }
+    }
+
+    #[test]
+    fn cached_tile_equals_the_first_result_and_needs_no_source_decode() {
+        let temp = tempfile::tempdir().expect("Ordner");
+        let path = photo(temp.path(), "a.jpg", 10);
+        let bbox = [0.4, 0.3, 0.6, 0.5];
+        let control = Control::default();
+        let first = cached_preview(request(temp.path(), path.clone(), bbox), "", &control)
+            .expect("erste Kachel");
+        let before = std::fs::metadata(&path).expect("stat");
+        let tiles: Vec<_> = walk(&temp.path().join(TILE_DIR));
+        assert_eq!(tiles.len(), 1, "genau eine Kachel angelegt");
+        let second = cached_preview(request(temp.path(), path.clone(), bbox), "", &control)
+            .expect("zweite Kachel");
+        assert_eq!(first.rgba, second.rgba);
+        assert_eq!((first.width, first.height), (64, 64));
+        assert_eq!(std::fs::metadata(&path).expect("stat").len(), before.len());
+        assert_eq!(walk(&temp.path().join(TILE_DIR)).len(), 1);
+    }
+
+    #[test]
+    fn changed_source_or_crop_gets_a_new_tile_and_the_original_is_untouched() {
+        let temp = tempfile::tempdir().expect("Ordner");
+        let path = photo(temp.path(), "a.jpg", 10);
+        let original = std::fs::read(&path).expect("lesen");
+        let control = Control::default();
+        let a = cached_preview(
+            request(temp.path(), path.clone(), [0.4, 0.3, 0.6, 0.5]),
+            "",
+            &control,
+        )
+        .expect("a");
+        let b = cached_preview(
+            request(temp.path(), path.clone(), [0.1, 0.1, 0.3, 0.3]),
+            "",
+            &control,
+        )
+        .expect("b");
+        assert_ne!(a.rgba, b.rgba);
+        assert_eq!(walk(&temp.path().join(TILE_DIR)).len(), 2);
+        assert_eq!(std::fs::read(&path).expect("lesen"), original);
+        // Anderes Foto unter demselben Namen (andere Größe/Zeit) entwertet die Kachel.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        photo(temp.path(), "a.jpg", 200);
+        let c = cached_preview(
+            request(temp.path(), path, [0.4, 0.3, 0.6, 0.5]),
+            "",
+            &control,
+        )
+        .expect("c");
+        assert_ne!(a.rgba, c.rgba);
+    }
+
+    #[test]
+    fn corrupt_tiles_are_recomputed_and_uncropped_requests_skip_the_cache() {
+        let temp = tempfile::tempdir().expect("Ordner");
+        let path = photo(temp.path(), "a.jpg", 10);
+        let bbox = [0.4, 0.3, 0.6, 0.5];
+        let control = Control::default();
+        let good =
+            cached_preview(request(temp.path(), path.clone(), bbox), "", &control).expect("gut");
+        let tile = walk(&temp.path().join(TILE_DIR)).remove(0);
+        std::fs::write(&tile, b"kaputt").expect("schreiben");
+        let again =
+            cached_preview(request(temp.path(), path.clone(), bbox), "", &control).expect("neu");
+        assert_eq!(good.rgba, again.rgba);
+        let mut full = request(temp.path(), path, bbox);
+        full.crop = None;
+        full.edge = 100;
+        cached_preview(full, "", &control).expect("ganzes Bild");
+        assert_eq!(walk(&temp.path().join(TILE_DIR)).len(), 1);
+    }
+
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    found.extend(walk(&path));
+                } else {
+                    found.push(path);
+                }
+            }
+        }
+        found
+    }
+}

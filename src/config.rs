@@ -11,6 +11,8 @@ pub const SCAN_BATCH: usize = 500;
 pub const HASH_PORTION: usize = 100;
 pub const CACHE_BYTES: usize = 192 * 1024 * 1024;
 pub const CACHE_ENTRIES: usize = 512;
+/// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
+pub const THUMBNAIL_WORKERS: usize = 4;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
 pub const GROUP_MAX: usize = 28;
 /// Gruppen je Seite in den Gesichtsreitern.

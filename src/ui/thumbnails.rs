@@ -67,24 +67,41 @@ pub struct Thumbnails {
 }
 impl Thumbnails {
     pub fn new(ctx: egui::Context) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<(String, PreviewRequest, String)>(1);
-        let (out, input) = mpsc::sync_channel(2);
+        // Mehrere Arbeiter dekodieren Fotos gleichzeitig (ein Foto kostet 100 bis 300 ms, eine
+        // Seite zeigt Dutzende Gesichter, ADR 0068); die Anfragewarteschlange bleibt kurz, damit
+        // sichtbare Kacheln Vorrang vor längst weggescrollten behalten.
+        let workers = std::thread::available_parallelism()
+            .map_or(2, |n| n.get())
+            .clamp(2, config::THUMBNAIL_WORKERS);
+        let (tx, rx) = mpsc::sync_channel::<(String, PreviewRequest, String)>(workers);
+        let (out, input) = mpsc::sync_channel(workers * 2);
         let generation = Arc::new(AtomicU64::new(0));
-        let worker_generation = generation.clone();
-        std::thread::spawn(move || {
-            while let Ok((key, request, exiftool)) = rx.recv() {
-                if request.generation != worker_generation.load(Ordering::Relaxed) {
-                    continue;
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        for _ in 0..workers {
+            let (rx, out, ctx) = (rx.clone(), out.clone(), ctx.clone());
+            let worker_generation = generation.clone();
+            std::thread::spawn(move || {
+                loop {
+                    let next = match rx.lock() {
+                        Ok(queue) => queue.recv(),
+                        Err(_) => break,
+                    };
+                    let Ok((key, request, exiftool)) = next else {
+                        break;
+                    };
+                    if request.generation != worker_generation.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let _foreground = crate::core::jobs::foreground();
+                    let request_generation = request.generation;
+                    let result = previews::cached_preview(request, &exiftool, &Control::default());
+                    if out.send((key, request_generation, result)).is_err() {
+                        break;
+                    }
+                    ctx.request_repaint();
                 }
-                let _foreground = crate::core::jobs::foreground();
-                let request_generation = request.generation;
-                let result = previews::preview(request, &exiftool, &Control::default());
-                if out.send((key, request_generation, result)).is_err() {
-                    break;
-                }
-                ctx.request_repaint();
-            }
-        });
+            });
+        }
         Self {
             requests: tx,
             results: input,

@@ -41,7 +41,11 @@ fn biometric_erasure_scrubs_backup_but_preserves_inventory() -> anyhow::Result<(
         [faces::encode(&[1.0, 0.0])],
     )?;
     c.backup()?;
+    let tiles = temp.path().join(".myfotomanager_tiles").join("ab");
+    std::fs::create_dir_all(&tiles)?;
+    std::fs::write(tiles.join("x.tile"), b"kachel")?;
     maintenance::delete_biometrics(&c)?;
+    assert!(!temp.path().join(".myfotomanager_tiles").exists());
     assert_eq!(
         c.db.query_row("SELECT count(*) FROM photos", [], |r| r.get::<_, i64>(0))?,
         1

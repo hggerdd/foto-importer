@@ -8,7 +8,10 @@ try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $bundle = Join-Path $projectRoot "dist/foto-importer-$stamp"
     New-Item -ItemType Directory -Path $bundle | Out-Null
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'target/release/foto-importer.exe') -Destination $bundle
+    $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $projectRoot 'target' }
+    $exe = Join-Path $targetDir 'release/foto-importer.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { throw "EXE nicht gefunden: $exe" }
+    Copy-Item -LiteralPath $exe -Destination $bundle
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $bundle
     Copy-Item -LiteralPath (Join-Path $projectRoot 'docs') -Destination $bundle -Recurse
     Copy-Item -LiteralPath (Join-Path $projectRoot 'ADR') -Destination $bundle -Recurse
