@@ -1,5 +1,4 @@
 use super::{
-    classifier,
     collection::Collection,
     faces::{self, decode},
     inference,
@@ -95,23 +94,19 @@ fn ranked_with(
     result.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
     Ok(result)
 }
-/// Namensvorschläge für ein Gesicht. `by_model` ist wahr, wenn der trainierte
-/// Klassifikator die Reihenfolge bestimmt (Score = Wahrscheinlichkeit);
-/// sonst gilt der Ähnlichkeitsvergleich (Score = Kosinus).
+/// Namensvorschläge für ein Gesicht nach dem Ähnlichkeitsvergleich (Score = Kosinus).
 #[derive(Clone, Default)]
 pub struct Suggestions {
-    pub by_model: bool,
     pub items: Vec<(i64, String, f32)>,
     /// Repräsentatives Gesicht je vorgeschlagener Person (Medoid).
     pub portraits: BTreeMap<i64, faces::Face>,
 }
-/// Je Seite geteilter Zwischenspeicher (ADR 0066): Referenzvektoren, Klassifikator und
+/// Je Seite geteilter Zwischenspeicher (ADR 0066): Referenzvektoren und
 /// Porträts werden einmal je konsistentem Lesestand geladen. Er lebt nur so lange wie
 /// der Aufruf, daher kann er nie veraltete Zuordnungen zeigen.
 #[derive(Default)]
 pub struct SuggestionCache {
     references: Option<References>,
-    model: Option<Option<classifier::Model>>,
     portraits: BTreeMap<i64, Option<faces::Face>>,
 }
 impl SuggestionCache {
@@ -120,12 +115,6 @@ impl SuggestionCache {
             self.references = Some(References::load(collection, key)?);
         }
         Ok(self.references.as_ref().expect("geladen"))
-    }
-    fn model(&mut self, collection: &Collection, key: &str) -> Result<Option<&classifier::Model>> {
-        if self.model.is_none() {
-            self.model = Some(classifier::load(collection, key)?);
-        }
-        Ok(self.model.as_ref().and_then(|m| m.as_ref()))
     }
 }
 fn with_portraits(
@@ -150,7 +139,7 @@ fn with_portraits(
 pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Suggestions> {
     let mut cache = SuggestionCache::default();
     let mut all = scored(collection, &mut cache, face, key)?;
-    all.items.truncate(if all.by_model { 3 } else { 6 });
+    all.items.truncate(3);
     Ok(with_portraits(collection, &mut cache, all, key))
 }
 /// Gemeinsamer Vorschlag für eine Gruppe: Mittel der Einzelwerte über
@@ -165,14 +154,13 @@ pub fn group_suggestions_cached(
     key: &str,
 ) -> Result<Suggestions> {
     let mut totals: BTreeMap<i64, (String, f32)> = BTreeMap::new();
-    let (mut used, mut by_model) = (0usize, true);
+    let mut used = 0usize;
     for face in faces.iter().take(3) {
         let one = scored(collection, cache, *face, key)?;
         if one.items.is_empty() {
             continue;
         }
         used += 1;
-        by_model &= one.by_model;
         for (id, name, score) in one.items {
             totals.entry(id).or_insert((name, 0.0)).1 += score;
         }
@@ -187,7 +175,6 @@ pub fn group_suggestions_cached(
         collection,
         cache,
         Suggestions {
-            by_model,
             items,
             portraits: BTreeMap::new(),
         },
@@ -200,37 +187,9 @@ fn scored(
     face: i64,
     key: &str,
 ) -> Result<Suggestions> {
-    let result = ranked_with(collection, cache.references(collection, key)?, face, key)?;
-    if let Some(model) = cache.model(collection, key)? {
-        let bytes: Option<Vec<u8>> = collection
-            .db
-            .query_row(
-                "SELECT vec FROM face_embeddings WHERE face_id=? AND embedder_id=?",
-                params![face, key],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(query) = bytes.and_then(|b| inference::normalize(&decode(&b).ok()?).ok()) {
-            // Dieselben Ausschlüsse wie beim Ähnlichkeitsvergleich bleiben maßgeblich.
-            let allowed: BTreeSet<i64> = result.iter().map(|r| r.0).collect();
-            let names: BTreeMap<i64, &str> = result.iter().map(|r| (r.0, r.1.as_str())).collect();
-            let items: Vec<_> = model
-                .predict_among(&query, &allowed)
-                .into_iter()
-                .map(|(id, p)| (id, names[&id].to_string(), p))
-                .collect();
-            if !items.is_empty() {
-                return Ok(Suggestions {
-                    by_model: true,
-                    items,
-                    portraits: BTreeMap::new(),
-                });
-            }
-        }
-    }
+    let items = ranked_with(collection, cache.references(collection, key)?, face, key)?;
     Ok(Suggestions {
-        by_model: false,
-        items: result,
+        items,
         portraits: BTreeMap::new(),
     })
 }
@@ -354,12 +313,11 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
         control.progress(index + 1, people.len());
     }
     if reset || !people.is_empty() {
-        // Ein fehlgeschlagenes Training darf Abgleich und Gruppen nicht blockieren.
-        if let Err(error) = classifier::train(collection, &key, control)
-            && control.cancel.load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(error);
-        }
+        // Gespeicherter Altwert des entfernten Klassifikators.
+        collection.db.execute(
+            "DELETE FROM face_settings WHERE key LIKE 'rust.classifier:%'",
+            [],
+        )?;
     }
     rematch(collection, &key, control)?;
     control.set_face_phase(super::jobs::FacePhase::Groups);

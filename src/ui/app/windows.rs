@@ -78,27 +78,18 @@ impl PhotoApp {
                 .show(ctx, |ui| {
                     let mut submit = false;
                     ui.label("Bestehende Person wählen oder neuen Namen eingeben.");
-                    let by_model = self.name_suggestions_by_model;
                     let busy = self.busy();
                     ui.label(
-                        RichText::new(if by_model {
-                            "Die drei passendsten Personen nach dem trainierten Modell · Prozent sind keine Garantie"
-                        } else {
-                            "Ähnlichkeitsvorschläge · noch kein trainiertes Modell"
-                        })
-                        .small()
-                        .weak(),
+                        RichText::new("Ähnlichkeitsvorschläge · die Werte sind keine Garantie")
+                            .small()
+                            .weak(),
                     );
                     ui.horizontal_wrapped(|ui| {
-                        for index in 0..if by_model { 3 } else { 6 } {
+                        for index in 0..3 {
                             if let Some((person, name, score)) =
                                 self.name_suggestions.get(index).cloned()
                             {
-                                let detail = if by_model {
-                                    format!("{:.0} %", score * 100.0)
-                                } else {
-                                    format!("{score:.3}")
-                                };
+                                let detail = format!("{score:.2}").replace('.', ",");
                                 if Self::suggestion_chip(
                                     &mut self.thumbnails,
                                     ui,

@@ -198,7 +198,6 @@ pub struct PhotoApp {
     name_input: String,
     name_person: Option<i64>,
     name_suggestions: Vec<(i64, String, f32)>,
-    name_suggestions_by_model: bool,
     name_portraits: BTreeMap<i64, Face>,
     /// Gesicht unter der Maus in diesem Frame (höchstens eines).
     hover_face: Option<Face>,
@@ -295,7 +294,6 @@ impl PhotoApp {
             name_input: String::new(),
             name_person: None,
             name_suggestions: Vec::new(),
-            name_suggestions_by_model: false,
             name_portraits: BTreeMap::new(),
             hover_face: None,
             relation_from: None,
@@ -1134,7 +1132,6 @@ impl PhotoApp {
                     if revision == self.detail_revision
                         && self.naming.as_ref().is_some_and(|f| f.id == id) =>
                 {
-                    self.name_suggestions_by_model = suggestions.by_model;
                     self.name_portraits = suggestions.portraits;
                     self.name_suggestions = suggestions.items
                 }

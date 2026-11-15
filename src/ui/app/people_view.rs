@@ -352,21 +352,9 @@ impl PhotoApp {
                 });
                 if let Some(proposals) = &proposals {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(if proposals.by_model {
-                                "Passendste Personen (Modell):"
-                            } else {
-                                "Ähnlichste Personen:"
-                            })
-                            .small()
-                            .weak(),
-                        );
+                        ui.label(RichText::new("Ähnlichste Personen:").small().weak());
                         for (person, name, score) in &proposals.items {
-                            let detail = if proposals.by_model {
-                                format!("{:.0} %", score * 100.0)
-                            } else {
-                                format!("{score:.2}")
-                            };
+                            let detail = format!("{score:.2}").replace('.', ",");
                             if Self::suggestion_chip(
                                 &mut self.thumbnails,
                                 ui,

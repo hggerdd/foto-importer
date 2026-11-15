@@ -8,10 +8,9 @@
 //! cargo run --release --example face_save_bench -- plans tmp/bench-faces
 //! ```
 //! `gen` erzeugt eine Sammlung (Standard 90.000 Fotos, 200.000 Gesichter, 40 Personen,
-//! 15.000 bestätigte Gesichter, Vorschläge, Gruppen, Referenzen, trainiertes Modell).
+//! 15.000 bestätigte Gesichter, Vorschläge, Gruppen, Referenzen).
 //! `run` kopiert sie nach `work` und misst die Kette Speichern, Nachladen und Wartung.
 use foto_importer::core::{
-    classifier,
     collection::Collection,
     faces::{self, encode},
     jobs::Control,
@@ -307,9 +306,6 @@ fn generate(root: &Path, photos: usize) -> anyhow::Result<()> {
     }
     tx.commit()?;
     println!("Daten eingefügt: {:.1?}", started.elapsed());
-    let started = Instant::now();
-    classifier::train(&mut c, EMBEDDER, &Control::default())?;
-    println!("Klassifikator trainiert: {:.1?}", started.elapsed());
     c.db.execute_batch("ANALYZE; PRAGMA wal_checkpoint(TRUNCATE);")?;
     for (label, sql) in [
         ("Fotos", "SELECT count(*) FROM photos"),
@@ -432,9 +428,6 @@ fn run(template: &Path, work: &Path, maintenance_seconds: u64) -> anyhow::Result
     let first: Vec<i64> = page.groups[0].iter().map(|f| f.id).collect();
     timed("group_suggestions(erste Gruppe)", || {
         recognition::group_suggestions(&reader, &first, EMBEDDER).map(|_| ())
-    })?;
-    timed("classifier::load", || {
-        classifier::load(&reader, EMBEDDER).map(|_| ())
     })?;
     drop(reader);
     println!("C. Speichern (name_group) und Nachladen, 4 Durchgänge");
