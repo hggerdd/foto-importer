@@ -2,6 +2,7 @@ pub mod central;
 pub mod choice_filter;
 pub mod collection;
 pub mod dng_updates;
+pub mod evaluation;
 pub mod face_models;
 pub mod faces;
 pub mod files;

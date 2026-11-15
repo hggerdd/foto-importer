@@ -71,13 +71,14 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 | 0,65 | 81 % | 4,5 % |
 | 0,70 | 61 % | 1 % |
 
+Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet nur lesend; zusätzlich Anteile mit 0,05 Abstand zur zweitbesten Person).
+
 ## Beschlossen, noch nicht umgesetzt (2026-11-15)
 
 - Ein Gesicht erhält nur dann einen Vorschlag, wenn der Score mindestens **0,60** beträgt
   **und** mindestens **0,05** vor der zweitbesten Person liegt. Beide Werte sind je Sammlung
   überschreibbar und unter Einstellungen (Erweitert) einstellbar. Der Bonus für gemeinsames
   Auftreten hebt kein Gesicht über die Schwelle.
-- Ein Messwerkzeug (`examples/face_eval.rs`) erzeugt die Tabelle oben reproduzierbar.
 
 ## Grenzen
 
