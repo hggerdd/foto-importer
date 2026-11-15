@@ -88,10 +88,9 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-[Drei UX-Konzepte und Kritik](docs/ux-konzepte.md) ·
 [Architektur mit Diagrammen](docs/architektur.md) ·
 [ADRs](ADR/README.md) · [Validierung](docs/validierung.md)
 
 Dieses Repository enthält ausschließlich die Rust-Anwendung; der Branch `main` ist der
 stabile Stand. Die frühere Python-Version liegt unverändert im Branch `python-legacy`
-(Stand 2026-11-15) und lokal in `C:	ttoto-importer`; sie ist nur Verhaltensreferenz.
+(Stand 2026-11-15) und lokal in `C:\ttt\foto-importer`; sie ist nur Verhaltensreferenz.

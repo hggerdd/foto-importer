@@ -1,6 +1,6 @@
 # Konzept: Seite „06 Zeitreise“ (Personen über die Zeit verfolgen)
 
-Status: teilweise umgesetzt (Stufen 1 und 2, Teile von 3, 4, 6 und 7; Details im Abschnitt "Umsetzungsstand"), Entscheidung in [ADR 0069](../ADR/0069-zeitreise.md).
+Status: teilweise umgesetzt (Stufen 1 und 2, Teile von 3, 4, 6 und 7; Details im Abschnitt "Umsetzungsstand"), Entscheidung in [ADR 0069](../ADR/zeitreise.md).
 Stand 2026-11-13. Abweichungen und offene Punkte stehen im Abschnitt "Umsetzungsstand" am Ende.
 
 ## Ziel
