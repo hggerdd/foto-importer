@@ -1,6 +1,6 @@
 # Konzept: Seite „06 Zeitreise“ (Personen über die Zeit verfolgen)
 
-Status: umgesetzt in den Stufen 1 bis 7, Entscheidung in [ADR 0069](../ADR/0069-zeitreise.md).
+Status: teilweise umgesetzt (Stufen 1 und 2, Teile von 3, 4, 6 und 7; Details im Abschnitt "Umsetzungsstand"), Entscheidung in [ADR 0069](../ADR/0069-zeitreise.md).
 Stand 2026-11-13. Abweichungen und offene Punkte stehen im Abschnitt "Umsetzungsstand" am Ende.
 
 ## Ziel
@@ -131,10 +131,14 @@ Sichtprüfung per Fensteraufnahme.
 - Stufe 1 Kern (`src/core/timeline.rs`): Abfrage, Datumsquelle/-qualität, Gesichtsgröße in
   Pixeln, Frontalität, Zeitreise-Wert, Schwellen (`config.rs`), Abschnitte Jahr/Monat/Altersjahr,
   bestes Gesicht, Dichte, Lücken, Teilindex `ix_faces_timeline` (additiv, kein Schema 7).
-- Stufe 2 bis 7: Seite "06 Zeitreise" mit Zeitstrahl, Dichtekurve, Detail, Altersleiste,
-  Kontaktbogen, Zeitraffer, Vorher/Nachher, Familienvergleich, Festnageln/Ersetzen/
-  Ausblenden, Lückenhinweisen und Export (PNG-Collage, PNG-Kontaktbogen, Zeitraffer als GIF
-  oder PNG-Bildfolge; kein PDF und kein Video, weil das neue schwere Abhängigkeiten wären).
+- Umgesetzt und getestet: Seite "06 Zeitreise" mit Zeitstrahl, Dichtekurve, Detail,
+  Achse Datum oder Alter (Altersleiste als Umschaltung der Achse), Festnageln und Ausblenden,
+  Reiter "Lücken", Reiter "Zeitraffer & Export" (Abspielen in der Oberfläche; Export als
+  PNG-Collage, PNG-Kontaktbogen, Zeitraffer als GIF oder PNG-Bildfolge, nur neue Dateien;
+  kein PDF und kein Video, weil das neue schwere Abhängigkeiten wären).
+- Nicht umgesetzt: eigene Ansicht Kontaktbogen auf dem Bildschirm (nur als Export), Vorher/
+  Nachher-Vergleich, Familienvergleich (der Kern liefert `relatives`, es gibt keine Ansicht
+  dafür), Lücke zur Sammlungssuche öffnen, Ersetzen eines Gesichts durch ein frei gewähltes.
 - Abweichungen: keine Schärfemessung (nicht gespeichert; der Erkennungswert dient als Ersatz);
   keine Datumskorrektur je Foto; keine Ereignismarken (Ansicht 7), keine Verlaufskurve der
   Ähnlichkeit (Ansicht 8); Tastatursteuerung nur teilweise; Zoom des Zeitstrahls ersetzt

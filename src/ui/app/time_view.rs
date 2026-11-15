@@ -4,6 +4,7 @@
 //! den vorhandenen Vorschau-Cache nur, wenn sie sichtbar sind.
 
 use super::*;
+use crate::core::timeline_export;
 use crate::core::{
     faces::Person,
     relations,
@@ -21,6 +22,8 @@ const TILE: f32 = 112.0;
 pub(super) enum Tab {
     #[default]
     Strip,
+    Gaps,
+    Lapse,
 }
 
 /// Ergebnis des Ladeauftrags: Personen, Gesichter der Person und die erste Berechnung.
@@ -43,6 +46,8 @@ pub(super) enum TimeOutcome {
     },
     /// Eine Nutzerentscheidung ist gespeichert; neu laden.
     Decided,
+    /// Ein Export ist fertig (Pfad) oder wurde im Ordnerdialog abgebrochen.
+    Exported(Option<PathBuf>),
 }
 
 /// Nutzerentscheidung, die auf einem Schreib-Worker gespeichert wird.
@@ -75,6 +80,11 @@ pub(super) struct TimeUi {
     focus: Option<i64>,
     scroll_to: Option<String>,
     pub tab: Tab,
+    lapse_index: usize,
+    lapse_playing: bool,
+    lapse_tick: Option<std::time::Instant>,
+    lapse_fps: f32,
+    lapse_aligned: bool,
 }
 
 impl Default for TimeUi {
@@ -101,6 +111,11 @@ impl Default for TimeUi {
             focus: None,
             scroll_to: None,
             tab: Tab::Strip,
+            lapse_index: 0,
+            lapse_playing: false,
+            lapse_tick: None,
+            lapse_fps: 4.0,
+            lapse_aligned: true,
         }
     }
 }
@@ -297,6 +312,13 @@ impl PhotoApp {
                 ui.apply(computed);
             }
             TimeOutcome::Decided => ui.need_load = true,
+            TimeOutcome::Exported(path) => {
+                let text = path.map_or_else(
+                    || "Export abgebrochen.".to_owned(),
+                    |p| format!("Export gespeichert: {}", p.display()),
+                );
+                self.message(text, false);
+            }
         }
     }
 
@@ -311,12 +333,28 @@ impl PhotoApp {
         }
         self.sync_time();
         self.time_header(ui);
+        ui.horizontal(|ui| {
+            for (tab, label) in [
+                (Tab::Strip, "Zeitstrahl"),
+                (Tab::Gaps, "Lücken"),
+                (Tab::Lapse, "Zeitraffer & Export"),
+            ] {
+                if ui
+                    .selectable_label(self.time_ui.tab == tab, label)
+                    .clicked()
+                {
+                    self.time_ui.tab = tab;
+                }
+            }
+        });
         ui.separator();
         egui::ScrollArea::vertical()
             .id_salt("time-page")
             .auto_shrink([false, false])
             .show(ui, |ui| match self.time_ui.tab {
                 Tab::Strip => self.strip_tab(ui),
+                Tab::Gaps => self.gaps_tab(ui),
+                Tab::Lapse => self.lapse_tab(ui),
             });
     }
 
@@ -847,5 +885,316 @@ impl TimeUi {
             self.focus = None;
         }
         self.computed = Some(Arc::new(computed));
+    }
+}
+
+/// Art eines Exports.
+#[derive(Clone, Copy)]
+enum Export {
+    Collage,
+    Contact,
+    Gif,
+    Sequence,
+}
+
+impl PhotoApp {
+    /// Die gewählten Gesichter (je Abschnitt eines, ausgeblendete fehlen), älteste zuerst.
+    fn lapse_tiles(&self, computed: &Computed) -> Vec<timeline_export::Tile> {
+        computed
+            .sections
+            .iter()
+            .filter_map(|s| {
+                let face = computed.face(s.best?).clone();
+                Some(timeline_export::Tile {
+                    label: timeline_export::plain_label(computed.axis, computed.grain, s.ord),
+                    face,
+                })
+            })
+            .collect()
+    }
+
+    fn start_export(&mut self, computed: &Computed, kind: Export) {
+        if self.tasks.iter().any(|t| t.kind == "timeline-export") {
+            return;
+        }
+        let tiles = self.lapse_tiles(computed);
+        let rows: Vec<(String, Vec<TimeFace>)> = computed
+            .years
+            .iter()
+            .map(|s| {
+                let faces: Vec<TimeFace> = s
+                    .members
+                    .iter()
+                    .filter(|m| !computed.items[**m].hidden)
+                    .take(10)
+                    .map(|m| computed.items[*m].face.clone())
+                    .collect();
+                (
+                    timeline_export::plain_label(computed.axis, Grain::Year, s.ord),
+                    faces,
+                )
+            })
+            .filter(|r| !r.1.is_empty())
+            .collect();
+        let name = self
+            .time_ui
+            .person
+            .and_then(|id| self.time_ui.people.iter().find(|p| p.id == id))
+            .map_or_else(|| "Person".to_owned(), |p| p.name.clone());
+        let stem = format!("Zeitreise-{}", timeline_export::safe_stem(&name));
+        let (root, exiftool) = (
+            PathBuf::from(&self.settings.collection),
+            self.settings.exiftool.clone(),
+        );
+        let (fps, aligned) = (self.time_ui.lapse_fps, self.time_ui.lapse_aligned);
+        self.launch(
+            "Zeitreise exportieren",
+            false,
+            "timeline-export",
+            move |control| {
+                let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Ordner für den Export wählen")
+                    .pick_folder()
+                else {
+                    return Ok(Outcome::Time(TimeOutcome::Exported(None)));
+                };
+                let path = match kind {
+                    Export::Collage => {
+                        let image = timeline_export::collage(
+                            &root, &tiles, 6, 160, aligned, &exiftool, &control,
+                        )?;
+                        timeline_export::save_png(&image, &dir, &stem)?
+                    }
+                    Export::Contact => {
+                        let image =
+                            timeline_export::contact_sheet(&root, &rows, 120, &exiftool, &control)?;
+                        timeline_export::save_png(&image, &dir, &format!("{stem}-Kontaktbogen"))?
+                    }
+                    Export::Gif | Export::Sequence => {
+                        let mut frames = Vec::new();
+                        control
+                            .total
+                            .store(tiles.len(), std::sync::atomic::Ordering::Relaxed);
+                        for (index, tile) in tiles.iter().enumerate() {
+                            control.checkpoint()?;
+                            control
+                                .done
+                                .store(index, std::sync::atomic::Ordering::Relaxed);
+                            let mut frame = timeline_export::render_face(
+                                &root, &tile.face, 360, aligned, &exiftool, &control,
+                            )?;
+                            timeline_export::draw_text(&mut frame, 10, 10, &tile.label, 4);
+                            frames.push(frame);
+                        }
+                        if matches!(kind, Export::Gif) {
+                            timeline_export::timelapse_gif(&frames, fps, &dir, &stem)?
+                        } else {
+                            timeline_export::timelapse_sequence(&frames, &dir, &stem)?
+                        }
+                    }
+                };
+                Ok(Outcome::Time(TimeOutcome::Exported(Some(path))))
+            },
+        );
+    }
+
+    fn lapse_tab(&mut self, ui: &mut egui::Ui) {
+        let Some(computed) = self.time_ui.computed.clone() else {
+            ui.add_space(20.0);
+            ui.label("Zeitreise wird gelesen …");
+            return;
+        };
+        let tiles = self.lapse_tiles(&computed);
+        if tiles.is_empty() {
+            ui.add_space(20.0);
+            ui.label("Keine geeigneten Gesichter für Zeitraffer oder Export.");
+            return;
+        }
+        self.time_ui.lapse_index = self.time_ui.lapse_index.min(tiles.len() - 1);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let label = if self.time_ui.lapse_playing {
+                "Pause"
+            } else {
+                "Abspielen"
+            };
+            if ui.button(label).clicked() {
+                self.time_ui.lapse_playing = !self.time_ui.lapse_playing;
+                self.time_ui.lapse_tick = Some(std::time::Instant::now());
+            }
+            let mut index = self.time_ui.lapse_index;
+            ui.add(egui::Slider::new(&mut index, 0..=tiles.len() - 1).show_value(false));
+            self.time_ui.lapse_index = index;
+            ui.label("Bilder je Sekunde");
+            ui.add(egui::Slider::new(&mut self.time_ui.lapse_fps, 1.0..=12.0));
+            ui.checkbox(&mut self.time_ui.lapse_aligned, "Augen ausrichten")
+                .on_hover_text(
+                    "Im Export: Gesichter an den Augen ausrichten, sofern Landmarks vorliegen.",
+                );
+        });
+        if self.time_ui.lapse_playing {
+            let step = std::time::Duration::from_secs_f32(1.0 / self.time_ui.lapse_fps);
+            let due = self.time_ui.lapse_tick.is_none_or(|t| t.elapsed() >= step);
+            if due {
+                self.time_ui.lapse_index = (self.time_ui.lapse_index + 1) % tiles.len();
+                self.time_ui.lapse_tick = Some(std::time::Instant::now());
+            }
+            ui.ctx().request_repaint_after(step);
+        }
+        let tile = &tiles[self.time_ui.lapse_index];
+        let info = face_info(&tile.face, &computed);
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            self.face_tile(ui, &tile.face, 280.0, &info);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(&tile.label).size(24.0).strong());
+                ui.label(
+                    RichText::new(format!(
+                        "Bild {} von {}",
+                        self.time_ui.lapse_index + 1,
+                        tiles.len()
+                    ))
+                    .color(theme::MUTED),
+                );
+            });
+        });
+        ui.add_space(14.0);
+        ui.separator();
+        ui.label(RichText::new("Export").strong());
+        ui.label(
+            RichText::new(
+                "Es entstehen nur neue Dateien im gewählten Ordner; nichts wird ersetzt oder verändert.",
+            )
+            .size(theme::MIN_TEXT)
+            .color(theme::MUTED),
+        );
+        let busy = self.tasks.iter().any(|t| t.kind == "timeline-export");
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(!busy, |ui| {
+                for (kind, label) in [
+                    (Export::Collage, "Collage (PNG)"),
+                    (Export::Contact, "Kontaktbogen (PNG)"),
+                    (Export::Gif, "Zeitraffer (GIF)"),
+                    (Export::Sequence, "Zeitraffer (PNG-Bildfolge)"),
+                ] {
+                    if ui.button(label).clicked() {
+                        self.start_export(&computed, kind);
+                    }
+                }
+            });
+            if busy {
+                ui.spinner();
+            }
+        });
+    }
+
+    fn gaps_tab(&mut self, ui: &mut egui::Ui) {
+        let Some(computed) = self.time_ui.computed.clone() else {
+            ui.add_space(20.0);
+            ui.label("Zeitreise wird gelesen …");
+            return;
+        };
+        ui.add_space(8.0);
+        if computed.gaps.is_empty() {
+            ui.label("Keine Lücken: Die Person hat in jedem Abschnitt ein geeignetes Gesicht.");
+            return;
+        }
+        ui.label(
+            RichText::new(
+                "Zeiträume ohne brauchbares Gesicht, mit der Zahl vorhandener, aber aussortierter Gesichter (zu klein, geringe Güte oder nicht frontal).",
+            )
+            .color(theme::MUTED),
+        );
+        ui.add_space(6.0);
+        for gap in &computed.gaps {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("{} bis {}", gap.before, gap.after)).strong());
+                ui.label(format!("Lücke {} bis {}", gap.start, gap.end));
+                let (text, color) = if gap.candidates == 0 {
+                    ("keine aussortierten Gesichter".to_owned(), theme::MUTED)
+                } else {
+                    (
+                        format!(
+                            "{} aussortierte Gesichter in diesem Zeitraum",
+                            gap.candidates
+                        ),
+                        theme::WARM,
+                    )
+                };
+                ui.label(RichText::new(text).color(color));
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn settle(app: &mut PhotoApp, ctx: &egui::Context) {
+        for _ in 0..3000 {
+            app.sync_time();
+            app.poll(ctx);
+            if app.tasks.is_empty() && !app.time_ui.need_load && !app.time_ui.need_compute {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn timeline_loads_and_recomputes_on_workers_and_drops_stale_answers() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        {
+            let c = Collection::open(root.path(), true)?;
+            c.db.execute("INSERT INTO persons(id) VALUES(1)", [])?;
+            c.db.execute("INSERT INTO person_attrs VALUES(1,?,?)", ["name", "Anna"])?;
+            c.db.execute(
+                "INSERT INTO person_attrs VALUES(1,?,?)",
+                ["birth_year", "2010"],
+            )?;
+            for (id, year) in [(1, 2015), (2, 2017), (3, 2020)] {
+                let rel = format!("{year}/{id}.jpg");
+                c.db.execute(
+                    "INSERT INTO photos(id,status) VALUES(?,?)",
+                    rusqlite::params![id, "present"],
+                )?;
+                c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status,meta_state) VALUES(?,?,?,?,?,?,?,1,0,?,?,?)", rusqlite::params![id, rel, rel, year.to_string(), format!("{id}.jpg"), id.to_string(), "jpg", id, "present", "done"])?;
+                c.db.execute("INSERT INTO meta(file_id,dt_original,width,height,orientation) VALUES(?,?,800,600,1)", rusqlite::params![id, format!("{year}:06:01 12:00:00")])?;
+                c.db.execute("INSERT INTO faces(id,photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality,person_id,assignment) VALUES(?,?,?,?,?,0.3,0.2,0.7,0.8,?,0.95,0.9,1,?)", rusqlite::params![id, id, id, rel, "d", "[[300.0,200.0],[400.0,200.0],[350.0,260.0],[310.0,320.0],[390.0,320.0]]", "user"])?;
+            }
+        }
+        let ctx = egui::Context::default();
+        let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = PhotoApp::with_settings(&creation, Settings::default());
+        app.settings.collection = root.path().to_string_lossy().into_owned();
+        settle(&mut app, &ctx);
+        // Die Person mit den meisten Gesichtern wird vorgewählt, alles kam vom Worker.
+        assert_eq!(app.time_ui.person, Some(1));
+        let computed = app.time_ui.computed.clone().expect("computed");
+        assert_eq!(computed.sections.len(), 3);
+        assert_eq!(computed.axis, Axis::Date);
+        // Achse wechseln rechnet auf einem Worker neu, ohne die Datenbank zu lesen.
+        app.time_ui.axis = Axis::Age;
+        app.time_ui.need_compute = true;
+        settle(&mut app, &ctx);
+        assert_eq!(
+            app.time_ui.computed.as_ref().map(|c| c.axis),
+            Some(Axis::Age)
+        );
+        // Eine Antwort mit veralteter Revision wird verworfen.
+        let before = app.time_ui.computed.clone().expect("computed");
+        let stale = timeline::compute(app.time_ui.raw.as_ref().expect("raw"), &Params::default());
+        let revision = app.time_ui.revision.saturating_sub(1);
+        app.accept_time(TimeOutcome::Computed {
+            revision,
+            computed: stale,
+        });
+        assert!(Arc::ptr_eq(
+            &before,
+            app.time_ui.computed.as_ref().expect("computed")
+        ));
+        Ok(())
     }
 }

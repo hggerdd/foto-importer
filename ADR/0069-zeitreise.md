@@ -1,6 +1,6 @@
 # ADR-0069: Zeitreise, Gesichter einer Person über die Zeit
 
-- **Status:** Akzeptiert (Stufen 1 bis 7 umgesetzt, Grenzen siehe unten)
+- **Status:** Akzeptiert (Kern, Seite mit Zeitstrahl, Lücken, Zeitraffer und Export umgesetzt; Vorher/Nachher, Familienvergleich und Kontaktbogen-Ansicht nicht umgesetzt, Grenzen siehe unten)
 - **Erfasst am:** 2026-11-13
 - **Art:** Neue Entscheidung
 - **Entscheidungsdatum:** 2026-11-13
@@ -95,6 +95,16 @@ mitzuführen ändert das Zentralschema und bleibt einer eigenen Entscheidung vor
   Anzeige reicht das, die Auflösungsschwelle bezieht sich auf das Quellbild.
 - Datumskorrektur, Ereignismarken (Ordner/Serien/GPS) und die Verlaufskurve der Ähnlichkeit
   aus dem Konzept sind nicht umgesetzt.
+- Ebenfalls nicht umgesetzt: Vorher/Nachher-Vergleich, Familienvergleich (nur der Kern
+  `timeline::relatives`), Kontaktbogen als Bildschirmansicht (nur als Export). Der Export
+  öffnet den Ordnerdialog auf dem Worker und legt nur neue Dateien an (`create_new`).
+
+## Messwerte
+
+Synthetisch, 100.000 Gesichter einer Person, Testprofil (unoptimiert, `cargo test`, Windows):
+Abfrage 1,6 s, Berechnung (Abschnitte, Dichte, Lücken) 0,25 s. Beides läuft auf einem Worker;
+im Release-Profil ist es schneller, dort wurde nicht gemessen. Echte Sammlungen wurden nicht
+gemessen.
 
 ## Bei Weiterentwicklung beachten
 
@@ -105,4 +115,7 @@ eigenes ADR mit Migration (ADR 0042).
 ## Belege
 
 [Kern](../src/core/timeline.rs), [Tests](../tests/timeline.rs),
-[Seite](../src/ui/app/time_view.rs), [Demo](../examples/timeline_demo.rs).
+[Seite](../src/ui/app/time_view.rs), [Export](../src/core/timeline_export.rs),
+[Exporttest](../tests/timeline_export.rs), [Demo](../examples/timeline_demo.rs),
+[Aufnahme](../docs/screenshots/zeitreise-zeitstrahl.png) (nur Zeitstrahl-Reiter gesehen; die
+Reiter Lücken sowie Zeitraffer und Export wurden nicht per Aufnahme geprüft).
