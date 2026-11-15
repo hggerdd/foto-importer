@@ -42,7 +42,7 @@ impl PhotoApp {
         if ui
             .add_enabled(
                 !self.tasks.iter().any(|task| task.kind == "picker"),
-                egui::Button::new("YuNet und SFace installieren"),
+                egui::Button::new("Erkennungsmodelle installieren"),
             )
             .on_hover_text("Vorhandene Gewichte verwenden oder rund 39 MB von OpenCV Zoo laden")
             .clicked()
@@ -92,7 +92,7 @@ impl PhotoApp {
                         egui::ProgressBar::new(done as f32 / total as f32)
                             .desired_width(230.0)
                             .text(if done < total {
-                                "ONNX Runtime wird geladen"
+                                "Laufzeit wird geladen"
                             } else {
                                 "Paket wird geprüft und installiert"
                             }),
@@ -105,13 +105,13 @@ impl PhotoApp {
         } else if ui
             .add_enabled(
                 !self.tasks.iter().any(|task| task.kind == "picker"),
-                egui::Button::new("ONNX Runtime herunterladen"),
+                egui::Button::new("Laufzeit herunterladen"),
             )
             .on_hover_text("Offizielles Microsoft-Paket für Windows x64 · ca. 72 MB")
             .clicked()
         {
             self.launch(
-                "ONNX Runtime herunterladen",
+                "Laufzeit herunterladen",
                 false,
                 "runtime-download",
                 |control| {
@@ -129,12 +129,7 @@ impl PhotoApp {
     }
 
     pub(super) fn settings_view(&mut self, ui: &mut egui::Ui) {
-        Self::header(
-            ui,
-            "DEIN ARBEITSPLATZ",
-            "Alles lokal. Alles an seinem Platz.",
-            "Lokale Werkzeuge und Modelle konfigurieren. Adobe-Versionen werden höchstens einmal täglich abgefragt.",
-        );
+        Self::header(ui, "Einstellungen");
         let mut chosen = None;
         let downloading = self.runtime_downloading();
         let installing = self.models_installing();
@@ -146,22 +141,22 @@ impl PhotoApp {
                 }
                 ui.label(&self.dng_status);
                 if ui.add_enabled(!self.tasks.iter().any(|t|t.kind=="dngupdates"),egui::Button::new("Converter-Version prüfen")).clicked(){self.check_dng();}
-                ui.label(RichText::new("Nur eine HEAD-Anfrage an Adobe; kein Installer-Download und keine Übertragung von Fotos.").small().weak());
+                ui.label(RichText::new("Es wird nur die Versionsnummer bei Adobe abgefragt. Keine Fotos werden übertragen.").small().weak());
                 ui.hyperlink_to("Adobe DNG Converter herunterladen",crate::core::dng_updates::DOWNLOAD);ui.hyperlink_to("ExifTool installieren","https://exiftool.org/");
             });
             ui.add_space(16.0);
             theme::card(ui).show(ui,|ui|{
                 ui.label(RichText::new("Lokale Gesichtserkennung").size(20.0).strong());
                 ui.label(if Path::new(&self.settings.onnx_runtime).is_file() {
-                    "ONNX Runtime · DLL ausgewählt"
+                    "Gesichtserkennung: Laufzeit installiert"
                 } else {
-                    "ONNX Runtime · DLL fehlt"
+                    "Gesichtserkennung: Laufzeit fehlt"
                 });
                 self.runtime_download_button(ui);
                 self.model_install_button(ui);
-                ui.collapsing("Runtime und Modellordner manuell auswählen", |ui| {
+                ui.collapsing("Laufzeit und Modellordner manuell auswählen", |ui| {
                     for (pick, label, value, enabled) in [
-                        (Pick::Runtime, "ONNX Runtime DLL", &mut self.settings.onnx_runtime, !downloading),
+                        (Pick::Runtime, "Laufzeit (Programmdatei)", &mut self.settings.onnx_runtime, !downloading),
                         (Pick::Models, "Modellordner", &mut self.settings.model_dir, !installing),
                     ] {
                         ui.label(label);
@@ -179,7 +174,6 @@ impl PhotoApp {
                     for(kind,selected)in [("detector",&mut self.detector),("embedder",&mut self.embedder)]{egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
                 });
                 for model in &self.models{ui.label(format!("{} · {}",model.name,model.license));}
-                ui.label(RichText::new("Die Installation prüft die Gewichte mit SHA-256. Rust-Adapter verwenden getrennte Modellschlüssel.").small().weak());
             });
             ui.add_space(16.0);
             self.central_settings_card(ui);
@@ -200,12 +194,7 @@ impl PhotoApp {
         }
     }
     pub(super) fn tasks_view(&mut self, ui: &mut egui::Ui) {
-        Self::header(
-            ui,
-            "FORTSCHRITT & VERLAUF",
-            "Du behältst den Überblick.",
-            "Aufträge laufen im Hintergrund. Abbrechen beendet laufende Arbeit kooperativ.",
-        );
+        Self::header(ui, "Aufgaben");
         for running in &self.tasks {
             let progress = running.task.control.snapshot();
             let stopping = running.task.control.cancel.load(Ordering::Relaxed);

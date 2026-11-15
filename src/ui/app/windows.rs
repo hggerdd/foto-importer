@@ -129,7 +129,7 @@ impl PhotoApp {
                         if ui
                             .selectable_label(
                                 self.name_person == Some(person.id),
-                                format!("{} · #{}", person.name, person.id),
+                                select::person_caption(&self.face_page.people, person.id, &person.name),
                             )
                             .clicked()
                         {

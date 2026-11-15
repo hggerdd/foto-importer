@@ -102,7 +102,7 @@ impl Running {
     fn catch_up_note(&self) -> Option<&'static str> {
         (self.write && self.task.label == "Sammlung indizieren").then_some(
             "Schon eingetragene Dateien sind in der Sammlung sichtbar. Danach folgen als eigene \
-             Läufe: Metadaten lesen (Aufnahmedatum, Kamera, Foto-Zuordnung) und die BLAKE3-Prüfung. \
+             Läufe: Metadaten lesen (Aufnahmedatum, Kamera, Foto-Zuordnung) und die Prüfung der Dateien auf Fehler. \
              Ein Abbruch behält alles bereits Eingetragene und markiert nichts als fehlend.",
         )
     }
@@ -682,7 +682,7 @@ impl PhotoApp {
             "purge" => "Fehlende Indexeinträge entfernen",
             "resolve" => "Verschiebung zuordnen",
             "metadata" => "Metadaten lesen",
-            "verify" => "Dateien mit BLAKE3 prüfen",
+            "verify" => "Dateien auf Fehler prüfen",
             "analyze" => "Fotos lokal analysieren",
             "knowledge" => "Referenzen und Namensvorschläge aktualisieren",
             "automatic" | "nightly" => "Automatische Sammlungsanalyse",
@@ -889,13 +889,15 @@ impl PhotoApp {
                         .unwrap_or_default();
                     self.message(
                         format!(
-                            "{} Dateien an {} Tagen gefunden · {} Hinweise",
-                            scan.files.len(),
-                            scan.files
-                                .iter()
-                                .map(|f| &f.day)
-                                .collect::<BTreeSet<_>>()
-                                .len(),
+                            "{} gefunden · {} Hinweise",
+                            files_and_days(
+                                scan.files.len(),
+                                scan.files
+                                    .iter()
+                                    .map(|f| &f.day)
+                                    .collect::<BTreeSet<_>>()
+                                    .len(),
+                            ),
                             scan.warnings.len()
                         ),
                         !scan.warnings.is_empty(),
@@ -1042,7 +1044,7 @@ impl PhotoApp {
                     );
                     if self.save() {
                         self.message(
-                            "ONNX Runtime ist installiert und ausgewählt. Falls zuvor eine andere Runtime geladen wurde, bitte die App neu starten.".into(),
+                            "Die Laufzeit ist installiert und ausgewählt. Falls zuvor eine andere geladen wurde, bitte die App neu starten.".into(),
                             false,
                         );
                     } else {
@@ -1058,7 +1060,7 @@ impl PhotoApp {
                         self.models = models;
                         self.message(
                             format!(
-                                "YuNet und SFace sind installiert. Modellordner: {}",
+                                "Die Erkennungsmodelle sind installiert. Modellordner: {}",
                                 path.display()
                             ),
                             false,
@@ -1267,15 +1269,11 @@ impl PhotoApp {
                 ui.add_space(40.0);
                 theme::eyebrow(ui, "ARBEITSBEREICH");
                 for (view, title, hint) in [
-                    (
-                        View::Import,
-                        "01  Importieren",
-                        "Von der Karte in die Sammlung",
-                    ),
-                    (View::Collection, "02  Sammlung", "Fotos finden & verstehen"),
-                    (View::People, "03  Personen", "Namen & Beziehungen"),
-                    (View::Tasks, "04  Aufgaben", "Fortschritt & Verlauf"),
-                    (View::Time, "06  Zeitreise", "Personen über die Zeit"),
+                    (View::Import, "Importieren", "Von der Karte in die Sammlung"),
+                    (View::Collection, "Sammlung", "Fotos finden & verstehen"),
+                    (View::People, "Personen", "Namen & Beziehungen"),
+                    (View::Tasks, "Aufgaben", "Fortschritt & Verlauf"),
+                    (View::Time, "Zeitreise", "Personen über die Zeit"),
                 ] {
                     let response =
                         theme::nav_item(ui, title, self.view == view, 150.0).on_hover_text(hint);
@@ -1384,10 +1382,8 @@ impl PhotoApp {
                 }
             });
     }
-    fn header(ui: &mut egui::Ui, kicker: &str, title: &str, subtitle: &str) {
-        theme::eyebrow(ui, kicker);
-        ui.heading(title);
-        ui.label(RichText::new(subtitle).weak());
+    fn header(ui: &mut egui::Ui, title: &str) {
+        ui.label(RichText::new(title).size(23.0).strong());
         ui.add_space(20.0);
     }
     fn empty(&self, ui: &mut egui::Ui, title: &str, text: &str) {
@@ -1480,6 +1476,20 @@ impl eframe::App for PhotoApp {
         let _ = self.settings.save();
     }
 }
+/// „1 Datei“ / „2 Dateien“: Einzahl nur bei genau eins.
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// „1 Datei an 1 Tag“, „30 Dateien an 2 Tagen“.
+fn files_and_days(files: usize, days: usize) -> String {
+    format!(
+        "{} an {}",
+        plural(files, "Datei", "Dateien"),
+        plural(days, "Tag", "Tagen")
+    )
+}
+
 fn human_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.1} GB", bytes as f64 / 1073741824.0)

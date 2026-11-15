@@ -25,6 +25,8 @@ pub struct Choice<T> {
     pub value: T,
     pub label: String,
     pub detail: String,
+    /// Nur durchsuchbar, nie sichtbar (z. B. `#48`).
+    pub keywords: String,
 }
 
 impl<T> Choice<T> {
@@ -33,27 +35,58 @@ impl<T> Choice<T> {
             value,
             label: label.into(),
             detail: detail.into(),
+            keywords: String::new(),
         }
     }
+    /// Zusätzlicher Suchtext, der nicht angezeigt wird.
+    pub fn with_keywords(mut self, keywords: impl Into<String>) -> Self {
+        self.keywords = keywords.into();
+        self
+    }
     fn search_text(&self) -> String {
-        format!("{} {}", self.label, self.detail)
+        format!("{} {} {}", self.label, self.detail, self.keywords)
     }
 }
 
-/// Einträge für eine Personenliste: Name, dazu „#ID · N Gesichter · * Jahr“.
+/// Ob eine andere Person in der Liste denselben Namen trägt; nur dann wird die ID
+/// zur Unterscheidung angezeigt.
+pub fn needs_id(people: &[Person], id: i64) -> bool {
+    let Some(me) = people.iter().find(|p| p.id == id) else {
+        return false;
+    };
+    let name = choice_filter::sort_key(me.name.trim());
+    people
+        .iter()
+        .any(|p| p.id != id && choice_filter::sort_key(p.name.trim()) == name)
+}
+
+/// Name, bei gleichnamigen Personen mit „· #ID“.
+pub fn person_caption(people: &[Person], id: i64, name: &str) -> String {
+    if needs_id(people, id) {
+        format!("{name} · #{id}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Einträge für eine Personenliste: Name, dazu „* Jahr · N Gesichter“. Die ID steht nur
+/// bei gleichnamigen Personen dabei, bleibt aber immer suchbar (`#48`).
 pub fn person_choices(people: &[Person], exclude: Option<i64>) -> Vec<Choice<i64>> {
     people
         .iter()
         .filter(|p| Some(p.id) != exclude)
         .map(|p| {
-            let mut detail = format!("#{}", p.id);
-            if p.count > 0 {
-                detail.push_str(&format!(" · {} Gesichter", p.count));
-            }
+            let mut parts = Vec::new();
             if !p.birth.is_empty() {
-                detail.push_str(&format!(" · * {}", p.birth));
+                parts.push(format!("* {}", p.birth));
             }
-            Choice::new(p.id, p.name.clone(), detail)
+            if p.count > 0 {
+                parts.push(format!("{} Gesichter", p.count));
+            }
+            if needs_id(people, p.id) {
+                parts.push(format!("#{}", p.id));
+            }
+            Choice::new(p.id, p.name.clone(), parts.join(" · ")).with_keywords(format!("#{}", p.id))
         })
         .collect()
 }

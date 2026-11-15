@@ -217,7 +217,7 @@ impl PhotoApp {
             egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 180.0).clamp(160.0, 530.0)).show(ui, |ui| {
                 ui.label(format!("Gewählte Modelle: {} · {}", self.detector, self.embedder));
                 if self.runtime_downloading() || !Path::new(&self.settings.onnx_runtime).is_file() {
-                    ui.label("Die ONNX Runtime führt die Modelle auf deinem Rechner aus.");
+                    ui.label("Die Laufzeit führt die Modelle auf deinem Rechner aus.");
                     self.runtime_download_button(ui);
                 }
                 if self.models_installing() || !self.model_weights_present() {

@@ -640,3 +640,29 @@ fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
     }
     assert!(app.hidden_faces().is_empty());
 }
+
+#[test]
+fn plural_uses_singular_only_for_exactly_one() {
+    assert_eq!(files_and_days(0, 0), "0 Dateien an 0 Tagen");
+    assert_eq!(files_and_days(1, 1), "1 Datei an 1 Tag");
+    assert_eq!(files_and_days(30, 2), "30 Dateien an 2 Tagen");
+}
+
+#[test]
+fn person_choices_show_ids_only_for_equal_names_but_keep_them_searchable() {
+    use crate::ui::select::person_choices;
+    let person = |id: i64, name: &str| crate::core::faces::Person {
+        id,
+        name: name.into(),
+        birth: "1980".into(),
+        count: 3,
+        gender: String::new(),
+        note: String::new(),
+    };
+    let people = vec![person(1, "Anna"), person(2, "Ben"), person(3, "anna")];
+    let items = person_choices(&people, None);
+    assert_eq!(items[0].detail, "* 1980 · 3 Gesichter · #1");
+    assert_eq!(items[1].detail, "* 1980 · 3 Gesichter");
+    assert_eq!(items[2].detail, "* 1980 · 3 Gesichter · #3");
+    assert!(items[1].keywords.contains("#2"));
+}
