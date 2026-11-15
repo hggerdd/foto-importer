@@ -92,5 +92,6 @@ cargo test --locked
 [Architektur mit Diagrammen](docs/architektur.md) ·
 [ADRs](ADR/README.md) · [Validierung](docs/validierung.md)
 
-Der stabile Rust-Stand liegt im Branch `rust-main`. Die Python-Version
-verwendet im gemeinsamen GitHub-Repository den Branch `main`.
+Dieses Repository enthält ausschließlich die Rust-Anwendung; der Branch `main` ist der
+stabile Stand. Die frühere Python-Version liegt unverändert im Branch `python-legacy`
+(Stand 2026-11-15) und lokal in `C:	ttoto-importer`; sie ist nur Verhaltensreferenz.

@@ -1,7 +1,7 @@
 # Rust Foto-Importer
 
 Vor Änderungen ADR/README.md und betroffene akzeptierte ADRs lesen.
-Quellprojekt C:/ttt/foto-importer ist die Verhaltensreferenz, kein Runtime-Backend.
+Quellprojekt C:/ttt/foto-importer (Python, auf GitHub Branch python-legacy) ist nur die Verhaltensreferenz, kein Runtime-Backend; dieses Repository enthält ausschließlich Rust (Hauptlinie: main).
 Neue Features auf einem neuen codex/-Branch beginnen; fokussierte Schritte committen und pushen.
 Domainlogik in src/core, Oberfläche in src/ui, zentrale Grenzen in src/config.rs.
 Originale niemals verändern oder löschen; bestehende Zieldateien niemals ersetzen.
