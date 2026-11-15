@@ -146,6 +146,7 @@ CREATE INDEX ix_faces_ignored ON faces(id) WHERE ignored=1 AND retained=0;
 
 CREATE INDEX ix_faces_retained ON faces(id) WHERE retained=1;
 
+CREATE INDEX ix_faces_timeline ON faces(person_id,captured_at,id) WHERE ignored=0 AND retained=0 AND assignment IN ('user','auto');
 CREATE INDEX ix_jobs_detect_done ON face_jobs(model_id,photo_id) WHERE stage='detect' AND status='done';
 
 CREATE TRIGGER browse_files_insert AFTER INSERT ON files BEGIN DELETE FROM metadata_photos WHERE photo_id=new.photo_id;INSERT INTO metadata_photos 
