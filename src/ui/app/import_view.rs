@@ -52,12 +52,7 @@ impl PhotoApp {
     }
     pub(super) fn import_view(&mut self, ui: &mut egui::Ui) {
         self.refresh_import_cache();
-        Self::header(
-            ui,
-            "DEIN NÄCHSTER IMPORT",
-            "Erinnerungen sicher ankommen lassen.",
-            "Quelle wählen, Aufnahmetage sichten und das Ziel vor dem Kopieren prüfen.",
-        );
+        Self::header(ui, "Importieren");
         theme::card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {

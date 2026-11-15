@@ -615,7 +615,12 @@ impl PhotoApp {
                     if ui.link(name).clicked() {
                         select = Some(*other);
                     }
-                    ui.label(RichText::new(format!("{} · #{other}", role.label(gender))).weak());
+                    let label = if select::needs_id(&people, *other) {
+                        format!("{} · #{other}", role.label(gender))
+                    } else {
+                        role.label(gender).to_string()
+                    };
+                    ui.label(RichText::new(label).weak());
                     if ui
                         .add_enabled(!busy, egui::Button::new("Entfernen").small())
                         .clicked()
@@ -690,15 +695,12 @@ impl PhotoApp {
                         if ui.link(name).clicked() {
                             select = Some(member.person);
                         }
-                        ui.label(
-                            RichText::new(format!(
-                                "{} · #{}",
-                                member.relation.label(gender),
-                                member.person
-                            ))
-                            .italics()
-                            .weak(),
-                        );
+                        let label = if select::needs_id(&people, member.person) {
+                            format!("{} · #{}", member.relation.label(gender), member.person)
+                        } else {
+                            member.relation.label(gender).to_string()
+                        };
+                        ui.label(RichText::new(label).italics().weak());
                     });
                 }
                 if group.more > 0 {

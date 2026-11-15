@@ -807,7 +807,10 @@ impl PhotoApp {
                     .max_height(230.0)
                     .show(ui, |ui| {
                         for (id, name) in people {
-                            if ui.button(format!("{name} · #{id}")).clicked() {
+                            if ui
+                                .button(select::person_caption(&self.face_page.people, id, &name))
+                                .clicked()
+                            {
                                 if !self.filters.people_all.contains(&id) {
                                     self.filters.people_all.push(id);
                                 }

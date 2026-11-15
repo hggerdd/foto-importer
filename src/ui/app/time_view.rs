@@ -376,7 +376,8 @@ impl PhotoApp {
     }
 
     fn time_header(&mut self, ui: &mut egui::Ui) {
-        theme::eyebrow(ui, "06  ZEITREISE");
+        ui.label(RichText::new("Zeitreise").size(23.0).strong());
+        ui.add_space(8.0);
         let items: Vec<Choice<i64>> = select::person_choices(&self.time_ui.people, None);
         let mut person = self.time_ui.person;
         let (mut load, mut compute) = (false, false);
