@@ -25,21 +25,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         style.visuals.weak_text_color = Some(MUTED);
     }
     if dark {
-        // Sekundäre Schaltflächen: ruhige Fläche mit feiner Kante, Hover mit Akzent.
-        let border = egui::Stroke::new(1.0_f32, Color32::from_rgb(55, 69, 85));
-        let widgets = &mut style.visuals.widgets;
-        widgets.inactive.weak_bg_fill = Color32::from_rgb(33, 43, 55);
-        widgets.inactive.bg_fill = Color32::from_rgb(33, 43, 55);
-        widgets.inactive.bg_stroke = border;
-        widgets.hovered.weak_bg_fill = Color32::from_rgb(42, 56, 71);
-        widgets.hovered.bg_fill = Color32::from_rgb(42, 56, 71);
-        for state in [
-            &mut widgets.inactive,
-            &mut widgets.hovered,
-            &mut widgets.active,
-        ] {
-            state.corner_radius = egui::CornerRadius::same(8);
-        }
+        dark_buttons(&mut style.visuals.widgets);
     }
     style.visuals.selection.bg_fill = Color32::from_rgb(24, 92, 85);
     style.visuals.selection.stroke = egui::Stroke::new(1.5_f32, ACCENT);
@@ -66,8 +52,29 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 pub fn eyebrow(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(MIN_TEXT).strong().color(ACCENT));
 }
+/// Sekundäre Schaltflächen im dunklen Design: ruhige Fläche mit feiner Kante, Hover mit Akzent.
+fn dark_buttons(widgets: &mut egui::style::Widgets) {
+    let border = egui::Stroke::new(1.0_f32, Color32::from_rgb(55, 69, 85));
+    widgets.inactive.weak_bg_fill = Color32::from_rgb(33, 43, 55);
+    widgets.inactive.bg_fill = Color32::from_rgb(33, 43, 55);
+    widgets.inactive.bg_stroke = border;
+    widgets.inactive.fg_stroke.color = Color32::from_rgb(222, 230, 239);
+    widgets.hovered.weak_bg_fill = Color32::from_rgb(42, 56, 71);
+    widgets.hovered.bg_fill = Color32::from_rgb(42, 56, 71);
+    widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
+    for state in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+    ] {
+        state.corner_radius = egui::CornerRadius::same(8);
+    }
+}
+/// Dunkle Seitenleiste und Fußleiste; Schaltflächen sehen aus wie im Arbeitsbereich, damit
+/// aktive nicht wie gesperrte wirken.
 pub fn dark_panel(ui: &mut egui::Ui) {
     ui.style_mut().visuals = egui::Visuals::dark();
+    dark_buttons(&mut ui.visuals_mut().widgets);
     ui.visuals_mut().selection.bg_fill = Color32::from_rgb(24, 92, 85);
 }
 pub fn primary(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
