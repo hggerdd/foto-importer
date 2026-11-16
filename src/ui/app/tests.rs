@@ -771,6 +771,9 @@ fn digits_pick_a_suggestion_and_delete_ignores_the_top_group_in_benennen() -> an
             portraits: BTreeMap::new(),
         },
     );
+    // Zu knapp für einen sicheren Vorschlag: J und N bleiben ohne Wirkung.
+    app.face_page.status.review_threshold = 0.6;
+    app.face_page.status.review_margin = 0.15;
     // J und N gelten nur für Vorschläge; einen dritten Vorschlag gibt es nicht.
     for key in [egui::Key::J, egui::Key::N, egui::Key::Num3] {
         press_face_key(&context, &mut app, key, false);
@@ -791,6 +794,59 @@ fn digits_pick_a_suggestion_and_delete_ignores_the_top_group_in_benennen() -> an
         press_face_key(&context, &mut app, key, false);
     }
     assert_eq!(naming_tasks(&app), 2);
+    Ok(())
+}
+
+fn sure_app(root: &Path) -> (egui::Context, PhotoApp) {
+    let (context, mut app) = review_app(root);
+    app.face_mode = "unknown".into();
+    app.face_page.status.review_threshold = 0.6;
+    app.face_page.status.review_margin = 0.05;
+    app.face_page.groups = vec![vec![test_face(5), test_face(6)], vec![test_face(7)]];
+    app.face_page.suggestions.insert(
+        5,
+        crate::core::recognition::Suggestions {
+            items: vec![(1, "Anna".into(), 0.9), (2, "Ben".into(), 0.7)],
+            portraits: BTreeMap::new(),
+        },
+    );
+    app.face_page.suggestions.insert(
+        7,
+        crate::core::recognition::Suggestions {
+            items: vec![(1, "Anna".into(), 0.8), (2, "Ben".into(), 0.79)],
+            portraits: BTreeMap::new(),
+        },
+    );
+    (context, app)
+}
+
+#[test]
+fn j_confirms_a_sure_suggestion_in_benennen_and_only_then() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = sure_app(root.path());
+    press_face_key(&context, &mut app, egui::Key::J, true);
+    assert_eq!(naming_tasks(&app), 0, "im Textfeld bleibt die Taste Text");
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![7]]);
+    // Die nächste Gruppe hat nur knappe Kandidaten: keine Taste wirkt.
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    press_face_key(&context, &mut app, egui::Key::N, false);
+    assert_eq!(naming_tasks(&app), 1);
+    Ok(())
+}
+
+#[test]
+fn n_rejects_a_sure_suggestion_in_benennen() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = sure_app(root.path());
+    press_face_key(&context, &mut app, egui::Key::N, true);
+    assert_eq!(naming_tasks(&app), 0);
+    press_face_key(&context, &mut app, egui::Key::N, false);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![7]]);
     Ok(())
 }
 

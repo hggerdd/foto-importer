@@ -30,9 +30,15 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   die Gesichter unter „Benennen“. Über den Gruppen steht ein Personenfilter mit Tippfilter;
   er nennt nur Personen mit offenen Vorschlägen samt Anzahl, „Alle Personen zeigen“ hebt ihn
   auf. Der Filter gilt für die Sitzung und endet mit dem Wechsel der Sammlung.
+- **„Ist das X?“ in „Benennen“:** Besteht der erste Vorschlag der Gruppe dieselbe Regel wie
+  der Abgleich (`recognition::Limits::sure_suggestion` über `accept`, mit Schwelle und Abstand
+  der Sammlung aus `faces::Status`), steht über den Kacheln eine hervorgehobene Zeile mit
+  Porträt, „Ist das X?“ und den Knöpfen „Ja“ (wie ein Klick auf den Vorschlag) und „Nein“
+  (keines der Gesichter ist X, wie „Keines ist X“). Namensfeld, Auswahl und die übrigen
+  Vorschläge bleiben darunter. Ohne sicheren Vorschlag sieht die Karte aus wie sonst.
 - **Tasten** gelten für die oberste Gruppe der Seite, nur ohne Fokus in einem Feld und
-  solange die Knöpfe aktiv wären: `J` bestätigt den Vorschlag und `N` lehnt ihn ab (beide
-  nur in „Vorschläge prüfen“), `1` bis `3` übernehmen einen der Vorschläge in „Benennen“,
+  solange die Knöpfe aktiv wären: `J` bestätigt den Vorschlag und `N` lehnt ihn ab (in
+  „Vorschläge prüfen“ und in „Benennen“, dort nur bei einem sicheren Vorschlag), `1` bis `3` übernehmen einen der Vorschläge in „Benennen“,
   `Entf` heißt „Nicht interessiert“ (beide Reiter). „Bestätigt“ und „Ignoriert“ haben keine
   Tasten. Die Hinweistexte der Knöpfe der obersten Gruppe nennen die Taste. Nach einer
   Entscheidung per Taste erhält das Namensfeld der nächsten Gruppe keinen Fokus, damit die
@@ -87,10 +93,6 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Laufender Gesichtsauftrag nur einmal:** Fortschritt und Abbruch zeigt die Fußleiste;
   die Statuszeile nennt den Auftrag nur in Worten. Zeigt die Fußleiste einen anderen
   Auftrag, steht der Fortschritt mit Abbruch in der Statuszeile.
-
-## Beschlossen, noch nicht umgesetzt (2026-11-15)
-
-- **„Benennen“** hebt einen sicheren Vorschlag als „Ist das X?“ hervor.
 
 ## Grenzen
 

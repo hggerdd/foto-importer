@@ -248,6 +248,16 @@ impl Limits {
         let second = ranking.get(1).map_or(f32::NEG_INFINITY, |r| r.1);
         (best >= self.review && best - second >= self.margin).then_some((person, best))
     }
+    /// Der sichere Vorschlag einer Gruppe: der erste Eintrag, wenn er dieselbe Regel wie der
+    /// Abgleich besteht (`accept`). `items` ist absteigend sortiert.
+    pub fn sure_suggestion<'a>(
+        &self,
+        items: &'a [(i64, String, f32)],
+    ) -> Option<&'a (i64, String, f32)> {
+        let ranking: Vec<(i64, f32)> = items.iter().map(|(id, _, score)| (*id, *score)).collect();
+        self.accept(&ranking)?;
+        items.first()
+    }
 }
 /// Zulässiger Bereich der einstellbaren Vorschlagsschwelle.
 pub const REVIEW_RANGE: (f32, f32) = (0.5, 0.75);
@@ -491,4 +501,32 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
     faces::save_setting(&tx, &applied_key(key), &chrono::Utc::now().to_rfc3339())?;
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn items(scores: &[f32]) -> Vec<(i64, String, f32)> {
+        scores
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as i64 + 1, format!("P{i}"), *s))
+            .collect()
+    }
+
+    #[test]
+    fn sure_suggestion_follows_the_rematch_rule() {
+        let limits = Limits {
+            review: 0.6,
+            margin: 0.05,
+            sure: 0.8,
+        };
+        let sure = |scores: &[f32]| limits.sure_suggestion(&items(scores)).map(|i| i.0);
+        assert_eq!(sure(&[0.9, 0.7, 0.5]), Some(1), "klarer Vorsprung");
+        assert_eq!(sure(&[0.55, 0.3]), None, "unter der Schwelle");
+        assert_eq!(sure(&[0.8, 0.78]), None, "zwei knappe Kandidaten");
+        assert_eq!(sure(&[0.7]), Some(1), "einziger Kandidat über der Schwelle");
+        assert_eq!(sure(&[]), None);
+    }
 }

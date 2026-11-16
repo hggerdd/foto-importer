@@ -388,6 +388,10 @@ impl PhotoApp {
             .first()
             .and_then(|f| self.face_page.suggestions.get(&f.id))
             .cloned();
+        // „Ist das X?“ gibt es nur in „Benennen“ und nur bei einem sicheren Vorschlag.
+        let sure = (self.face_mode == "unknown")
+            .then(|| sure_suggestion(&self.face_page.status, proposals.as_ref()))
+            .flatten();
         theme::card(ui).show(ui, |ui| {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
             ui.set_min_width(ui.available_width());
@@ -461,6 +465,53 @@ impl PhotoApp {
                         }
                     });
                 } else {
+                    if let Some((person, name, _)) = &sure {
+                        let fill = ui.visuals().selection.bg_fill.gamma_multiply(0.25_f32);
+                        egui::Frame::new()
+                            .fill(fill)
+                            .corner_radius(4.0_f32)
+                            .inner_margin(6.0_f32)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let size = egui::vec2(40.0, 40.0);
+                                    match proposals.as_ref().and_then(|p| p.portraits.get(person)) {
+                                        Some(face) => {
+                                            self.thumbnails.image(
+                                                ui,
+                                                PreviewRequest {
+                                                    root: Some(PathBuf::from(&root)),
+                                                    path: Path::new(&root).join(&face.source),
+                                                    orientation: 1,
+                                                    crop: Some(face.bbox),
+                                                    edge: 160,
+                                                    generation: 0,
+                                                },
+                                                &exiftool,
+                                                size,
+                                            );
+                                        }
+                                        None => {
+                                            ui.allocate_space(size);
+                                        }
+                                    }
+                                    ui.label(
+                                        RichText::new(format!("Ist das {name}?"))
+                                            .size(17.0)
+                                            .strong(),
+                                    );
+                                    let yes = ui.add_enabled(!busy, egui::Button::new("Ja"));
+                                    if key_hint(yes, top, "J").clicked() {
+                                        draft.person = Some(*person);
+                                        draft.name = name.clone();
+                                        decision = Some(Decision::Pick(0));
+                                    }
+                                    let no = ui.add_enabled(!busy, egui::Button::new("Nein"));
+                                    if key_hint(no, top, "N").clicked() {
+                                        decision = Some(Decision::RejectSure);
+                                    }
+                                });
+                            });
+                    }
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{} Gesichter", group.len())).strong());
                         let response = ui.add(
@@ -633,6 +684,16 @@ impl PhotoApp {
             Decision::Confirm
         } else if review && pressed(egui::Key::N) {
             Decision::Reject
+        } else if !review
+            && sure_for_group(&self.face_page, &group).is_some()
+            && pressed(egui::Key::J)
+        {
+            Decision::Pick(0)
+        } else if !review
+            && sure_for_group(&self.face_page, &group).is_some()
+            && pressed(egui::Key::N)
+        {
+            Decision::RejectSure
         } else if let Some(index) = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3]
             .into_iter()
             .position(pressed)
@@ -671,6 +732,13 @@ impl PhotoApp {
             Decision::Reject => {
                 // Ohne Auswahl gilt „keines davon ist diese Person“.
                 let Some(person) = proposed else {
+                    return false;
+                };
+                (BTreeSet::new(), Some(person), String::new(), false)
+            }
+            Decision::RejectSure => {
+                // „Nein“ auf „Ist das X?“: keines der Gesichter ist X.
+                let Some((person, _, _)) = sure_for_group(&self.face_page, group) else {
                     return false;
                 };
                 (BTreeSet::new(), Some(person), String::new(), false)
@@ -714,6 +782,8 @@ pub(super) enum Decision {
     Confirm,
     /// Keines der Gesichter ist die vorgeschlagene Person.
     Reject,
+    /// „Nein“ bei „Ist das X?“: der sichere Vorschlag trifft für kein Gesicht zu.
+    RejectSure,
     /// „Nicht interessiert“.
     Ignore,
     /// Den Vorschlag mit dieser Nummer (ab 0) übernehmen.
@@ -721,6 +791,23 @@ pub(super) enum Decision {
 }
 
 /// Nennt die Taste im Hinweistext, aber nur an der obersten Gruppe: nur für sie gilt sie.
+/// Der sichere Vorschlag einer Gruppe nach denselben Grenzen wie der Abgleich.
+fn sure_suggestion(
+    status: &faces::Status,
+    suggestions: Option<&crate::core::recognition::Suggestions>,
+) -> Option<(i64, String, f32)> {
+    let limits = crate::core::recognition::Limits {
+        review: status.review_threshold,
+        margin: status.review_margin,
+        ..Default::default()
+    };
+    limits.sure_suggestion(&suggestions?.items).cloned()
+}
+
+fn sure_for_group(page: &faces::FacePage, group: &[Face]) -> Option<(i64, String, f32)> {
+    sure_suggestion(&page.status, page.suggestions.get(&group.first()?.id))
+}
+
 fn key_hint(response: egui::Response, top: bool, key: &str) -> egui::Response {
     if top {
         response.on_hover_text(format!("Taste {key} (oberste Gruppe)"))
