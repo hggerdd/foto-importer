@@ -19,6 +19,10 @@
   benennen (Dialog mit Vorschlägen), eine Fehldetektion löschen und eine Referenz festlegen
   oder ausschließen. Löschen ist nicht Ignorieren: Es entfernt das Vorkommen samt
   Trainingsdaten in einer Transaktion.
+- **Metadaten lesen am Foto:** Der Knopf „Metadaten lesen“ im Inspektor liest die Dateien
+  des gewählten Fotos neu (auch bei vorhandenen Werten) als Nutzerschreibauftrag mit
+  derselben Speicherlogik wie der Sammlungslauf (`metadata::store_results`); danach lädt der
+  Inspektor die Werte neu. Er ist gesperrt, solange ein Auftrag die Sammlung belegt.
 - **Ordnerbaum:** Einklappbares Seitenfeld, wird in einem Workerauftrag vollständig gelesen
   und im Speicher gehalten; Auf- und Zuklappen greift nicht auf die Datenbank zu. Ein Klick
   setzt den Ordnerfilter. Zählung und Sortierung folgen denselben Varianten- und Präfixregeln

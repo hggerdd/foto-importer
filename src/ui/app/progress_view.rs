@@ -61,16 +61,44 @@ impl PhotoApp {
     pub(super) fn catch_up_hint(&self) -> Option<String> {
         let status = &self.status;
         (status.pending > 0 && status.files > 0).then(|| {
+            let rest = if self.metadata_bg_running() {
+                "der Rest wird im Hintergrund gelesen"
+            } else if status.unread == 0 || self.settings.exiftool.trim().is_empty() {
+                "den Rest mit „Metadaten lesen“ nachholen"
+            } else if self.metadata_paused {
+                "Hintergrundlauf pausiert"
+            } else if self.metadata_bg_failed {
+                "Hintergrundlauf gestoppt, den Rest mit „Metadaten lesen“ nachholen"
+            } else {
+                "der Rest wird im Hintergrund gelesen"
+            };
             format!(
-                "Metadaten: {} von {} gelesen · {}",
+                "Metadaten: {} von {} gelesen · {rest}",
                 crate::core::progress::group(status.files.saturating_sub(status.pending)),
                 crate::core::progress::group(status.files),
-                if self.settings.auto_metadata {
-                    "der Rest wird im Hintergrund nachgeholt"
-                } else {
-                    "den Rest mit „Metadaten lesen“ nachholen"
-                }
             )
         })
+    }
+
+    fn metadata_bg_running(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|t| t.kind == "metadata-bg" && t.collection == self.settings.collection)
+    }
+
+    /// Hinweiszeile zum Nachholen; ein pausierter Hintergrundlauf bietet „Fortsetzen“ an.
+    pub(super) fn catch_up_row(&mut self, ui: &mut egui::Ui) {
+        let Some(hint) = self.catch_up_hint() else {
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(hint).small().weak());
+            if self.metadata_paused
+                && self.status.unread > 0
+                && ui.small_button("Fortsetzen").clicked()
+            {
+                self.metadata_paused = false;
+            }
+        });
     }
 }

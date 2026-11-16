@@ -173,6 +173,11 @@ impl Collection {
                 [],
                 |r| r.get(0),
             )?,
+            unread: self.db.query_row(
+                "SELECT count(*) FROM files WHERE status='present' AND meta_state IN ('pending','stale')",
+                [],
+                |r| r.get(0),
+            )?,
         })
     }
     pub fn list_option(&self, key: &str, default: &[&str]) -> Result<Vec<String>> {
@@ -666,6 +671,8 @@ pub struct CollectionStatus {
     pub files: usize,
     pub missing: usize,
     pub pending: usize,
+    /// Davon noch nie gelesen (ohne frühere Fehler).
+    pub unread: usize,
 }
 
 pub fn content_hash(path: &Path, control: &Control) -> Result<String> {

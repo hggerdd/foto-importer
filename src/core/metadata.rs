@@ -112,6 +112,9 @@ pub fn identity(raw: &Json) -> Option<String> {
 pub fn enrich(collection: &mut Collection, executable: &str, control: &Control) -> Result<String> {
     enrich_scoped(collection, executable, control, &Scope::default())
 }
+/// Datei-ID, relativer Pfad und Foto-ID einer zu lesenden Datei.
+pub type FileRow = (i64, String, i64);
+
 /// Metadaten neuester Dateien zuerst, optional nur eine Portion oder ein Ordner (ADR 0059).
 pub fn enrich_scoped(
     collection: &mut Collection,
@@ -122,6 +125,72 @@ pub fn enrich_scoped(
     collection.writable()?;
     control.phase("Reihenfolge festlegen (neueste zuerst)", "");
     let order = super::scope::metadata_order(collection, scope)?;
+    let done = enrich_files(
+        collection,
+        executable,
+        control,
+        &order,
+        crate::config::METADATA_CHUNK,
+    )?;
+    control.phase("Sicherung schreiben", "");
+    collection.backup()?;
+    Ok(format!("{done} Dateien mit Metadaten angereichert"))
+}
+
+/// Hintergrundlauf mit niedriger Priorität: eine Portion noch nie versuchter Dateien in
+/// kleinen Blöcken, damit ein Nutzerauftrag schnell Vorrang bekommt. Dateien mit früherem
+/// Fehler bleiben außen vor; der Aufrufer startet bei Bedarf die nächste Portion.
+pub fn enrich_background(
+    collection: &mut Collection,
+    executable: &str,
+    control: &Control,
+) -> Result<String> {
+    collection.writable()?;
+    let portion = crate::config::METADATA_BACKGROUND_PORTION;
+    let order = super::scope::metadata_unread(collection, portion)?;
+    let done = enrich_files(
+        collection,
+        executable,
+        control,
+        &order,
+        crate::config::METADATA_BACKGROUND_CHUNK,
+    )?;
+    let more = order.len() >= portion;
+    if !more {
+        collection.backup()?;
+    }
+    Ok(format!("{done} Dateien mit Metadaten angereichert"))
+}
+
+/// Liest die Metadaten aller vorhandenen Dateien eines Fotos neu und überschreibt deren
+/// `meta`-Zeilen (Aufruf aus den Bilddetails).
+pub fn enrich_photo(
+    collection: &mut Collection,
+    executable: &str,
+    control: &Control,
+    photo: i64,
+) -> Result<String> {
+    collection.writable()?;
+    let ids = super::scope::photo_files(collection, photo)?;
+    let done = enrich_files(
+        collection,
+        executable,
+        control,
+        &ids,
+        crate::config::METADATA_CHUNK,
+    )?;
+    Ok(format!("Metadaten gelesen ({done} Dateien)"))
+}
+
+/// Liest `order` in Blöcken zu `chunk` Dateien und speichert jeden Block in einer
+/// Transaktion. Zwischen den Blöcken wird auf Abbruch geprüft.
+fn enrich_files(
+    collection: &mut Collection,
+    executable: &str,
+    control: &Control,
+    order: &[i64],
+    chunk: usize,
+) -> Result<usize> {
     let total = order.len();
     let mut done = 0;
     let mut processed = 0;
@@ -130,7 +199,7 @@ pub fn enrich_scoped(
     let mut position = 0;
     loop {
         control.checkpoint()?;
-        let ids = &order[position..(position + 128).min(total)];
+        let ids = &order[position..(position + chunk).min(total)];
         if ids.is_empty() {
             break;
         }
@@ -158,13 +227,31 @@ pub fn enrich_scoped(
             .map(|r| collection.safe_path(&r.1))
             .collect::<Result<_>>()?;
         let raw = read_metadata(&paths, executable, control)?;
+        done += store_results(collection, &rows, &paths, raw, control)?;
+        processed += rows.len();
+        control.progress(processed, total);
+    }
+    Ok(done)
+}
+
+/// Speichert die ExifTool-Ergebnisse eines Blocks (`meta`, `meta_state`, Foto-Identität) in
+/// einer Transaktion und gibt die Zahl erfolgreich gelesener Dateien zurück.
+pub fn store_results(
+    collection: &mut Collection,
+    rows: &[FileRow],
+    paths: &[PathBuf],
+    raw: Vec<Json>,
+    control: &Control,
+) -> Result<usize> {
+    let mut done = 0;
+    {
         // SourceFile matching prevents a missing ExifTool result shifting other files.
         let raw: BTreeMap<_, _> = raw
             .into_iter()
             .filter_map(|v| Some((files::fold(v.get("SourceFile")?.as_str()?), v)))
             .collect();
         let tx = collection.db.transaction()?;
-        for ((id, rel, photo), path) in rows.iter().zip(&paths) {
+        for ((id, rel, photo), path) in rows.iter().zip(paths) {
             control.checkpoint()?;
             let key = files::fold(&path.to_string_lossy().replace('\\', "/"));
             let found = raw
@@ -251,12 +338,8 @@ pub fn enrich_scoped(
             done += 1;
         }
         tx.commit()?;
-        processed += rows.len();
-        control.progress(processed, total);
     }
-    control.phase("Sicherung schreiben", "");
-    collection.backup()?;
-    Ok(format!("{done} Dateien mit Metadaten angereichert"))
+    Ok(done)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

@@ -261,7 +261,7 @@ impl PhotoApp {
                     if !progress.phase.is_empty() {
                         ui.label(RichText::new(format!("· {}", progress.phase)).weak());
                     }
-                    let can_pause = running.is_face_matching();
+                    let can_pause = running.can_pause();
                     if ui
                         .add_enabled(
                             !stopping,
@@ -270,7 +270,11 @@ impl PhotoApp {
                         .clicked()
                     {
                         if can_pause {
-                            self.maintenance_paused = true;
+                            if running.kind == "metadata-bg" {
+                                self.metadata_paused = true;
+                            } else {
+                                self.maintenance_paused = true;
+                            }
                         }
                         running.task.control.stop();
                     }
@@ -295,10 +299,8 @@ impl PhotoApp {
                 }
             });
         }
-        if self.tasks.is_empty()
-            && let Some(hint) = self.catch_up_hint()
-        {
-            ui.label(RichText::new(hint).weak());
+        if self.tasks.is_empty() {
+            self.catch_up_row(ui);
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {

@@ -15,6 +15,14 @@
   Eingabereihenfolge; Hintergrundarbeit prüft an Haltepunkten (`Control::checkpoint`) auf
   Abbruch und gibt nach. Nutzerschreibaufträge (Benennen, Rücknahme, Einzeländerung)
   warten nicht auf Lesevorgänge und stoppen die Hintergrundwartung vor ihrem Start.
+- **Metadaten im Hintergrund:** Sind Dateien noch nie gelesen (`meta_state` pending/stale)
+  und schreibt nichts anderes, startet die App Aufträge der Art `metadata-bg` („Metadaten im
+  Hintergrund lesen“): Portionen zu 512 Dateien in Blöcken zu 32, damit der Haltepunkt
+  binnen etwa einer Sekunde greift. Sie haben wie `maintenance` niedrige Priorität
+  (zählen nicht als belegt, jeder Nutzerschreibauftrag stoppt sie, danach setzen sie fort)
+  und sind pausierbar. Höchstens ein Hintergrundschreiber je Sammlung. Dateien mit Fehler
+  werden nicht wiederholt; fehlt ExifTool oder scheitert der Lauf, endet er für die Sitzung
+  mit einem Hinweis. Der ausdrückliche Lauf „Metadaten lesen“ nutzt weiter Blöcke zu 128.
 - **Ein Schreiber je Sammlung:** Schreibaufträge der App werden je Sammlung nacheinander
   abgearbeitet; Leser nutzen eigene Verbindungen und stehen nicht in dieser Schlange.
 - **Fortschritt:** Jeder lange Auftrag meldet benannte Phasen und `progress(done, total)`.
