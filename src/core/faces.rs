@@ -76,6 +76,8 @@ pub struct FacePage {
     /// Porträt je Person (Gesicht mit bester Qualität, ohne Merkmale berechnet);
     /// nur im Reiter „persons“.
     pub portraits: BTreeMap<i64, Face>,
+    /// Abgelehnte Personen je Gesicht der geladenen Gruppen (Gesichts-ID → Personen-IDs).
+    pub rejections: BTreeMap<i64, Vec<i64>>,
 }
 
 /// Tabellenzeilen und Porträts für den Reiter „persons“, sonst leer.
@@ -421,6 +423,29 @@ pub fn photo_analysis_done(collection: &Collection, photo: i64) -> Result<bool> 
 pub fn active_detector_key(collection: &Collection) -> Result<Option<String>> {
     Ok(setting(collection, "rust.detector_key")?.map(|key| inference::presence_detector_key(&key)))
 }
+/// Abgelehnte Personen für alle Gesichter der Seite mit einer einzigen Abfrage.
+fn page_rejections(
+    collection: &Collection,
+    groups: &[Vec<Face>],
+) -> Result<BTreeMap<i64, Vec<i64>>> {
+    let ids: Vec<i64> = groups.iter().flatten().map(|face| face.id).collect();
+    let mut found: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    if ids.is_empty() {
+        return Ok(found);
+    }
+    let marks = vec!["?"; ids.len()].join(",");
+    let mut statement = collection.db.prepare(&format!(
+        "SELECT face_id,person_id FROM face_rejections WHERE face_id IN ({marks}) ORDER BY face_id,person_id"
+    ))?;
+    let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    for row in rows {
+        let (face, person) = row?;
+        found.entry(face).or_default().push(person);
+    }
+    Ok(found)
+}
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     let max = crate::config::GROUP_MAX as i64;
     let over = max + 1;
@@ -445,6 +470,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             questions,
             rows,
             portraits,
+            rejections: BTreeMap::new(),
         });
     }
     if mode == "unknown" && status.embedder.is_empty() {
@@ -460,6 +486,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             questions,
             rows: Vec::new(),
             portraits: BTreeMap::new(),
+            rejections: BTreeMap::new(),
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -527,6 +554,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             }
         }
     }
+    let rejections = page_rejections(collection, &groups)?;
     let (relations, family, questions) = tree_state(collection)?;
     let people = people(collection)?;
     let (rows, portraits) =
@@ -542,6 +570,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
         questions,
         rows,
         portraits,
+        rejections,
     })
 }
 

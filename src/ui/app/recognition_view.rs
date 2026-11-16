@@ -282,26 +282,48 @@ impl PhotoApp {
         }
     }
 
+    fn can_undo_face(&self) -> bool {
+        !self.busy() && !self.undo.is_empty()
+    }
+
+    /// Nimmt die letzte Gruppenentscheidung zurück (Knopf und Strg+Z).
+    pub(super) fn undo_last_face_decision(&mut self) {
+        if !self.can_undo_face() {
+            return;
+        }
+        let Some(undo) = self.undo.last().cloned() else {
+            return;
+        };
+        let root = self.settings.collection.clone();
+        self.launch(
+            "Gruppenentscheidung zurücknehmen",
+            true,
+            "undo",
+            move |_| {
+                let mut collection = Collection::open(Path::new(&root), true)?;
+                faces::undo(&mut collection, &undo)?;
+                Ok(Outcome::Done("Gruppenentscheidung zurückgenommen".into()))
+            },
+        );
+    }
+
     pub(super) fn undo_face_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .add_enabled(
-                !self.busy() && !self.undo.is_empty(),
-                egui::Button::new("Rückgängig"),
-            )
+            .add_enabled(self.can_undo_face(), egui::Button::new("Rückgängig"))
+            .on_hover_text("Strg+Z")
             .clicked()
-            && let Some(undo) = self.undo.last().cloned()
         {
-            let root = self.settings.collection.clone();
-            self.launch(
-                "Gruppenentscheidung zurücknehmen",
-                true,
-                "undo",
-                move |_| {
-                    let mut collection = Collection::open(Path::new(&root), true)?;
-                    faces::undo(&mut collection, &undo)?;
-                    Ok(Outcome::Done("Gruppenentscheidung zurückgenommen".into()))
-                },
-            );
+            self.undo_last_face_decision();
+        }
+    }
+
+    /// Strg+Z, aber nur ohne Textfeldfokus und wenn der Knopf aktiv wäre.
+    pub(super) fn undo_shortcut(&mut self, ctx: &egui::Context) {
+        if !self.can_undo_face() || ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+            self.undo_last_face_decision();
         }
     }
 }

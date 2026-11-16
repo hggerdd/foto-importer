@@ -666,3 +666,52 @@ fn person_choices_show_ids_only_for_equal_names_but_keep_them_searchable() {
     assert_eq!(items[2].detail, "* 1980 · 3 Gesichter · #3");
     assert!(items[1].keywords.contains("#2"));
 }
+
+#[test]
+fn ctrl_z_starts_exactly_one_undo_unless_a_text_field_has_focus() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.undo.push(Undo {
+        before: Vec::new(),
+        after: Vec::new(),
+        created: None,
+    });
+    let press = |app: &mut PhotoApp, focus: bool| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Z,
+                physical_key: Some(egui::Key::Z),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+            modifiers: egui::Modifiers::COMMAND,
+            ..Default::default()
+        };
+        let _ = context.run(input, |ctx| {
+            if focus {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new("text-field")));
+            }
+            app.undo_shortcut(ctx);
+        });
+    };
+    let undos = |app: &PhotoApp| app.tasks.iter().filter(|t| t.kind == "undo").count();
+    // Ein Textfeld mit Fokus behält Strg+Z für sich.
+    press(&mut app, true);
+    assert_eq!(undos(&app), 0);
+    context.memory_mut(|m| m.surrender_focus(egui::Id::new("text-field")));
+    press(&mut app, false);
+    assert_eq!(undos(&app), 1);
+    // Während der Auftrag läuft, ist der Knopf gesperrt und die Taste wirkungslos.
+    press(&mut app, false);
+    assert_eq!(undos(&app), 1);
+    Ok(())
+}
