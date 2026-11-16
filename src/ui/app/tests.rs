@@ -715,3 +715,67 @@ fn ctrl_z_starts_exactly_one_undo_unless_a_text_field_has_focus() -> anyhow::Res
     assert_eq!(undos(&app), 1);
     Ok(())
 }
+
+#[test]
+fn the_first_click_shows_a_day_and_the_second_toggles_its_import() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.focused = "2026-11-03".into();
+    app.click_day("2026-11-04");
+    assert_eq!(app.focused, "2026-11-04");
+    assert!(app.selected.is_empty(), "der erste Klick wählt nichts aus");
+    app.click_day("2026-11-04");
+    assert!(app.selected.contains("2026-11-04"));
+    app.click_day("2026-11-04");
+    assert!(app.selected.is_empty());
+    assert_eq!(app.focused, "2026-11-04");
+    assert_eq!(
+        import_view::day_label("2026-11-04", 1, true),
+        "✔ 2026-11-04\n1 Datei"
+    );
+    assert_eq!(
+        import_view::day_label("2026-11-04", 2, false),
+        "2026-11-04\n2 Dateien"
+    );
+    // Das Häkchen muss in den Schriften der Anwendung vorhanden sein.
+    let _ = context.run(egui::RawInput::default(), |ctx| {
+        assert!(ctx.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), "✔")));
+    });
+}
+
+#[test]
+fn changing_the_strictness_starts_one_write_task() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.save_review_threshold(0.65);
+    assert_eq!(app.tasks.iter().filter(|t| t.kind == "mutation").count(), 1);
+    assert_eq!(
+        app.review_draft,
+        Some((app.settings.collection.clone(), 0.65))
+    );
+    Ok(())
+}
+
+#[test]
+fn an_error_shows_a_plain_sentence_and_keeps_the_original_in_the_history() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context);
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.message("unable to open database file: X:/weg".into(), true);
+    assert!(
+        app.notice
+            .starts_with("Die Sammlung konnte nicht geöffnet werden.")
+    );
+    assert!(
+        app.history
+            .last()
+            .is_some_and(|line| line.contains("unable to open database file"))
+    );
+    app.message("unable to open database file".into(), false);
+    assert_eq!(app.notice, "unable to open database file");
+}

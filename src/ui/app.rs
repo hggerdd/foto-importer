@@ -1,5 +1,6 @@
 mod central_view;
 mod collection_view;
+mod errors;
 mod folder_tree;
 mod import_view;
 mod optimistic;
@@ -219,6 +220,8 @@ pub struct PhotoApp {
     dng_status: String,
     closing: bool,
     maintenance_paused: bool,
+    /// Am Regler gewählte Vorschlagsschwelle samt Sammlung, für die sie gilt.
+    review_draft: Option<(String, f32)>,
     recognition_tools_open: bool,
     auto_analysis_pending: bool,
     /// Nach einem Indexlauf folgt der Metadatenlauf, wenn die Automatik an ist.
@@ -313,6 +316,7 @@ impl PhotoApp {
             dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
+            review_draft: None,
             recognition_tools_open: false,
             auto_analysis_pending: false,
             auto_metadata_pending: false,
@@ -496,7 +500,18 @@ impl PhotoApp {
         });
     }
     fn message(&mut self, text: String, error: bool) {
-        self.notice = text.clone();
+        // Fehler: ein verständlicher Satz als Hinweis, der Originaltext im Verlauf.
+        let (notice, text) = if error {
+            let (sentence, detail) = errors::friendly(&text);
+            if sentence == detail {
+                (sentence, detail)
+            } else {
+                (sentence.clone(), format!("{sentence} · Details: {detail}"))
+            }
+        } else {
+            (text.clone(), text)
+        };
+        self.notice = notice;
         self.error = error;
         self.history.push(format!(
             "{} · {text}",

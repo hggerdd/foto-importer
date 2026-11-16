@@ -143,7 +143,7 @@ pub fn suggestions(collection: &Collection, face: i64, key: &str) -> Result<Sugg
     Ok(with_portraits(collection, &mut cache, all, key))
 }
 /// Gemeinsamer Vorschlag für eine Gruppe: Mittel der Einzelwerte über
-/// höchstens drei Gesichter (begrenzt die Lesezeit je Seite).
+/// höchstens `config::GROUP_SUGGESTION_FACES` Gesichter (begrenzt die Lesezeit je Seite).
 pub fn group_suggestions(collection: &Collection, faces: &[i64], key: &str) -> Result<Suggestions> {
     group_suggestions_cached(collection, &mut SuggestionCache::default(), faces, key)
 }
@@ -155,7 +155,7 @@ pub fn group_suggestions_cached(
 ) -> Result<Suggestions> {
     let mut totals: BTreeMap<i64, (String, f32)> = BTreeMap::new();
     let mut used = 0usize;
-    for face in faces.iter().take(3) {
+    for face in faces.iter().take(crate::config::GROUP_SUGGESTION_FACES) {
         let one = scored(collection, cache, *face, key)?;
         if one.items.is_empty() {
             continue;

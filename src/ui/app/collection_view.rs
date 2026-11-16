@@ -292,50 +292,55 @@ impl PhotoApp {
                 self.collection_action("confirm_missing");
             }
         });
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(
-                &mut self.purge_confirm,
-                "Fehlende Einträge aus dem Index entfernen",
+        egui::CollapsingHeader::new("Erweitert").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(
+                    &mut self.purge_confirm,
+                    "Fehlende Einträge aus dem Index entfernen",
+                );
+                ui.add(
+                    egui::DragValue::new(&mut self.purge_scans)
+                        .range(0..=10000)
+                        .prefix("Scanabstand "),
+                );
+                if ui
+                    .add_enabled(
+                        !self.busy() && self.purge_confirm,
+                        egui::Button::new("Einträge entfernen"),
+                    )
+                    .clicked()
+                {
+                    self.purge_confirm = false;
+                    self.collection_dialog = None;
+                    self.collection_action("purge");
+                }
+            });
+            ui.label(RichText::new("Foto-IDs und Personen bleiben erhalten.").small());
+            ui.separator();
+            ui.label(RichText::new("Geprüfte Verschiebung zuordnen").strong());
+            ui.label(
+                RichText::new("Für Dateien, die du außerhalb der App verschoben hast.").small(),
             );
-            ui.add(
-                egui::DragValue::new(&mut self.purge_scans)
-                    .range(0..=10000)
-                    .prefix("Scanabstand "),
-            );
-            if ui
-                .add_enabled(
-                    !self.busy() && self.purge_confirm,
-                    egui::Button::new("Einträge entfernen"),
-                )
-                .clicked()
-            {
-                self.purge_confirm = false;
-                self.collection_dialog = None;
-                self.collection_action("purge");
-            }
-        });
-        ui.label(RichText::new("Foto-IDs und Personen bleiben erhalten.").small());
-        ui.separator();
-        ui.label(RichText::new("Geprüfte Verschiebung zuordnen").strong());
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.move_old)
-                    .hint_text("Alter relativer Pfad")
-                    .desired_width(200.0),
-            );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.move_new)
-                    .hint_text("Neuer relativer Pfad")
-                    .desired_width(200.0),
-            );
-            let ready = !self.busy() && !self.move_old.is_empty() && !self.move_new.is_empty();
-            if ui
-                .add_enabled(ready, egui::Button::new("Zuordnen"))
-                .clicked()
-            {
-                self.collection_dialog = None;
-                self.collection_action("resolve");
-            }
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.move_old)
+                        .hint_text("Alter relativer Pfad")
+                        .desired_width(200.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.move_new)
+                        .hint_text("Neuer relativer Pfad")
+                        .desired_width(200.0),
+                );
+                let ready = !self.busy() && !self.move_old.is_empty() && !self.move_new.is_empty();
+                if ui
+                    .add_enabled(ready, egui::Button::new("Zuordnen"))
+                    .clicked()
+                {
+                    self.collection_dialog = None;
+                    self.collection_action("resolve");
+                }
+            });
         });
     }
     fn search_builder(&mut self, ui: &mut egui::Ui) {

@@ -28,7 +28,8 @@
   der Sammlungsdatenbank (`settings`, `face_settings`), Modellbeschreibungen als Manifeste
   unter `models/`.
 - **Oberfläche:** Feste Navigation links, ein Arbeitsbereich, Kontext rechts, sichtbare
-  Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen.
+  Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen:
+  Bekannte Fehler erscheinen als verständlicher Satz, der Originaltext steht im Verlauf.
   Ergebnisse gelten erst nach erfolgreichem Speichern als gespeichert.
 
 ## Grenzen

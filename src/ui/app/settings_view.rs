@@ -128,6 +128,61 @@ impl PhotoApp {
         }
     }
 
+    /// Regler für die Vorschlagsschwelle der aktiven Sammlung; gespeichert wird beim Loslassen.
+    fn review_threshold_slider(&mut self, ui: &mut egui::Ui) {
+        use crate::core::recognition::REVIEW_RANGE;
+        let ready =
+            !self.settings.collection.is_empty() && !self.face_page.status.embedder.is_empty();
+        let stored = self.face_page.status.review_threshold;
+        let mut value = self
+            .review_draft
+            .as_ref()
+            .filter(|(root, _)| *root == self.settings.collection)
+            .map_or(stored, |(_, value)| *value)
+            .clamp(REVIEW_RANGE.0, REVIEW_RANGE.1);
+        ui.add_space(8.0);
+        ui.label("Strenge der Namensvorschläge");
+        let response = ui.add_enabled(
+            ready && !self.busy(),
+            egui::Slider::new(&mut value, REVIEW_RANGE.0..=REVIEW_RANGE.1)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        );
+        ui.label(
+            RichText::new(if ready {
+                "Höher: weniger, aber sicherere Vorschläge."
+            } else {
+                "Einstellbar, sobald die Fotos einer Sammlung analysiert sind."
+            })
+            .small()
+            .weak(),
+        );
+        if response.changed() {
+            self.review_draft = Some((self.settings.collection.clone(), value));
+        }
+        if (response.drag_stopped() || response.lost_focus()) && (value - stored).abs() > 0.004 {
+            self.save_review_threshold(value);
+        }
+    }
+
+    /// Speichert die Schwelle auf einem Worker; der Abgleich beginnt danach von vorn.
+    pub(super) fn save_review_threshold(&mut self, value: f32) {
+        let root = self.settings.collection.clone();
+        self.review_draft = Some((root.clone(), value));
+        self.launch(
+            "Strenge der Namensvorschläge speichern",
+            true,
+            "mutation",
+            move |_| {
+                let mut collection = Collection::open(Path::new(&root), true)?;
+                crate::core::recognition::set_review_threshold(&mut collection, value)?;
+                Ok(Outcome::Done(
+                    "Strenge gespeichert. Die Namensvorschläge werden neu berechnet.".into(),
+                ))
+            },
+        );
+    }
+
     pub(super) fn settings_view(&mut self, ui: &mut egui::Ui) {
         Self::header(ui, "Einstellungen");
         let mut chosen = None;
@@ -154,7 +209,7 @@ impl PhotoApp {
                 });
                 self.runtime_download_button(ui);
                 self.model_install_button(ui);
-                ui.collapsing("Laufzeit und Modellordner manuell auswählen", |ui| {
+                ui.collapsing("Erweitert", |ui| {
                     for (pick, label, value, enabled) in [
                         (Pick::Runtime, "Laufzeit (Programmdatei)", &mut self.settings.onnx_runtime, !downloading),
                         (Pick::Models, "Modellordner", &mut self.settings.model_dir, !installing),
@@ -169,11 +224,12 @@ impl PhotoApp {
                             });
                         });
                     }
+                    ui.add_enabled_ui(!installing, |ui| {
+                        for(kind,label,selected)in [("detector","Gesichter finden",&mut self.detector),("embedder","Gesichter vergleichen",&mut self.embedder)]{ui.label(label);egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
+                    });
+                    for model in &self.models{ui.label(RichText::new(format!("{} · {}",model.name,model.license)).small().weak());}
+                    self.review_threshold_slider(ui);
                 });
-                ui.add_enabled_ui(!installing, |ui| {
-                    for(kind,selected)in [("detector",&mut self.detector),("embedder",&mut self.embedder)]{egui::ComboBox::from_id_salt(kind).selected_text(selected.clone()).show_ui(ui,|ui|{for model in self.models.iter().filter(|m|m.kind==kind){ui.selectable_value(selected,model.id.clone(),&model.name);}});}
-                });
-                for model in &self.models{ui.label(format!("{} · {}",model.name,model.license));}
             });
             ui.add_space(16.0);
             self.central_settings_card(ui);
