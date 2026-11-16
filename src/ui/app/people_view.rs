@@ -81,6 +81,7 @@ impl PhotoApp {
             }
             self.undo_face_button(ui);
             self.undo_shortcut(ui.ctx());
+            self.face_shortcuts(ui.ctx());
             if ui.button("Aktualisieren").clicked() {
                 self.refresh_faces();
             }
@@ -97,6 +98,9 @@ impl PhotoApp {
                 let _ = self.settings.save();
             }
         });
+        if self.face_mode == "review" {
+            self.review_filter(ui);
+        }
         if self.face_mode == "unknown"
             && let Some(hint) = unnamed_hint(
                 self.face_page.status.unknown,
@@ -114,6 +118,12 @@ impl PhotoApp {
                 );
             } else if self.face_page.status.embedder.is_empty() {
                 self.empty(ui, "Bereit für die lokale Analyse.", "Starte mit Fotos analysieren. Anschließend kannst du erkannte Gesichter benennen.");
+            } else if self.face_mode == "review" && self.review_person.is_some() {
+                self.empty(
+                    ui,
+                    "Für diese Person gibt es keine offenen Namensvorschläge.",
+                    "Wähle eine andere Person oder zeige wieder alle Personen.",
+                );
             } else if self.face_mode == "review" {
                 self.empty(ui, "Keine offenen Namensvorschläge.", "Bestätige Gesichter, damit die App geeignete Beispiele für den nächsten Abgleich hat.");
             } else {
@@ -147,8 +157,8 @@ impl PhotoApp {
                     if let Some(face) = group.first() {
                         self.face_row_tops.push((face.id, top));
                     }
-                    let focus = target == Some(index);
-                    self.group(ui, &group, focus);
+                    let focus = target == Some(index) && !self.face_keys;
+                    self.group(ui, &group, focus, index == 0);
                     ui.add_space(12.0);
                 }
                 if let (Some(advance), Some(index)) = (&advance, target)
@@ -158,6 +168,51 @@ impl PhotoApp {
                 }
             });
         self.hover_photo_preview(ui.ctx());
+    }
+    /// Personenfilter im Reiter „Vorschläge prüfen“: nur Personen mit offenen Vorschlägen,
+    /// daneben der Knopf, der wieder alle zeigt.
+    fn review_filter(&mut self, ui: &mut egui::Ui) {
+        let people = &self.face_page.people;
+        let items: Vec<select::Choice<i64>> = people
+            .iter()
+            .filter_map(|p| {
+                let open = self.face_page.review_people.get(&p.id).copied();
+                if open.is_none() && self.review_person != Some(p.id) {
+                    return None;
+                }
+                let mut detail = match open.unwrap_or(0) {
+                    1 => "1 Vorschlag".to_string(),
+                    n => format!("{n} Vorschläge"),
+                };
+                if select::needs_id(people, p.id) {
+                    detail = format!("{detail} · #{}", p.id);
+                }
+                Some(
+                    select::Choice::new(p.id, p.name.clone(), detail)
+                        .with_keywords(format!("#{}", p.id)),
+                )
+            })
+            .collect();
+        let mut chosen = self.review_person;
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Vorschläge für");
+            changed = select::FilterSelect::new("review-person", &items)
+                .placeholder("alle Personen")
+                .width(220.0)
+                .show(ui, &mut chosen);
+            if chosen.is_some() && ui.button("Alle Personen zeigen").clicked() {
+                chosen = None;
+                changed = true;
+            }
+        });
+        if changed && chosen != self.review_person {
+            self.review_person = chosen;
+            self.face_index = 0;
+            self.face_advance = None;
+            self.face_row_tops.clear();
+            self.refresh_faces();
+        }
     }
     /// Das ganze Foto zum Gesicht unter der Maus, am Zeiger geführt. Es gibt nur
     /// `hover_face` aus diesem Frame, daher höchstens eine Vorschau; sie
@@ -224,7 +279,8 @@ impl PhotoApp {
         });
     }
 
-    /// Kleine Vorschlagskarte: Porträt der Person, darunter Name und Wert.
+    /// Kleine Vorschlagskarte: Porträt der Person, darunter Name und Wert; `hint` ist der
+    /// Hinweistext unter der Maus.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn suggestion_chip(
         thumbnails: &mut Thumbnails,
@@ -235,6 +291,7 @@ impl PhotoApp {
         portrait: Option<&Face>,
         name: &str,
         detail: &str,
+        hint: Option<&str>,
         enabled: bool,
     ) -> bool {
         let inner = egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -278,6 +335,10 @@ impl PhotoApp {
                 egui::Sense::hover()
             },
         );
+        let response = match hint {
+            Some(hint) => response.on_hover_text(hint),
+            None => response,
+        };
         if enabled && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             ui.painter().rect_stroke(
@@ -290,8 +351,14 @@ impl PhotoApp {
         enabled && response.clicked()
     }
 
-    fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool) {
+    /// `top`: oberste Gruppe der Seite; nur ihre Knöpfe nennen die Tasten.
+    fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool, top: bool) {
         let key = draft_key(group);
+        // Im Reiter „Vorschläge prüfen“ steht die vorgeschlagene Person fest.
+        let proposed = (self.face_mode == "review")
+            .then(|| group.first().and_then(|f| f.person))
+            .flatten()
+            .and_then(|id| self.face_page.people.iter().find(|p| p.id == id).cloned());
         // Vorgemerkte Benennungen blockieren weitere Entscheidungen nicht (ADR 0068).
         let busy = self.naming_blocked();
         let hover_enabled = self.settings.hover_preview;
@@ -309,8 +376,7 @@ impl PhotoApp {
                 excluded: BTreeSet::new(),
             }
         });
-        let mut submit = false;
-        let mut ignore = false;
+        let mut decision = None;
         let proposals = group
             .first()
             .and_then(|f| self.face_page.suggestions.get(&f.id))
@@ -319,68 +385,144 @@ impl PhotoApp {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
             ui.set_min_width(ui.available_width());
             ui.push_id(&key, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} Gesichter", group.len())).strong());
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut draft.name)
-                            .hint_text("Name eingeben, Enter bestätigen")
-                            .desired_width(240.0),
-                    );
-                    if focus && !response.has_focus() {
-                        response.request_focus();
-                    }
-                    if response.changed() {
-                        draft.person = None;
-                    }
-                    submit = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let mut chosen = draft.person;
-                    let items = select::person_choices(&self.face_page.people, None);
-                    if select::FilterSelect::new("group-person", &items)
-                        .placeholder("Person wählen …")
-                        .width(200.0)
-                        .show(ui, &mut chosen)
-                        && let Some(person) = chosen
-                    {
-                        draft.person = Some(person);
-                        if let Some(found) = self.face_page.people.iter().find(|p| p.id == person) {
-                            draft.name = found.name.clone();
-                        }
-                    }
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Bestätigen"))
-                        .clicked()
-                    {
-                        submit = true;
-                    }
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Nicht interessiert"))
-                        .clicked()
-                    {
-                        ignore = true;
-                    }
-                });
-                if let Some(proposals) = &proposals {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Ähnlichste Personen:").small().weak());
-                        for (person, name, score) in &proposals.items {
-                            let detail = format!("{score:.2}").replace('.', ",");
-                            if Self::suggestion_chip(
-                                &mut self.thumbnails,
-                                ui,
-                                &root,
-                                &exiftool,
-                                *person,
-                                proposals.portraits.get(person),
-                                name,
-                                &detail,
-                                !busy,
-                            ) {
-                                draft.person = Some(*person);
-                                draft.name = name.clone();
-                                submit = true;
+                if let Some(person) = &proposed {
+                    let selected = group
+                        .iter()
+                        .filter(|f| !draft.excluded.contains(&f.id))
+                        .count();
+                    ui.horizontal(|ui| {
+                        let size = egui::vec2(56.0, 56.0);
+                        match self.face_page.portraits.get(&person.id) {
+                            Some(face) => {
+                                self.thumbnails
+                                    .image(
+                                        ui,
+                                        PreviewRequest {
+                                            root: Some(PathBuf::from(&root)),
+                                            path: Path::new(&root).join(&face.source),
+                                            orientation: 1,
+                                            crop: Some(face.bbox),
+                                            edge: 160,
+                                            generation: 0,
+                                        },
+                                        &exiftool,
+                                        size,
+                                    )
+                                    .on_hover_text(format!(
+                                        "Ein bestätigtes Bild von {}",
+                                        person.name
+                                    ));
+                            }
+                            None => {
+                                ui.allocate_space(size);
                             }
                         }
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&person.name).size(17.0).strong())
+                                .on_hover_text(select::person_caption(
+                                    &self.face_page.people,
+                                    person.id,
+                                    &person.name,
+                                ));
+                            let mut detail = match group.len() {
+                                1 => "1 Gesicht".to_string(),
+                                n => format!("{n} Gesichter"),
+                            };
+                            if let Some(range) = similarity_text(group.iter().map(|f| f.score)) {
+                                detail = format!("{detail} · {range}");
+                            }
+                            ui.label(RichText::new(detail).small().weak());
+                        });
+                        ui.add_space(12.0);
+                        let confirm = ui.add_enabled(
+                            !busy && selected > 0,
+                            egui::Button::new(confirm_label(selected, group.len(), &person.name)),
+                        );
+                        if key_hint(confirm, top, "J").clicked() {
+                            decision = Some(Decision::Confirm);
+                        }
+                        let reject = ui.add_enabled(
+                            !busy,
+                            egui::Button::new(reject_label(group.len(), &person.name)),
+                        );
+                        if key_hint(reject, top, "N").clicked() {
+                            decision = Some(Decision::Reject);
+                        }
+                        let ignore = ui.add_enabled(!busy, egui::Button::new("Nicht interessiert"));
+                        if key_hint(ignore, top, "Entf").clicked() {
+                            decision = Some(Decision::Ignore);
+                        }
                     });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{} Gesichter", group.len())).strong());
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut draft.name)
+                                .hint_text("Name eingeben, Enter bestätigen")
+                                .desired_width(240.0),
+                        );
+                        if focus && !response.has_focus() {
+                            response.request_focus();
+                        }
+                        if response.changed() {
+                            draft.person = None;
+                        }
+                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            decision = Some(Decision::Confirm);
+                        }
+                        let mut chosen = draft.person;
+                        let items = select::person_choices(&self.face_page.people, None);
+                        if select::FilterSelect::new("group-person", &items)
+                            .placeholder("Person wählen …")
+                            .width(200.0)
+                            .show(ui, &mut chosen)
+                            && let Some(person) = chosen
+                        {
+                            draft.person = Some(person);
+                            if let Some(found) =
+                                self.face_page.people.iter().find(|p| p.id == person)
+                            {
+                                draft.name = found.name.clone();
+                            }
+                        }
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("Bestätigen"))
+                            .clicked()
+                        {
+                            decision = Some(Decision::Confirm);
+                        }
+                        let ignore = ui.add_enabled(!busy, egui::Button::new("Nicht interessiert"));
+                        if key_hint(ignore, top, "Entf").clicked() {
+                            decision = Some(Decision::Ignore);
+                        }
+                    });
+                    if let Some(proposals) = &proposals {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Ähnlichste Personen:").small().weak());
+                            for (index, (person, name, score)) in proposals.items.iter().enumerate()
+                            {
+                                let detail = format!("{score:.2}").replace('.', ",");
+                                let hint =
+                                    top.then(|| format!("Taste {} (oberste Gruppe)", index + 1));
+                                if Self::suggestion_chip(
+                                    &mut self.thumbnails,
+                                    ui,
+                                    &root,
+                                    &exiftool,
+                                    *person,
+                                    proposals.portraits.get(person),
+                                    name,
+                                    &detail,
+                                    hint.as_deref(),
+                                    !busy,
+                                ) {
+                                    draft.person = Some(*person);
+                                    draft.name = name.clone();
+                                    decision = Some(Decision::Pick(index));
+                                }
+                            }
+                        });
+                    }
                 }
                 let (columns, size) = tile_layout(
                     ui.available_width(),
@@ -443,24 +585,205 @@ impl PhotoApp {
                 }
             });
         });
-        if (submit || ignore) && !busy {
-            let ids: Vec<_> = group.iter().map(|f| f.id).collect();
-            let selected = ids
-                .iter()
-                .filter(|id| !draft.excluded.contains(id))
-                .copied()
-                .collect();
-            let name = draft.name.clone();
-            let person = draft.person;
-            let config = self.settings.central();
-            self.queue_hiding("Gesichtsgruppe speichern", ids.clone(), move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                let (undo, note) = crate::core::central::name_group_synced(
-                    &mut c, &config, &ids, &selected, person, &name, ignore,
-                )?;
-                Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
-            });
+        if let Some(decision) = decision
+            && self.decide_group(group, decision)
+        {
+            self.face_keys = false;
         }
+    }
+
+    /// Tasten für die oberste Gruppe in „Benennen“ und „Vorschläge prüfen“: `J` bestätigt
+    /// den Vorschlag, `N` lehnt ihn ab (beide nur in „Vorschläge prüfen“), `1` bis `3`
+    /// übernehmen einen der Vorschläge in „Benennen“, `Entf` heißt „Nicht interessiert“.
+    /// Nur ohne Fokus in einem Feld und solange die Knöpfe aktiv wären.
+    pub(super) fn face_shortcuts(&mut self, ctx: &egui::Context) {
+        let review = match self.face_mode.as_str() {
+            "review" => true,
+            "unknown" => false,
+            _ => return,
+        };
+        if self.naming_blocked()
+            || self.recognition_tools_open
+            || ctx.memory(|m| m.focused().is_some())
+        {
+            return;
+        }
+        let Some(group) = self.face_page.groups.first().cloned() else {
+            return;
+        };
+        let pressed = |key| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
+        let decision = if pressed(egui::Key::Delete) {
+            Decision::Ignore
+        } else if review && pressed(egui::Key::J) {
+            // Wie der Knopf: ohne ausgewählte Kachel gibt es nichts zu bestätigen.
+            let none_selected = self
+                .drafts
+                .get(&draft_key(&group))
+                .is_some_and(|draft| group.iter().all(|f| draft.excluded.contains(&f.id)));
+            if group[0].person.is_none() || none_selected {
+                return;
+            }
+            Decision::Confirm
+        } else if review && pressed(egui::Key::N) {
+            Decision::Reject
+        } else if let Some(index) = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3]
+            .into_iter()
+            .position(pressed)
+            .filter(|_| !review)
+        {
+            Decision::Pick(index)
+        } else {
+            return;
+        };
+        if self.decide_group(&group, decision) {
+            self.face_keys = true;
+        }
+    }
+
+    /// Speichert eine Entscheidung für eine Gruppe; Knöpfe und Tasten nutzen denselben Weg.
+    /// Abgewählte Kacheln und der Namensentwurf der Gruppe gelten mit. Gibt `true` zurück,
+    /// wenn ein Schreibauftrag vorgemerkt wurde.
+    pub(super) fn decide_group(&mut self, group: &[Face], decision: Decision) -> bool {
+        if self.naming_blocked() || group.is_empty() {
+            return false;
+        }
+        let ids: Vec<i64> = group.iter().map(|f| f.id).collect();
+        let draft = self.drafts.get(&draft_key(group));
+        let kept: BTreeSet<i64> = ids
+            .iter()
+            .filter(|id| draft.is_none_or(|draft| !draft.excluded.contains(id)))
+            .copied()
+            .collect();
+        let proposed = group[0].person;
+        let (person, name) = match draft {
+            Some(draft) => (draft.person, draft.name.clone()),
+            None => (proposed, String::new()),
+        };
+        let (selected, person, name, ignore) = match decision {
+            Decision::Confirm => (kept, person, name, false),
+            Decision::Reject => {
+                // Ohne Auswahl gilt „keines davon ist diese Person“.
+                let Some(person) = proposed else {
+                    return false;
+                };
+                (BTreeSet::new(), Some(person), String::new(), false)
+            }
+            Decision::Ignore => (kept, person, name, true),
+            Decision::Pick(index) => {
+                let Some((person, name, _)) = self
+                    .face_page
+                    .suggestions
+                    .get(&ids[0])
+                    .and_then(|found| found.items.get(index))
+                    .cloned()
+                else {
+                    return false;
+                };
+                (kept, Some(person), name, false)
+            }
+        };
+        let root = self.settings.collection.clone();
+        let config = self.settings.central();
+        self.queue_hiding("Gesichtsgruppe speichern", ids.clone(), move |_| {
+            let mut c = Collection::open(Path::new(&root), true)?;
+            let (undo, note) = crate::core::central::name_group_synced(
+                &mut c, &config, &ids, &selected, person, &name, ignore,
+            )?;
+            Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
+        });
+        true
+    }
+}
+
+/// Entscheidung für eine Gesichtsgruppe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Decision {
+    /// Ausgewählte Gesichter bestätigen (abgewählte werden abgelehnt).
+    Confirm,
+    /// Keines der Gesichter ist die vorgeschlagene Person.
+    Reject,
+    /// „Nicht interessiert“.
+    Ignore,
+    /// Den Vorschlag mit dieser Nummer (ab 0) übernehmen.
+    Pick(usize),
+}
+
+/// Nennt die Taste im Hinweistext, aber nur an der obersten Gruppe: nur für sie gilt sie.
+fn key_hint(response: egui::Response, top: bool, key: &str) -> egui::Response {
+    if top {
+        response.on_hover_text(format!("Taste {key} (oberste Gruppe)"))
+    } else {
+        response
+    }
+}
+
+/// Wertebereich einer Gruppe: „Ähnlichkeit 0,62 bis 0,81“, bei gleichen Werten nur einer.
+/// Gesichter ohne Wert zählen nicht; ohne jeden Wert gibt es keinen Text.
+fn similarity_text(scores: impl Iterator<Item = f32>) -> Option<String> {
+    let (low, high) = scores
+        .filter(|score| score.is_finite() && *score > 0.0)
+        .fold(None, |range: Option<(f32, f32)>, score| {
+            Some(range.map_or((score, score), |(low, high)| {
+                (low.min(score), high.max(score))
+            }))
+        })?;
+    let decimal = |value: f32| format!("{value:.2}").replace('.', ",");
+    let (low, high) = (decimal(low), decimal(high));
+    Some(if low == high {
+        format!("Ähnlichkeit {low}")
+    } else {
+        format!("Ähnlichkeit {low} bis {high}")
+    })
+}
+
+/// Beschriftung des Bestätigen-Knopfs: „Alle 5 sind Anna“, mit abgewählten Kacheln
+/// „3 sind Anna“.
+fn confirm_label(selected: usize, total: usize, name: &str) -> String {
+    match (selected, total) {
+        (1, 1) => format!("Das ist {name}"),
+        (1, _) => format!("1 ist {name}"),
+        (s, t) if s == t => format!("Alle {t} sind {name}"),
+        (s, _) => format!("{s} sind {name}"),
+    }
+}
+
+/// Beschriftung des Ablehnen-Knopfs: „Keines ist Anna“.
+fn reject_label(total: usize, name: &str) -> String {
+    if total == 1 {
+        format!("Das ist nicht {name}")
+    } else {
+        format!("Keines ist {name}")
+    }
+}
+#[cfg(test)]
+mod review_text_tests {
+    use super::*;
+    #[test]
+    fn similarity_range_uses_a_decimal_comma_and_skips_missing_values() {
+        assert_eq!(
+            similarity_text([0.81_f32, 0.624, 0.7].into_iter()).as_deref(),
+            Some("Ähnlichkeit 0,62 bis 0,81")
+        );
+        assert_eq!(
+            similarity_text([0.0_f32, 0.7].into_iter()).as_deref(),
+            Some("Ähnlichkeit 0,70")
+        );
+        assert_eq!(
+            similarity_text([0.701_f32, 0.699].into_iter()).as_deref(),
+            Some("Ähnlichkeit 0,70"),
+            "gleich gerundete Werte stehen nur einmal da"
+        );
+        assert_eq!(similarity_text([0.0_f32, f32::NAN].into_iter()), None);
+        assert_eq!(similarity_text(std::iter::empty()), None);
+    }
+    #[test]
+    fn button_labels_follow_the_selection() {
+        assert_eq!(confirm_label(5, 5, "Anna"), "Alle 5 sind Anna");
+        assert_eq!(confirm_label(3, 5, "Anna"), "3 sind Anna");
+        assert_eq!(confirm_label(1, 5, "Anna"), "1 ist Anna");
+        assert_eq!(confirm_label(1, 1, "Anna"), "Das ist Anna");
+        assert_eq!(reject_label(5, "Anna"), "Keines ist Anna");
+        assert_eq!(reject_label(1, "Anna"), "Das ist nicht Anna");
     }
 }
 

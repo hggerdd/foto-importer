@@ -185,6 +185,11 @@ pub struct PhotoApp {
     face_page: FacePage,
     face_mode: String,
     face_index: usize,
+    /// Personenfilter im Reiter „Vorschläge prüfen“.
+    review_person: Option<i64>,
+    /// Die letzte Gruppenentscheidung kam von einer Taste: die nächste Gruppe erhält dann
+    /// keinen Fokus im Namensfeld, damit die Tasten weiter gelten.
+    face_keys: bool,
     face_row_tops: Vec<(i64, f32)>,
     face_advance: Option<GroupAdvance>,
     drafts: BTreeMap<String, Draft>,
@@ -288,6 +293,8 @@ impl PhotoApp {
             face_page: FacePage::default(),
             face_mode: "unknown".into(),
             face_index: 0,
+            review_person: None,
+            face_keys: false,
             face_row_tops: Vec::new(),
             face_advance: None,
             drafts: BTreeMap::new(),
@@ -662,6 +669,7 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.collection);
         let mode = self.face_mode.clone();
         let page = self.face_index;
+        let person = self.review_person.filter(|_| mode == "review");
         self.launch(
             "Personen und Gesichter lesen",
             false,
@@ -671,13 +679,13 @@ impl PhotoApp {
                 c.cancel_with(&control);
                 c.db.execute_batch("BEGIN")?;
                 let mut index = page;
-                let mut snapshot = faces::page(&c, &mode, index)?;
+                let mut snapshot = faces::page_filtered(&c, &mode, index, person)?;
                 if index > 0 && snapshot.groups.is_empty() {
                     index -= 1;
-                    snapshot = faces::page(&c, &mode, index)?;
+                    snapshot = faces::page_filtered(&c, &mode, index, person)?;
                     if index > 0 && snapshot.groups.is_empty() {
                         index = 0;
-                        snapshot = faces::page(&c, &mode, index)?;
+                        snapshot = faces::page_filtered(&c, &mode, index, person)?;
                     }
                 }
                 Ok(Outcome::Faces(revision, index, snapshot))
@@ -1210,6 +1218,7 @@ impl PhotoApp {
                             self.maintenance_paused = false;
                             self.auto_analysis_pending = false;
                             self.face_index = 0;
+                            self.review_person = None;
                             self.face_advance = None;
                             self.face_row_tops.clear();
                             self.undo.clear();

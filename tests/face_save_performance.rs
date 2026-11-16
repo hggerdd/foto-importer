@@ -211,11 +211,40 @@ fn rejections_and_same_photo_persons_are_excluded_like_before() -> anyhow::Resul
 #[test]
 fn pages_totals_and_status_equal_the_window_queries() -> anyhow::Result<()> {
     let (_temp, c) = build()?;
-    for (mode, predicate) in [
-        (
-            "review",
+    // „Vorschläge prüfen“ ordnet nach Ähnlichkeit statt nach Größe: dieselben Gruppen wie die
+    // Fensterabfrage (ohne Werte bleibt die Aufteilung nach ID), nur in anderer Reihenfolge.
+    let mut expected = Vec::new();
+    let mut found = Vec::new();
+    for page in 0..3 {
+        let (total, groups) = legacy_page(
+            &c,
             "f.assignment IN ('auto','suggested') AND f.ignored=0",
-        ),
+            page,
+        )?;
+        let now = faces::page(&c, "review", page)?;
+        assert_eq!(now.total_groups, total, "review Seite {page}");
+        expected.extend(groups);
+        found.extend(
+            now.groups
+                .iter()
+                .map(|g| g.iter().map(|f| f.id).collect::<Vec<i64>>()),
+        );
+    }
+    expected.sort();
+    found.sort();
+    assert!(!found.is_empty());
+    assert_eq!(found, expected, "review");
+    // Die Abfrage aller offenen Vorschläge läuft über den Teilindex, ohne Sortierschritt.
+    let plan: Vec<String> =
+        c.db.prepare(&format!("EXPLAIN QUERY PLAN {}", faces::REVIEW_ROWS))?
+            .query_map([], |r| r.get(3))?
+            .collect::<rusqlite::Result<_>>()?;
+    assert!(
+        plan.iter().any(|step| step.contains("ix_faces_review"))
+            && plan.iter().all(|step| !step.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
+    for (mode, predicate) in [
         ("ignored", "f.ignored=1"),
         ("confirmed", "f.assignment='user' AND f.ignored=0"),
     ] {

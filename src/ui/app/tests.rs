@@ -641,6 +641,177 @@ fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
     assert!(app.hidden_faces().is_empty());
 }
 
+fn review_face(id: i64, score: f32) -> Face {
+    Face {
+        person: Some(1),
+        assignment: Some("suggested".into()),
+        score,
+        ..test_face(id)
+    }
+}
+/// Reiter „Vorschläge prüfen“ mit zwei Gruppen für Anna in einer leeren Sammlung unter `root`.
+fn review_app(root: &Path) -> (egui::Context, PhotoApp) {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.view = View::People;
+    app.face_mode = "review".into();
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.face_page.people = vec![faces::Person {
+        id: 1,
+        name: "Anna".into(),
+        birth: String::new(),
+        count: 4,
+        gender: String::new(),
+        note: String::new(),
+    }];
+    app.face_page.groups = vec![
+        vec![review_face(1, 0.8), review_face(2, 0.62)],
+        vec![review_face(3, 0.6)],
+    ];
+    app.face_page.total_groups = 2;
+    app.face_page.status.review = 3;
+    (context, app)
+}
+fn naming_tasks(app: &PhotoApp) -> usize {
+    app.tasks.iter().filter(|t| t.kind == "naming").count()
+}
+
+#[test]
+fn none_of_them_starts_one_write_task_and_hides_the_group() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (_context, mut app) = review_app(root.path());
+    let group = app.face_page.groups[0].clone();
+    assert!(app.decide_group(&group, people_view::Decision::Reject));
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![3]]);
+    assert_eq!(app.face_page.status.review, 1);
+    // Ohne vorgeschlagene Person gibt es nichts abzulehnen.
+    assert!(!app.decide_group(&[test_face(9)], people_view::Decision::Reject));
+    assert_eq!(naming_tasks(&app), 1);
+    Ok(())
+}
+
+/// Ein Tastendruck in einem Frame, wahlweise mit Fokus in einem Textfeld.
+fn press_face_key(context: &egui::Context, app: &mut PhotoApp, key: egui::Key, focus: bool) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(400.0, 300.0),
+        )),
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let _ = context.run(input, |ctx| {
+        if focus {
+            ctx.memory_mut(|m| m.request_focus(egui::Id::new("text-field")));
+        }
+        app.face_shortcuts(ctx);
+    });
+    context.memory_mut(|m| m.surrender_focus(egui::Id::new("text-field")));
+}
+
+#[test]
+fn j_confirms_the_top_group_once_unless_a_text_field_has_focus() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = review_app(root.path());
+    // Ein Textfeld mit Fokus behält die Taste für sich.
+    press_face_key(&context, &mut app, egui::Key::J, true);
+    assert_eq!(naming_tasks(&app), 0);
+    assert_eq!(page_ids(&app), vec![vec![1, 2], vec![3]]);
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(
+        page_ids(&app),
+        vec![vec![3]],
+        "die oberste Gruppe ist vorgemerkt"
+    );
+    assert!(app.face_keys);
+    // Sind alle Kacheln abgewählt, bestätigt J nichts; N lehnt die Gruppe ab.
+    app.drafts.insert(
+        "p1:3".into(),
+        Draft {
+            name: "Anna".into(),
+            person: Some(1),
+            excluded: BTreeSet::from([3]),
+        },
+    );
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    assert_eq!(naming_tasks(&app), 1);
+    press_face_key(&context, &mut app, egui::Key::N, false);
+    assert_eq!(naming_tasks(&app), 2);
+    assert!(app.face_page.groups.is_empty());
+    // Ohne Gruppe bleibt jede Taste wirkungslos.
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    press_face_key(&context, &mut app, egui::Key::Delete, false);
+    assert_eq!(naming_tasks(&app), 2);
+    Ok(())
+}
+
+#[test]
+fn digits_pick_a_suggestion_and_delete_ignores_the_top_group_in_benennen() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = review_app(root.path());
+    app.face_mode = "unknown".into();
+    app.face_page.groups = vec![vec![test_face(5), test_face(6)], vec![test_face(7)]];
+    app.face_page.suggestions.insert(
+        5,
+        crate::core::recognition::Suggestions {
+            items: vec![(1, "Anna".into(), 0.8), (2, "Ben".into(), 0.7)],
+            portraits: BTreeMap::new(),
+        },
+    );
+    // J und N gelten nur für Vorschläge; einen dritten Vorschlag gibt es nicht.
+    for key in [egui::Key::J, egui::Key::N, egui::Key::Num3] {
+        press_face_key(&context, &mut app, key, false);
+    }
+    assert_eq!(naming_tasks(&app), 0);
+    press_face_key(&context, &mut app, egui::Key::Num2, true);
+    assert_eq!(naming_tasks(&app), 0, "im Textfeld bleibt die Ziffer Text");
+    press_face_key(&context, &mut app, egui::Key::Num2, false);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![7]]);
+    press_face_key(&context, &mut app, egui::Key::Delete, false);
+    assert_eq!(naming_tasks(&app), 2);
+    assert!(app.face_page.groups.is_empty());
+    // In „Bestätigt“ gelten die Tasten nicht.
+    app.face_mode = "confirmed".into();
+    app.face_page.groups = vec![vec![review_face(8, 1.0)]];
+    for key in [egui::Key::J, egui::Key::N, egui::Key::Delete] {
+        press_face_key(&context, &mut app, key, false);
+    }
+    assert_eq!(naming_tasks(&app), 2);
+    Ok(())
+}
+
+#[test]
+fn review_cards_render_with_portrait_filter_and_deselected_tiles() {
+    let (context, mut app) = review_app(Path::new("tmp/synthetic-review"));
+    app.face_page.portraits.insert(1, test_face(40));
+    app.face_page.review_people.insert(1, 3);
+    app.review_person = Some(1);
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    assert_eq!(
+        app.face_row_tops.len(),
+        2,
+        "beide Gruppen wurden gezeichnet"
+    );
+    let draft = app.drafts.get_mut("p1:1,2").expect("Karte gezeichnet");
+    assert_eq!(draft.person, Some(1));
+    draft.excluded.insert(2);
+    draw_people(&context, &mut app, egui::vec2(980.0, 680.0));
+    assert_eq!(naming_tasks(&app), 0, "Zeichnen allein speichert nichts");
+}
+
 #[test]
 fn plural_uses_singular_only_for_exactly_one() {
     assert_eq!(files_and_days(0, 0), "0 Dateien an 0 Tagen");

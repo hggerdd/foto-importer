@@ -99,6 +99,7 @@ impl PhotoApp {
                                     self.name_portraits.get(&person),
                                     &name,
                                     &detail,
+                                    None,
                                     !busy,
                                 ) {
                                     self.name_person = Some(person);

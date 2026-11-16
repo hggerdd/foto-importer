@@ -112,20 +112,106 @@ fn vector_spaces_and_invalid_values_are_rejected() {
     assert!(inference::normalize(&[f32::NAN]).is_err());
 }
 #[test]
-fn review_groups_are_size_sorted_globally_and_do_not_mix_people() -> anyhow::Result<()> {
+fn review_groups_come_most_certain_first_and_do_not_mix_people() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;
     seed(&c, 51)?;
-    c.db.execute_batch("INSERT INTO persons(id) VALUES(1),(2),(3); UPDATE faces SET person_id=CASE WHEN id<=1 THEN 1 WHEN id<=21 THEN 2 ELSE 3 END,assignment='suggested';")?;
+    // Person 1: ein Gesicht (0,65); Person 2: 20 Gesichter (0,9); Person 3: 30 Gesichter
+    // mit steigender Ähnlichkeit (0,622 bis 0,651).
+    c.db.execute_batch("INSERT INTO persons(id) VALUES(1),(2),(3); UPDATE faces SET person_id=CASE WHEN id<=1 THEN 1 WHEN id<=21 THEN 2 ELSE 3 END,assignment='suggested',confidence=CASE WHEN id<=1 THEN 0.65 WHEN id<=21 THEN 0.9 ELSE 0.6+id*0.001 END;")?;
     let page = faces::page(&c, "review", 0)?;
     assert_eq!(
-        page.groups.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![28, 20, 2, 1]
+        page.groups
+            .iter()
+            .map(|g| (g[0].person, g.len()))
+            .collect::<Vec<_>>(),
+        vec![(Some(2), 20), (Some(1), 1), (Some(3), 28), (Some(3), 2)],
+        "nach mittlerer Ähnlichkeit, sicherste Gruppe zuerst"
     );
     assert_eq!(page.total_groups, 4, "Seitenzahl kennt alle Gruppen");
     for group in &page.groups {
         assert!(group.iter().all(|f| f.person == group[0].person));
+        assert!(
+            group.windows(2).all(|pair| pair[0].score >= pair[1].score),
+            "in der Gruppe stehen die sichersten Gesichter vorn"
+        );
     }
+    assert_eq!(page.groups[2][0].id, 51);
+    assert_eq!(
+        page.groups[3].iter().map(|f| f.id).collect::<Vec<_>>(),
+        vec![23, 22],
+        "der schwächste Rest bildet die letzte Gruppe"
+    );
+    assert_eq!(
+        page.review_people,
+        std::collections::BTreeMap::from([(1, 1), (2, 20), (3, 30)])
+    );
+    Ok(())
+}
+#[test]
+fn review_filter_shows_one_person_and_decisions_leave_confirmed_faces_alone() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 6)?;
+    // Anna: 1 und 2 vorgeschlagen (0,5), 3 sicher (0,75), 6 vom Nutzer bestätigt.
+    // Ben: 4 und 5 vorgeschlagen (0,8).
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(2);
+         INSERT INTO person_attrs VALUES(2,'name','Ben');
+         UPDATE faces SET person_id=2,confidence=0.8 WHERE id IN (4,5);
+         UPDATE faces SET assignment='auto',confidence=0.75 WHERE id=3;
+         UPDATE faces SET assignment='user',confidence=1 WHERE id=6;",
+    )?;
+    let ids = |page: &faces::FacePage| -> Vec<Vec<i64>> {
+        page.groups
+            .iter()
+            .map(|g| g.iter().map(|f| f.id).collect())
+            .collect()
+    };
+    let all = faces::page(&c, "review", 0)?;
+    assert_eq!(ids(&all), vec![vec![4, 5], vec![3, 1, 2]]);
+    let anna = faces::page_filtered(&c, "review", 0, Some(1))?;
+    assert_eq!(ids(&anna), vec![vec![3, 1, 2]]);
+    assert_eq!(anna.total_groups, 1);
+    assert_eq!(
+        anna.review_people,
+        std::collections::BTreeMap::from([(1, 3), (2, 2)]),
+        "die Auswahlliste kennt weiter alle Personen mit Vorschlägen"
+    );
+    // „Bestätigt“ behält seine Reihenfolge und beachtet den Filter ebenfalls.
+    assert_eq!(ids(&faces::page(&c, "confirmed", 0)?), vec![vec![6]]);
+    assert_eq!(
+        ids(&faces::page_filtered(&c, "confirmed", 0, Some(1))?),
+        vec![vec![6]]
+    );
+    assert!(
+        faces::page_filtered(&c, "confirmed", 0, Some(2))?
+            .groups
+            .is_empty()
+    );
+    // „Keines ist Anna“ für die Gruppe: nur die Vorschläge ändern sich.
+    let undo = faces::name_group(&mut c, &[3, 1, 2], &BTreeSet::new(), Some(1), "", false)?;
+    assert_eq!(undo.summary().rejected, 3);
+    assert_eq!(state(&c, 6)?, (Some(1), Some("user".into())));
+    assert_eq!(state(&c, 4)?, (Some(2), Some("suggested".into())));
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM face_rejections WHERE person_id=1")?,
+        3
+    );
+    let anna = faces::page_filtered(&c, "review", 0, Some(1))?;
+    assert!(anna.groups.is_empty());
+    assert_eq!(anna.total_groups, 0);
+    // „Alle 2 sind Ben“ bestätigt Bens Gruppe; Annas bestätigtes Gesicht bleibt, wie es war.
+    faces::name_group(&mut c, &[4, 5], &BTreeSet::from([4, 5]), Some(2), "", false)?;
+    assert_eq!(state(&c, 4)?, (Some(2), Some("user".into())));
+    assert_eq!(state(&c, 5)?, (Some(2), Some("user".into())));
+    assert_eq!(state(&c, 6)?, (Some(1), Some("user".into())));
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM faces WHERE id=6 AND confidence=1")?,
+        1
+    );
+    assert!(faces::page(&c, "review", 0)?.groups.is_empty());
     Ok(())
 }
 #[test]
