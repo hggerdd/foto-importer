@@ -8,15 +8,15 @@ ist, wo die Grenzen liegen und was bei Änderungen erhalten bleiben muss. Die Hi
 | Thema | Inhalt |
 |---|---|
 | [Arbeitsweise](arbeitsweise.md) | ADR-Pflege, Prüfungen, Agentenregeln |
-| [Anwendung und Nebenläufigkeit](anwendung.md) | Rust/egui, UI und Core, Worker, Vorrang, Einstellungen, Portionen |
+| [Anwendung und Nebenläufigkeit](anwendung.md) | Rust/egui, UI und Core, Worker, Vorrang, Einstellungen, Portionen, Navigation |
 | [Import](import.md) | Kopieren ohne Ersetzen, Datumsquelle, DNG, Adobe-Versionsprüfung |
 | [Sammlung und Daten](sammlung-daten.md) | SQLite, Sperre, Migration, Foto-Identität, Indizierung, Indizes |
 | [Sammlungsansicht](sammlungsansicht.md) | Suche, Galerie, Bilddetails, Ordnerbaum, Vorschau-Cache |
 | [Gesichtserkennung](gesichtserkennung.md) | Modelle, Analyse, Referenzen, Abgleich, Gruppenbildung |
-| [Gesichter benennen und prüfen](gesichter-benennen.md) | Reiter, Gruppenkarten, Ablehnen, Ignorieren, Rücknahme |
+| [Gesichter benennen und prüfen](gesichter-benennen.md) | Reiter, Statuszeile, Gruppenkarten, Ablehnen, Ignorieren, Rücknahme |
 | [Personen und Beziehungen](personen.md) | Personen-IDs, Beziehungskatalog, Verwandtschaft, Tabelle, Stammbaum, Graph |
 | [Zentraler Personenbestand](zentral.md) | Zentraldatei, Abgleich von Personen und Beziehungen |
-| [Zeitreise](zeitreise.md) | Gesichter einer Person über die Zeit, Export |
+| [Zeitreise](zeitreise.md) | Gesichter der gewählten Person über die Zeit, Export |
 | [Release und Downloads](release.md) | Portables Paket, ONNX Runtime, Modellgewichte |
 
 ## Regeln

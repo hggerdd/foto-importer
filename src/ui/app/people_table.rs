@@ -110,6 +110,15 @@ impl PeopleUi {
     pub(super) fn scroll_to_person(&mut self, id: i64) {
         self.scroll_to = Some(id);
     }
+    /// Beim Wechsel der Sammlung enden Suche, Entwürfe und begonnenes Zusammenführen; die
+    /// Sortierung bleibt.
+    pub(super) fn reset_for_collection(&mut self) {
+        *self = Self {
+            sort: std::mem::take(&mut self.sort),
+            capture_popup: self.capture_popup.take(),
+            ..Self::default()
+        };
+    }
     /// Nur für Sichtprüfungen: Sortierspalte aus der Umgebung (`name`, `photos`, …).
     pub(super) fn sort_from_env(&mut self) {
         let Ok(text) = std::env::var("FOTO_IMPORTER_PEOPLE_SORT") else {
@@ -494,7 +503,7 @@ impl PhotoApp {
                 ui.add_space(24.0);
                 ui.label(RichText::new("Noch keine Personen.").strong());
                 ui.label(muted(
-                    "Benenne Gesichter im Reiter „Benennen“ oder lege rechts eine Person ohne Foto an.",
+                    "Benenne Gesichter unter „Gesichter“ oder lege rechts eine Person ohne Foto an.",
                 ));
             }
             return 0;
@@ -921,6 +930,7 @@ impl PhotoApp {
         let mut photos = false;
         let mut graph = false;
         let mut tree = false;
+        let mut time = false;
         ui.horizontal_wrapped(|ui| {
             photos = ui
                 .add_enabled(
@@ -937,6 +947,10 @@ impl PhotoApp {
                 .button("Im Stammbaum zeigen")
                 .on_hover_text("Stammbaum um diese Person")
                 .clicked();
+            time = ui
+                .button("Zeitreise zeigen")
+                .on_hover_text("Gesichter dieser Person über die Jahre")
+                .clicked();
         });
         if photos {
             self.filters = Search {
@@ -946,14 +960,15 @@ impl PhotoApp {
             self.view = View::Collection;
             self.refresh_collection();
         }
+        // Die Person dieser Spalte ist die gewählte; die Ansichten öffnen sich für sie.
         if graph {
-            self.open_relationship_graph(person.id);
+            self.set_person_mode(PersonMode::Graph);
         }
         if tree {
-            self.family_ui.focus = Some(person.id);
-            self.face_mode = "tree".into();
-            self.face_index = 0;
-            self.refresh_faces();
+            self.set_person_mode(PersonMode::Tree);
+        }
+        if time {
+            self.set_person_mode(PersonMode::Time);
         }
     }
 

@@ -75,7 +75,7 @@ fn confirming_a_group_brings_its_successor_to_the_same_viewport_position() {
     let ctx = egui::Context::default();
     let creation = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
-    app.view = View::People;
+    app.view = View::Faces;
     app.settings.collection = "tmp/synthetic-faces".into();
     let face = |id| Face {
         id,
@@ -244,6 +244,7 @@ fn all_empty_workspaces_render_without_external_tools() {
     for view in [
         View::Import,
         View::Collection,
+        View::Faces,
         View::People,
         View::Settings,
         View::Tasks,
@@ -343,7 +344,7 @@ fn hovering_a_face_shows_exactly_that_photo_and_leaving_hides_it() {
     let creation = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     assert!(app.settings.hover_preview, "Standard ist eingeschaltet");
-    app.view = View::People;
+    app.view = View::Faces;
     app.settings.collection = "tmp/synthetic-faces".into();
     let face = |id| Face {
         id,
@@ -421,7 +422,7 @@ fn people_app(count: i64) -> (egui::Context, PhotoApp) {
     let creation = eframe::CreationContext::_new_kittest(context.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.view = View::People;
-    app.face_mode = "persons".into();
+    app.person_mode = PersonMode::Overview;
     app.settings.collection = "tmp/synthetic-people".into();
     load_people(&mut app, count, 0);
     (context, app)
@@ -654,7 +655,7 @@ fn review_app(root: &Path) -> (egui::Context, PhotoApp) {
     let context = egui::Context::default();
     let creation = eframe::CreationContext::_new_kittest(context.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
-    app.view = View::People;
+    app.view = View::Faces;
     app.face_mode = "review".into();
     app.settings.collection = root.to_string_lossy().into_owned();
     app.face_page.people = vec![faces::Person {
@@ -683,12 +684,12 @@ fn none_of_them_starts_one_write_task_and_hides_the_group() -> anyhow::Result<()
     drop(Collection::open(root.path(), true)?);
     let (_context, mut app) = review_app(root.path());
     let group = app.face_page.groups[0].clone();
-    assert!(app.decide_group(&group, people_view::Decision::Reject));
+    assert!(app.decide_group(&group, faces_view::Decision::Reject));
     assert_eq!(naming_tasks(&app), 1);
     assert_eq!(page_ids(&app), vec![vec![3]]);
     assert_eq!(app.face_page.status.review, 1);
     // Ohne vorgeschlagene Person gibt es nichts abzulehnen.
-    assert!(!app.decide_group(&[test_face(9)], people_view::Decision::Reject));
+    assert!(!app.decide_group(&[test_face(9)], faces_view::Decision::Reject));
     assert_eq!(naming_tasks(&app), 1);
     Ok(())
 }
@@ -1020,4 +1021,229 @@ fn dismissing_an_error_removes_it() {
     assert!(app.visible_notice(std::time::Instant::now()).is_some());
     app.dismiss_notice();
     assert!(app.visible_notice(std::time::Instant::now()).is_none());
+}
+
+#[test]
+fn navigation_lists_four_main_items_and_two_at_the_bottom_without_zeitreise() {
+    let main: Vec<&str> = NAV_MAIN.iter().map(|(_, title, _)| *title).collect();
+    assert_eq!(main, ["Importieren", "Sammlung", "Gesichter", "Personen"]);
+    let bottom: Vec<&str> = NAV_BOTTOM.iter().map(|(_, title, _)| *title).collect();
+    assert_eq!(bottom, ["Aufgaben", "Einstellungen"]);
+    assert!(
+        !main
+            .iter()
+            .chain(&bottom)
+            .any(|title| *title == "Zeitreise")
+    );
+    let views: Vec<View> = NAV_MAIN.iter().map(|(view, _, _)| *view).collect();
+    assert_eq!(
+        views,
+        [View::Import, View::Collection, View::Faces, View::People]
+    );
+    // Die Zeitreise ist eine Ansicht der gewählten Person.
+    let modes: Vec<&str> = people_view::PERSON_MODES
+        .iter()
+        .map(|(_, label)| *label)
+        .collect();
+    assert_eq!(modes, ["Übersicht", "Stammbaum", "Graph", "Zeitreise"]);
+}
+
+#[test]
+fn old_start_values_open_the_new_places() {
+    use PersonMode::*;
+    // Früher: Ansicht „people“ mit einem Reiter aus Gesichtern oder Personen.
+    assert_eq!(
+        startup_place(Some("people"), Some("review")),
+        (Some(View::Faces), Some("review"), None)
+    );
+    assert_eq!(
+        startup_place(Some("people"), None),
+        (Some(View::Faces), None, None)
+    );
+    assert_eq!(
+        startup_place(Some("people"), Some("persons")),
+        (Some(View::People), None, Some(Overview))
+    );
+    assert_eq!(
+        startup_place(Some("people"), Some("tree")),
+        (Some(View::People), None, Some(Tree))
+    );
+    assert_eq!(
+        startup_place(None, Some("graph")),
+        (None, None, Some(Graph))
+    );
+    assert_eq!(
+        startup_place(Some("time"), None),
+        (Some(View::People), None, Some(Time))
+    );
+    assert_eq!(
+        startup_place(Some("faces"), Some("ignored")),
+        (Some(View::Faces), Some("ignored"), None)
+    );
+    assert_eq!(
+        startup_place(Some("settings"), Some("unbekannt")),
+        (Some(View::Settings), None, None)
+    );
+}
+
+#[test]
+fn the_sidebar_names_the_collection_folder_and_keeps_the_readable_path() {
+    assert_eq!(collection_caption(""), (None, String::new()));
+    assert_eq!(
+        collection_caption(r"\\?\D:\Bilder\Familie"),
+        (Some("Familie".into()), r"D:\Bilder\Familie".into())
+    );
+    assert_eq!(
+        collection_caption(r"\\?\UNC\nas\fotos\Familie"),
+        (Some("Familie".into()), r"\\nas\fotos\Familie".into())
+    );
+    // Ein Laufwerk hat keinen Ordnernamen: dann steht der Pfad da.
+    assert_eq!(
+        collection_caption(r"D:\"),
+        (Some(r"D:\".into()), r"D:\".into())
+    );
+}
+
+#[test]
+fn choosing_a_collection_resets_everything_that_belonged_to_the_old_one() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = review_app(Path::new("tmp/old-collection"));
+    app.filters.text = "Anna".into();
+    app.filters.folder = Some("2024/05".into());
+    app.applied = app.filters.clone();
+    app.page.total = 7;
+    app.face_index = 3;
+    app.review_person = Some(1);
+    app.drafts.insert("p1:1,2".into(), Draft::default());
+    app.undo.push(Undo {
+        before: Vec::new(),
+        after: Vec::new(),
+        created: None,
+    });
+    app.relation_from = Some(1);
+    app.family_ui.focus = Some(1);
+    app.relationship_graph.selected = Some(1);
+    app.people_ui.query = "anna".into();
+    app.people_ui.sort = vec![crate::core::people_table::SortKey {
+        column: crate::core::people_table::Column::Faces,
+        descending: true,
+    }];
+    app.show_time_for(1);
+    app.maintenance_paused = true;
+    app.recognition_tools_open = true;
+    let (queries, pages) = (app.query_revision, app.face_revision);
+
+    app.set_collection(root.path().to_string_lossy().into_owned());
+
+    assert_eq!(
+        app.settings.collection,
+        root.path().to_string_lossy().as_ref()
+    );
+    assert!(app.filters.text.is_empty() && app.filters.folder.is_none());
+    assert!(app.applied.text.is_empty() && app.applied.folder.is_none());
+    assert_eq!(app.page.total, 0);
+    assert_eq!(app.face_index, 0);
+    assert_eq!(app.review_person, None);
+    assert!(app.drafts.is_empty() && app.undo.is_empty());
+    assert!(app.face_page.groups.is_empty() && app.face_page.people.is_empty());
+    assert_eq!(app.relation_from, None);
+    assert_eq!(app.family_ui.focus, None);
+    assert_eq!(app.relationship_graph.selected, None);
+    assert!(app.people_ui.query.is_empty());
+    assert_eq!(app.people_ui.sort.len(), 1, "die Sortierung bleibt");
+    assert_eq!(app.time_ui.person, None);
+    assert!(!app.maintenance_paused && !app.recognition_tools_open);
+    // Antworten für die alte Sammlung sind veraltet; die neue wird auf Workern gelesen.
+    assert!(app.query_revision > queries && app.face_revision > pages);
+    let kinds: Vec<&str> = app.tasks.iter().map(|t| t.kind).collect();
+    assert!(
+        kinds.contains(&"search") && kinds.contains(&"faces"),
+        "{kinds:?}"
+    );
+    assert!(app.tasks.iter().all(|t| !t.write), "nur gelesen");
+    for _ in 0..3000 {
+        app.poll(&context);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.tasks.is_empty());
+    Ok(())
+}
+
+#[test]
+fn erledigt_switches_between_confirmed_and_ignored_and_remembers_the_choice() {
+    let (context, mut app) = review_app(Path::new("tmp/synthetic-review"));
+    app.face_index = 2;
+    app.open_done();
+    assert_eq!(app.face_mode, "confirmed");
+    assert_eq!(
+        app.face_index, 0,
+        "ein Reiter beginnt auf seiner ersten Seite"
+    );
+    assert!(faces_view::done_tab(&app.face_mode));
+    app.set_face_mode("ignored");
+    assert_eq!(app.face_mode, "ignored");
+    assert_eq!(app.page_mode(), "ignored");
+    assert!(faces_view::done_tab(&app.face_mode));
+    app.set_face_mode("unknown");
+    assert!(!faces_view::done_tab(&app.face_mode));
+    app.open_done();
+    assert_eq!(app.face_mode, "ignored", "die letzte Wahl gilt wieder");
+    // Beide Seiten zeichnen sich mit dem Umschalter in beiden Fenstergrößen.
+    for mode in ["confirmed", "ignored"] {
+        app.face_mode = mode.into();
+        app.face_page.groups = vec![vec![review_face(8, 1.0), review_face(9, 1.0)]];
+        for size in [egui::vec2(980.0, 680.0), egui::vec2(1280.0, 800.0)] {
+            draw_people(&context, &mut app, size);
+            assert_eq!(app.face_row_tops.len(), 1, "{mode} at {size:?}");
+        }
+    }
+    assert_eq!(naming_tasks(&app), 0);
+}
+
+#[test]
+fn person_views_follow_the_selected_person_and_render_in_both_window_sizes() {
+    let (context, mut app) = people_app(12);
+    // Ohne Auswahl bleiben die Ansichten erreichbar und nennen den Weg zur Auswahl.
+    for (mode, _) in people_view::PERSON_MODES {
+        app.person_mode = mode;
+        for size in [egui::vec2(980.0, 680.0), egui::vec2(1280.0, 800.0)] {
+            draw_people(&context, &mut app, size);
+        }
+    }
+    app.select_person(5);
+    app.set_person_mode(PersonMode::Tree);
+    assert_eq!(app.family_ui.focus, Some(5));
+    assert_eq!(app.page_mode(), "tree");
+    app.set_person_mode(PersonMode::Graph);
+    assert_eq!(app.relationship_graph.selected, Some(5));
+    assert_eq!(app.page_mode(), "graph");
+    app.set_person_mode(PersonMode::Time);
+    assert_eq!(app.time_ui.person, Some(5));
+    app.set_person_mode(PersonMode::Overview);
+    assert_eq!(app.page_mode(), "persons");
+    assert_eq!(app.relation_from, Some(5));
+    // Eine Person, die es in der Sammlung nicht gibt, öffnet nichts.
+    app.relation_from = Some(999);
+    app.set_person_mode(PersonMode::Time);
+    assert_eq!(app.time_ui.person, Some(5));
+    // Außerhalb von „Personen“ liest die App den Reiter der Ansicht „Gesichter“.
+    app.view = View::Faces;
+    assert_eq!(app.page_mode(), "unknown");
+}
+
+#[test]
+fn a_running_face_task_is_shown_by_the_footer_in_the_faces_view() {
+    let (context, mut app) = review_app(Path::new("tmp/synthetic-review"));
+    app.launch("Fotos lokal analysieren", true, "face-analysis", |_| {
+        Ok(Outcome::Done(String::new()))
+    });
+    let shown = PhotoApp::footer_task(app.view, &app.tasks).map(|t| t.kind);
+    assert_eq!(shown, Some("face-analysis"));
+    draw_people(&context, &mut app, egui::vec2(980.0, 680.0));
+    // In der Aufgabenansicht steht der Auftrag als Karte da, nicht in der Fußleiste.
+    assert!(PhotoApp::footer_task(View::Tasks, &app.tasks).is_none());
 }

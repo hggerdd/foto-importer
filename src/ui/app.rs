@@ -1,6 +1,7 @@
 mod central_view;
 mod collection_view;
 mod errors;
+mod faces_view;
 mod folder_tree;
 mod import_view;
 mod optimistic;
@@ -42,10 +43,84 @@ use std::{
 enum View {
     Import,
     Collection,
+    Faces,
     People,
     Tasks,
-    Time,
     Settings,
+}
+/// Ansicht der in der Personentabelle gewählten Person.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+enum PersonMode {
+    /// Tabelle aller Personen mit den Details der gewählten Person.
+    #[default]
+    Overview,
+    Tree,
+    Graph,
+    Time,
+}
+/// Hauptpunkte der Navigation in ihrer Reihenfolge: Ansicht, Titel, Hinweistext.
+const NAV_MAIN: [(View, &str, &str); 4] = [
+    (
+        View::Import,
+        "Importieren",
+        "Fotos von der Karte in die Sammlung kopieren",
+    ),
+    (View::Collection, "Sammlung", "Fotos suchen und ansehen"),
+    (
+        View::Faces,
+        "Gesichter",
+        "Gesichter benennen und Vorschläge prüfen",
+    ),
+    (
+        View::People,
+        "Personen",
+        "Personen, Beziehungen, Stammbaum, Graph und Zeitreise",
+    ),
+];
+/// Punkte am unteren Rand der Navigation.
+const NAV_BOTTOM: [(View, &str, &str); 2] = [
+    (View::Tasks, "Aufgaben", "Laufende Aufträge und Verlauf"),
+    (
+        View::Settings,
+        "Einstellungen",
+        "Programme, Modelle, Darstellung",
+    ),
+];
+/// Startort aus den Umgebungsvariablen der Sichtprüfung (`FOTO_IMPORTER_VIEW`,
+/// `FOTO_IMPORTER_FACE_MODE`). Werte aus der Zeit vor der Trennung von Gesichtern und
+/// Personen gelten weiter: `people` mit einem Gesichtsreiter öffnet „Gesichter“, `time`
+/// öffnet die Zeitreise unter „Personen“. Ergebnis: Ansicht, Gesichtsreiter, Personenansicht.
+fn startup_place(
+    view: Option<&str>,
+    mode: Option<&str>,
+) -> (Option<View>, Option<&'static str>, Option<PersonMode>) {
+    let face_mode = match mode {
+        Some("unknown") => Some("unknown"),
+        Some("review") => Some("review"),
+        Some("confirmed") => Some("confirmed"),
+        Some("ignored") => Some("ignored"),
+        _ => None,
+    };
+    let person_mode = match (view, mode) {
+        (Some("time"), _) | (_, Some("time")) => Some(PersonMode::Time),
+        (_, Some("persons")) => Some(PersonMode::Overview),
+        (_, Some("tree")) => Some(PersonMode::Tree),
+        (_, Some("graph")) => Some(PersonMode::Graph),
+        _ => None,
+    };
+    let view = match view {
+        Some("import") => Some(View::Import),
+        Some("collection") => Some(View::Collection),
+        Some("faces") => Some(View::Faces),
+        Some("persons" | "time") => Some(View::People),
+        // Früher lagen die Gesichtsreiter unter „Personen“.
+        Some("people") if person_mode.is_some() => Some(View::People),
+        Some("people") => Some(View::Faces),
+        Some("tasks") => Some(View::Tasks),
+        Some("settings") => Some(View::Settings),
+        _ => None,
+    };
+    (view, face_mode, person_mode)
 }
 #[derive(Clone, Copy, PartialEq)]
 enum CollectionDialog {
@@ -183,7 +258,12 @@ pub struct PhotoApp {
     status: CollectionStatus,
     face_revision: u64,
     face_page: FacePage,
+    /// Reiter der Ansicht „Gesichter“: `unknown`, `review`, `confirmed` oder `ignored`.
     face_mode: String,
+    /// Zuletzt gewählte Seite im Reiter „Erledigt“ (`confirmed` oder `ignored`).
+    done_mode: &'static str,
+    /// Ansicht der gewählten Person unter „Personen“.
+    person_mode: PersonMode,
     face_index: usize,
     /// Personenfilter im Reiter „Vorschläge prüfen“.
     review_person: Option<i64>,
@@ -292,6 +372,8 @@ impl PhotoApp {
             face_revision: 0,
             face_page: FacePage::default(),
             face_mode: "unknown".into(),
+            done_mode: "confirmed",
+            person_mode: PersonMode::default(),
             face_index: 0,
             review_person: None,
             face_keys: false,
@@ -355,20 +437,22 @@ impl PhotoApp {
         if !app.settings.source.is_empty() {
             app.begin_scan();
         }
-        // Nur für Sichtprüfungen: Reiter vor dem ersten Laden wählen.
-        if let Ok(mode) = std::env::var("FOTO_IMPORTER_FACE_MODE")
-            && [
-                "unknown",
-                "review",
-                "confirmed",
-                "ignored",
-                "persons",
-                "tree",
-                "graph",
-            ]
-            .contains(&mode.as_str())
-        {
-            app.face_mode = mode;
+        // Nur für Sichtprüfungen: Ansicht und Reiter vor dem ersten Laden wählen.
+        let (view, face_mode, person_mode) = startup_place(
+            std::env::var("FOTO_IMPORTER_VIEW").ok().as_deref(),
+            std::env::var("FOTO_IMPORTER_FACE_MODE").ok().as_deref(),
+        );
+        if let Some(mode) = face_mode {
+            app.face_mode = mode.into();
+            if matches!(mode, "confirmed" | "ignored") {
+                app.done_mode = mode;
+            }
+        }
+        if let Some(mode) = person_mode {
+            app.person_mode = mode;
+        }
+        if let Some(view) = view {
+            app.view = view;
         }
         // Nur für Sichtprüfungen: Ordnerfilter vor dem ersten Laden setzen.
         if let Ok(folder) = std::env::var("FOTO_IMPORTER_FOLDER") {
@@ -408,14 +492,6 @@ impl PhotoApp {
         if !app.settings.collection.is_empty() {
             app.refresh_collection();
             app.refresh_faces();
-        }
-        match std::env::var("FOTO_IMPORTER_VIEW").as_deref() {
-            Ok("collection") => app.view = View::Collection,
-            Ok("people") => app.view = View::People,
-            Ok("tasks") => app.view = View::Tasks,
-            Ok("time") => app.view = View::Time,
-            Ok("settings") => app.view = View::Settings,
-            _ => {}
         }
         // Sichtprüfung: startet z. B. "scan" gleich nach dem Öffnen (docs/validierung.md).
         if let Ok(action) = std::env::var("FOTO_IMPORTER_ACTION") {
@@ -660,6 +736,117 @@ impl PhotoApp {
             ))
         });
     }
+    /// Seite, die `refresh_faces` liest: unter „Personen“ die Personenseite der gewählten
+    /// Ansicht, sonst der Reiter der Ansicht „Gesichter“.
+    fn page_mode(&self) -> &str {
+        if self.view != View::People {
+            return &self.face_mode;
+        }
+        match self.person_mode {
+            PersonMode::Overview => "persons",
+            PersonMode::Graph => "graph",
+            // Stammbaum und Zeitreise brauchen Personen und Familie, aber keine Tabellenzeilen.
+            PersonMode::Tree | PersonMode::Time => "tree",
+        }
+    }
+    /// Wechselt die Hauptansicht und liest, was sie zeigt, neu.
+    fn open_view(&mut self, view: View) {
+        self.view = view;
+        self.recognition_tools_open = false;
+        match view {
+            View::Collection => self.query_collection(self.applied.clone()),
+            View::Faces | View::People => self.refresh_faces(),
+            _ => {}
+        }
+    }
+    /// Wählt einen Reiter der Ansicht „Gesichter“ und beginnt auf seiner ersten Seite.
+    fn set_face_mode(&mut self, mode: &'static str) {
+        if matches!(mode, "confirmed" | "ignored") {
+            self.done_mode = mode;
+        }
+        self.face_mode = mode.into();
+        self.face_index = 0;
+        self.face_advance = None;
+        self.face_row_tops.clear();
+        self.refresh_faces();
+    }
+    /// Reiter „Erledigt“: zeigt die zuletzt gewählte Seite, „Bestätigt“ oder „Ignoriert“.
+    fn open_done(&mut self) {
+        self.set_face_mode(self.done_mode);
+    }
+    /// Die gewählte Person, sofern es sie in der geladenen Sammlung gibt.
+    fn selected_person(&self) -> Option<i64> {
+        self.relation_from
+            .filter(|id| self.face_page.people.iter().any(|p| p.id == *id))
+    }
+    /// Wählt die Ansicht der gewählten Person unter „Personen“. Stammbaum, Graph und
+    /// Zeitreise stellen die gewählte Person in den Mittelpunkt.
+    fn set_person_mode(&mut self, mode: PersonMode) {
+        self.view = View::People;
+        self.person_mode = mode;
+        if let Some(person) = self.selected_person() {
+            match mode {
+                PersonMode::Overview => self.people_ui.scroll_to_person(person),
+                PersonMode::Tree => self.family_ui.focus = Some(person),
+                PersonMode::Graph => self.relationship_graph.show_person(person),
+                PersonMode::Time => self.show_time_for(person),
+            }
+        }
+        self.refresh_faces();
+    }
+    /// Stellt die App auf eine Sammlung um. Alles, was nur für die bisherige Sammlung galt
+    /// (Entwürfe, Filter, Seiten, Auswahl, Rücknahmen), endet hier; danach wird neu gelesen
+    /// oder, bei einem Ordner ohne Bestand, indiziert.
+    fn set_collection(&mut self, path: String) {
+        self.settings.collection = path;
+        self.query_revision += 1;
+        self.face_revision += 1;
+        self.detail_revision += 1;
+        self.folder_tree = FolderTree::default();
+        self.folder_revision += 1;
+        self.folder_revealed = None;
+        self.filters = Search::default();
+        self.applied = Search::default();
+        self.page = SearchPage::default();
+        self.status = CollectionStatus::default();
+        self.selected_photo = None;
+        self.large = false;
+        self.collection_dialog = None;
+        self.detail.clear();
+        self.detail_rows.clear();
+        self.detail_faces.clear();
+        self.detail_analysis_done = None;
+        self.naming = None;
+        self.face_page = FacePage::default();
+        self.face_page_serial += 1;
+        self.face_index = 0;
+        self.review_person = None;
+        self.face_advance = None;
+        self.face_row_tops.clear();
+        self.undo.clear();
+        self.drafts.clear();
+        self.relation_from = None;
+        self.family_ui = Default::default();
+        self.people_ui.reset_for_collection();
+        self.central_ui = Default::default();
+        self.time_ui = Default::default();
+        self.relationship_graph.clear();
+        self.recognition_tools_open = false;
+        self.delete_phrase.clear();
+        self.maintenance_paused = false;
+        self.auto_analysis_pending = false;
+        self.auto_metadata_pending = false;
+        self.thumbnails.clear();
+        if Path::new(&self.settings.collection)
+            .join(".myfotomanager")
+            .exists()
+        {
+            self.refresh_collection();
+            self.refresh_faces();
+        } else {
+            self.collection_action("scan");
+        }
+    }
     fn refresh_faces(&mut self) {
         if self.settings.collection.is_empty() {
             return;
@@ -667,7 +854,7 @@ impl PhotoApp {
         self.face_revision += 1;
         let revision = self.face_revision;
         let root = PathBuf::from(&self.settings.collection);
-        let mode = self.face_mode.clone();
+        let mode = self.page_mode().to_string();
         let page = self.face_index;
         let person = self.review_person.filter(|_| mode == "review");
         self.launch(
@@ -1203,37 +1390,7 @@ impl PhotoApp {
                             self.begin_scan();
                         }
                         Pick::Target => self.settings.target = value,
-                        Pick::Collection => {
-                            self.settings.collection = value;
-                            self.query_revision += 1;
-                            self.face_revision += 1;
-                            self.detail_revision += 1;
-                            self.folder_tree = FolderTree::default();
-                            self.folder_revision += 1;
-                            self.folder_revealed = None;
-                            self.page = SearchPage::default();
-                            self.selected_photo = None;
-                            self.face_page = FacePage::default();
-                            self.relationship_graph.clear();
-                            self.maintenance_paused = false;
-                            self.auto_analysis_pending = false;
-                            self.face_index = 0;
-                            self.review_person = None;
-                            self.face_advance = None;
-                            self.face_row_tops.clear();
-                            self.undo.clear();
-                            self.drafts.clear();
-                            self.thumbnails.clear();
-                            if Path::new(&self.settings.collection)
-                                .join(".myfotomanager")
-                                .exists()
-                            {
-                                self.refresh_collection();
-                                self.refresh_faces();
-                            } else {
-                                self.collection_action("scan");
-                            }
-                        }
+                        Pick::Collection => self.set_collection(value),
                         Pick::Converter => self.settings.converter = value,
                         Pick::Exiftool => self.settings.exiftool = value,
                         Pick::Models => {
@@ -1325,33 +1482,17 @@ impl PhotoApp {
                         .size(theme::MIN_TEXT)
                         .weak(),
                 );
-                ui.add_space(40.0);
+                ui.add_space(18.0);
+                self.sidebar_collection(ui);
+                ui.add_space(18.0);
                 theme::eyebrow(ui, "ARBEITSBEREICH");
-                for (view, title, hint) in [
-                    (View::Import, "Importieren", "Von der Karte in die Sammlung"),
-                    (View::Collection, "Sammlung", "Fotos finden & verstehen"),
-                    (View::People, "Personen", "Namen & Beziehungen"),
-                    (View::Tasks, "Aufgaben", "Fortschritt & Verlauf"),
-                    (View::Time, "Zeitreise", "Personen über die Zeit"),
-                ] {
-                    let response =
-                        theme::nav_item(ui, title, self.view == view, 150.0).on_hover_text(hint);
-                    if response.clicked() {
-                        self.view = view;
-                        if view == View::Collection {
-                            self.query_collection(self.applied.clone());
-                        }
-                        if view == View::People {
-                            self.refresh_faces();
-                        }
+                for (view, title, hint) in NAV_MAIN {
+                    if theme::nav_item(ui, title, self.view == view, 150.0)
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        self.open_view(view);
                     }
-                }
-                ui.add_space(30.0);
-                ui.separator();
-                if theme::nav_item(ui, "Einstellungen", self.view == View::Settings, 150.0)
-                    .clicked()
-                {
-                    self.view = View::Settings;
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.label(
@@ -1364,8 +1505,54 @@ impl PhotoApp {
                             .size(theme::MIN_TEXT)
                             .color(theme::ACCENT),
                     );
+                    ui.add_space(8.0);
+                    // Von unten nach oben: der letzte Eintrag steht zuerst.
+                    for (view, title, hint) in NAV_BOTTOM.into_iter().rev() {
+                        if theme::nav_item(ui, title, self.view == view, 150.0)
+                            .on_hover_text(hint)
+                            .clicked()
+                        {
+                            self.open_view(view);
+                        }
+                    }
+                    ui.separator();
                 });
             });
+    }
+    /// Die aktive Sammlung in der Seitenleiste: Ordnername, voller Pfad im Hinweistext und
+    /// der einzige Knopf der App, der die Sammlung wechselt.
+    fn sidebar_collection(&mut self, ui: &mut egui::Ui) {
+        theme::eyebrow(ui, "SAMMLUNG");
+        let (name, path) = collection_caption(&self.settings.collection);
+        match name {
+            Some(name) => {
+                ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                    .on_hover_text(path);
+            }
+            None => {
+                ui.label(RichText::new("Keine Sammlung gewählt").weak());
+            }
+        }
+        let empty = self.settings.collection.is_empty();
+        if ui
+            .button(if empty { "Wählen …" } else { "Wechseln …" })
+            .on_hover_text(if empty {
+                "Den Ordner wählen, in dem deine Fotos liegen"
+            } else {
+                "Einen anderen Ordner als Sammlung öffnen"
+            })
+            .clicked()
+        {
+            self.pick(Pick::Collection);
+        }
+    }
+    /// Der Auftrag, den die Fußleiste zeigt. In der Aufgabenansicht stehen die laufenden
+    /// Aufträge schon als Karten da.
+    fn footer_task(view: View, tasks: &[Running]) -> Option<&Running> {
+        if view == View::Tasks {
+            return None;
+        }
+        tasks.iter().find(|t| t.write).or_else(|| tasks.first())
     }
     fn footer(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("jobs")
@@ -1376,16 +1563,7 @@ impl PhotoApp {
             )
             .show(ctx, |ui| {
                 theme::dark_panel(ui);
-                // In der Aufgabenansicht stehen die laufenden Aufträge schon als Karten da.
-                let running = if self.view == View::Tasks {
-                    None
-                } else {
-                    self.tasks
-                        .iter()
-                        .find(|t| t.write)
-                        .or_else(|| self.tasks.first())
-                };
-                if let Some(running) = running {
+                if let Some(running) = Self::footer_task(self.view, &self.tasks) {
                     let progress = running.task.control.snapshot();
                     let stopping = running.task.control.cancel.load(Ordering::Relaxed);
                     ui.horizontal(|ui| {
@@ -1518,9 +1696,9 @@ impl eframe::App for PhotoApp {
             .show(ctx, |ui| match self.view {
                 View::Import => self.import_view(ui),
                 View::Collection => self.collection_view(ui),
+                View::Faces => self.faces_view(ui),
                 View::People => self.people_view(ui),
                 View::Tasks => self.tasks_view(ui),
-                View::Time => self.time_view(ui),
                 View::Settings => self.settings_view(ui),
             });
         self.windows(ctx);
@@ -1555,6 +1733,22 @@ impl eframe::App for PhotoApp {
         }
         let _ = self.settings.save();
     }
+}
+/// Name und voller Pfad der Sammlung für die Seitenleiste: der Ordnername (bei einem
+/// Laufwerk der ganze Pfad) und der Pfad in der Schreibweise von `display_path`. Ohne
+/// Sammlung gibt es keinen Namen.
+fn collection_caption(collection: &str) -> (Option<String>, String) {
+    let path = import_view::display_path(collection).into_owned();
+    if path.is_empty() {
+        return (None, path);
+    }
+    let name = Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&path)
+        .to_string();
+    (Some(name), path)
 }
 /// „1 Datei“ / „2 Dateien“: Einzahl nur bei genau eins.
 fn plural(n: usize, one: &str, many: &str) -> String {

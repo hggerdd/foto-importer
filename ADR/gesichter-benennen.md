@@ -4,9 +4,12 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 
 ## Entscheidung
 
-- **Reiter im Personenbereich:** „Benennen“ (Gruppen unbenannter Gesichter, größte zuerst),
-  „Vorschläge prüfen“ (`suggested` und `auto` je Person, sicherste Gruppen zuerst; Schwelle
-  und Abstand siehe Gesichtserkennung), „Bestätigt“, „Ignoriert“. Acht
+- **Reiter der Ansicht „Gesichter“:** „Benennen“ (Gruppen unbenannter Gesichter, größte
+  zuerst), „Vorschläge prüfen“ (`suggested` und `auto` je Person, sicherste Gruppen zuerst;
+  Schwelle und Abstand siehe Gesichtserkennung) und „Erledigt“ mit dem Umschalter
+  „Bestätigt | Ignoriert“; „Erledigt“ öffnet die zuletzt gewählte der beiden Seiten. Die
+  Reiter nennen ihre Anzahl. Personen, Stammbaum, Graph und Zeitreise liegen unter
+  „Personen“ (siehe [Personen](personen.md)). Acht
   Gruppen je Seite, höchstens 28 Gesichter je Gruppe; alle Mitglieder sind sichtbar, es gibt
   keine versteckten ausgewählten Gesichter.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
@@ -73,18 +76,21 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   „Biometrie entfernen“ gelöscht.
 - **Vorschau unter der Maus:** Das ganze Foto zum Gesicht unter dem Zeiger, abschaltbar,
   höchstens eine Vorschau gleichzeitig.
-- **Kopf des Bereichs:** drei Schritte (Fotoanalyse, aus Namen lernen, Namen vorschlagen)
-  mit Stand und laufender Phase; Einrichtung, Zeitplan, Export und „Biometrie entfernen“ im
-  Dialog „Automatik & Werkzeuge“. In den Reitern Personen, Stammbaum und Graph nur die
-  Titelzeile.
+- **Kopf der Ansicht:** eine Statuszeile mit höchstens einer Hauptaktion
+  (`recognition_view::status_line`, reine Funktion): was gerade läuft, sonst „Einrichten …“
+  bei fehlender Laufzeit oder fehlenden Modellen, „N von M Fotos analysiert“ mit „Fotos
+  analysieren“ oder „Weiter analysieren“, „Fortsetzen“ bei angehaltenem Vorschlagen, sonst
+  „Alles auf dem Stand“ ohne Knopf. Daneben der Einstieg in den Dialog „Automatik &
+  Werkzeuge“: dort die drei Schritte (Fotoanalyse mit Portion und Ordnerbezug, aus Namen
+  lernen, Namen vorschlagen) mit Stand und Aktionen, darunter Einrichtung, Zeitplan, Export
+  und „Biometrie entfernen“.
+- **Laufender Gesichtsauftrag nur einmal:** Fortschritt und Abbruch zeigt die Fußleiste;
+  die Statuszeile nennt den Auftrag nur in Worten. Zeigt die Fußleiste einen anderen
+  Auftrag, steht der Fortschritt mit Abbruch in der Statuszeile.
 
 ## Beschlossen, noch nicht umgesetzt (2026-11-15)
 
 - **„Benennen“** hebt einen sicheren Vorschlag als „Ist das X?“ hervor.
-- **Kopf** schrumpft auf eine Statuszeile mit einer Hauptaktion.
-- **Navigation:** Hauptpunkte Importieren, Sammlung, Gesichter, Personen. „Bestätigt“ und
-  „Ignoriert“ werden ein Umschalter; Stammbaum, Graph und Zeitreise werden Ansichten der
-  gewählten Person.
 
 ## Grenzen
 
@@ -94,7 +100,9 @@ Screenreader-Bedienung sind nicht langfristig geprüft.
 
 ## Beim Ändern beachten
 
-`GROUP_MAX`, Kachelspalten und Seitenabfragen gemeinsam ändern. Jede Stelle, die Gesichter
+`GROUP_MAX`, Kachelspalten und Seitenabfragen gemeinsam ändern. Neue Zustände der
+Erkennung brauchen einen Zweig und einen Test in `status_line`; die Zeile behält höchstens
+eine Hauptaktion. Jede Stelle, die Gesichter
 entscheidet, nutzt `queue_hiding`. Namensentwürfe gelten für genau diese Gesichter und Person
 und überleben Fortschrittsereignisse. Gruppenaktionen erzeugen keine zusätzlichen Personen
 und löschen keine Vorkommen. Seitenabfragen müssen zu den Teilindizes passen

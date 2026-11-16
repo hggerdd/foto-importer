@@ -4,7 +4,11 @@ Konzept und offene Ideen: [docs/konzept-zeitreise.md](../docs/konzept-zeitreise.
 
 ## Entscheidung
 
-- **Lesende Seite:** Gesichter einer Person über die Zeit (`core/timeline.rs`,
+- **Lesende Ansicht der gewählten Person:** Die Zeitreise hat keinen eigenen Hauptpunkt;
+  sie ist unter „Personen“ die Ansicht „Zeitreise“ und öffnet sich für die in der Tabelle
+  gewählte Person (auch über „Zeitreise zeigen“ in den Details). Ihre eigene Personenauswahl
+  bleibt zum Wechseln und wählt die Person für alle Personenansichten.
+- **Inhalt:** Gesichter einer Person über die Zeit (`core/timeline.rs`,
   `ui/app/time_view.rs`) mit den Reitern Zeitstrahl, Lücken, Zeitraffer & Export. Alles wird
   zur Laufzeit berechnet; es gibt keine Schemaänderung, nur den additiven Teilindex
   `ix_faces_timeline`.

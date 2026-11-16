@@ -54,7 +54,15 @@
 
 **Oberfläche**
 
-- **Personen & Beziehungen:** sortierbare, virtualisierte Tabelle links (Porträt, Name,
+- **Ansicht „Personen“:** Die Übersicht mit der Personentabelle ist der Hauptinhalt. Der
+  Umschalter „Übersicht | Stammbaum | Graph | Zeitreise“ gilt der in der Tabelle gewählten
+  Person: Stammbaum, Graph und [Zeitreise](zeitreise.md) öffnen sich für sie
+  (`set_person_mode`); neben dem Umschalter steht ihr Name. Wer in einer dieser Ansichten
+  eine andere Person wählt, wählt sie für alle. Ohne gewählte Person nennen die drei
+  Ansichten den Weg zur Auswahl und arbeiten wie zuvor mit ihrer eigenen Vorgabe
+  (Stammbaum: Person mit den meisten Familienbeziehungen; Graph: alle; Zeitreise: Person
+  mit den meisten Gesichtern). Die Auswahl endet mit dem Wechsel der Sammlung.
+- **Übersicht (Personen & Beziehungen):** sortierbare, virtualisierte Tabelle links (Porträt, Name,
   Fotos, Gesichter, Geburt und Alter, Geschlecht, Beziehungen, Familie, erstes und letztes
   Foto, Hinweise; Spalten entfallen bei wenig Breite nach Priorität), Details der gewählten
   Person rechts. Je Spalte genau ein Scrollbereich. Rückfragen stehen hier gesammelt.
