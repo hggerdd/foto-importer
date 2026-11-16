@@ -567,3 +567,30 @@ fn the_review_threshold_is_stored_per_collection_and_restarts_the_rematch() -> a
     );
     Ok(())
 }
+
+#[test]
+fn a_group_suggestion_uses_more_than_the_first_three_faces() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    c.db.execute_batch(
+        "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key','\"test\"');
+         INSERT INTO persons(id) VALUES(1),(2);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');",
+    )?;
+    for (id, degrees) in [(1, 0.0), (2, 90.0)] {
+        polar(&c, id, id, degrees)?;
+        c.db.execute(
+            "UPDATE faces SET person_id=?,assignment='user' WHERE id=?",
+            [id, id],
+        )?;
+    }
+    // Die ersten drei Gesichter ähneln Anna, die übrigen fünf Ben.
+    let group: Vec<i64> = (10..18).collect();
+    for (index, id) in group.iter().enumerate() {
+        polar(&c, *id, *id, if index < 3 { 30.0 } else { 70.0 })?;
+    }
+    let found = foto_importer::core::recognition::group_suggestions(&c, &group, "test")?;
+    assert_eq!(found.items[0].0, 2, "Ben überwiegt in der ganzen Gruppe");
+    assert_eq!(found.items[1].0, 1);
+    Ok(())
+}

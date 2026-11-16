@@ -8,6 +8,24 @@ pub(super) fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Beschriftung eines Aufnahmetags; das Häkchen zeigt die Importauswahl.
+pub(super) fn day_label(day: &str, count: usize, selected: bool) -> String {
+    let mark = if selected { "✔ " } else { "" };
+    format!("{mark}{day}\n{}", plural(count, "Datei", "Dateien"))
+}
+
+impl PhotoApp {
+    /// Erster Klick zeigt den Tag in der Vorschau, ein Klick auf den angezeigten Tag
+    /// schaltet seine Importauswahl um.
+    pub(super) fn click_day(&mut self, day: &str) {
+        if self.focused != day {
+            self.focused = day.to_owned();
+        } else if !self.selected.remove(day) {
+            self.selected.insert(day.to_owned());
+        }
+    }
+}
+
 /// Breite der rechten Planspalte im Import einschließlich Kartenrand.
 const PLAN_WIDTH: f32 = 300.0;
 
@@ -113,25 +131,19 @@ impl PhotoApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for (day, count) in days.iter().rev() {
-                        let mut selected = self.selected.contains(day);
-                        ui.vertical(|ui| {
-                            if ui
-                                .selectable_label(
-                                    self.focused == *day,
-                                    RichText::new(format!("{day}\n{count} Dateien")).strong(),
-                                )
-                                .clicked()
-                            {
-                                self.focused = day.clone();
-                            }
-                            if ui.checkbox(&mut selected, "Importieren").changed() {
-                                if selected {
-                                    self.selected.insert(day.clone());
-                                } else {
-                                    self.selected.remove(day);
-                                }
-                            }
-                        });
+                        if ui
+                            .selectable_label(
+                                self.focused == *day,
+                                RichText::new(day_label(day, *count, self.selected.contains(day)))
+                                    .strong(),
+                            )
+                            .on_hover_text(
+                                "Klick zeigt die Vorschau, ein zweiter Klick wählt den Tag für den Import an oder ab.",
+                            )
+                            .clicked()
+                        {
+                            self.click_day(day);
+                        }
                         ui.add_space(8.0);
                     }
                 });

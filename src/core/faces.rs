@@ -55,6 +55,8 @@ pub struct Status {
     pub nightly: bool,
     pub detector_id: String,
     pub embedder_id: String,
+    /// Geltende Vorschlagsschwelle der Sammlung (`recognition::Limits::review`).
+    pub review_threshold: f32,
 }
 #[derive(Default)]
 pub struct FacePage {
@@ -208,6 +210,7 @@ pub fn status(collection: &Collection) -> Result<Status> {
     };
     status.detector = active_detector_key(collection)?.unwrap_or_default();
     status.embedder = setting(collection, "rust.embedder_key")?.unwrap_or_default();
+    status.review_threshold = super::recognition::Limits::load(collection)?.review;
     status.detector_id = setting(collection, "active_detector")?.unwrap_or_else(|| "yunet".into());
     status.embedder_id = setting(collection, "active_embedder")?.unwrap_or_else(|| "sface".into());
     for (key, target) in [

@@ -52,7 +52,8 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   erhält sie das ähnlichere; das andere bleibt unbenannt.
 - Die drei Werte sind je Sammlung und Modell überschreibbar
   (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `set_review_threshold` setzt die
-  Schwelle (0,50 bis 0,75) und startet den Abgleich neu. Die früheren Werte `auto` und
+  Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
+  Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
   `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
 - Jede Änderung an Bestätigungen setzt den Foto-Cursor zurück; der Lauf ist fortsetzbar,
   arbeitet 32 Fotos je Schritt und weicht jeder Nutzeraktion. Ein abgebrochener Lauf
@@ -80,10 +81,6 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 | 0,70 | 61 % | 1 % |
 
 Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet nur lesend; zusätzlich Anteile mit 0,05 Abstand zur zweitbesten Person).
-
-## Beschlossen, noch nicht umgesetzt (2026-11-15)
-
-- Die Vorschlagsschwelle ist unter Einstellungen (Erweitert) einstellbar.
 
 ## Grenzen
 

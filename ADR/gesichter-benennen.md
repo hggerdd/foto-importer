@@ -10,6 +10,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   keine versteckten ausgewählten Gesichter.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
   Vorschläge mit Porträt (ein Klick wählt und speichert), „Bestätigen“, „Nicht interessiert“.
+  Der Vorschlag ist das Mittel über bis zu acht Gesichter der Gruppe
+  (`config::GROUP_SUGGESTION_FACES`).
   Alle Gesichter sind zunächst ausgewählt; ein Klick auf die Kachel wählt sie ab (abgedunkelt
   und durchgestrichen), ein zweiter wieder an. Die Gesichts-ID steht nur im Tooltip. Unter
   einer Kachel steht „nicht X“, wenn für das Gesicht Ablehnungen gespeichert sind (eine
@@ -56,8 +58,7 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **„Vorschläge prüfen“** enthält nur sichere Treffer (Schwelle und Abstand siehe
   Gesichtserkennung), sicherste zuerst, mit Personenfilter, Referenzporträt und den Aktionen
   „Alle sind X“ und „Keines ist X“.
-- **„Benennen“** berechnet den Vorschlag aus der ganzen Gruppe statt aus drei Gesichtern und
-  hebt einen sicheren Vorschlag als „Ist das X?“ hervor.
+- **„Benennen“** hebt einen sicheren Vorschlag als „Ist das X?“ hervor.
 - **Kopf** schrumpft auf eine Statuszeile mit einer Hauptaktion.
 - **Navigation:** Hauptpunkte Importieren, Sammlung, Gesichter, Personen. „Bestätigt“ und
   „Ignoriert“ werden ein Umschalter; Stammbaum, Graph und Zeitreise werden Ansichten der
