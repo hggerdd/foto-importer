@@ -10,8 +10,11 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   keine versteckten ausgewählten Gesichter.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
   Vorschläge mit Porträt (ein Klick wählt und speichert), „Bestätigen“, „Nicht interessiert“.
-  Alle Gesichter sind zunächst ausgewählt; Klick wählt einzelne ab. Kachelgröße ist per
-  Regler einstellbar, die Spaltenzahl folgt der Fensterbreite.
+  Alle Gesichter sind zunächst ausgewählt; ein Klick auf die Kachel wählt sie ab (abgedunkelt
+  und durchgestrichen), ein zweiter wieder an. Die Gesichts-ID steht nur im Tooltip. Unter
+  einer Kachel steht „nicht X“, wenn für das Gesicht Ablehnungen gespeichert sind (eine
+  Abfrage je Seite). Kachelgröße ist per Regler einstellbar, die Spaltenzahl folgt der
+  Fensterbreite.
 - **Bestätigen** setzt ausgewählte Gesichter auf `user`. Abgewählte erhalten eine
   gespeicherte Ablehnung für diese Person (`face_rejections`), die jeder spätere Abgleich
   beachtet. Ein neuer Name legt eine Person an; bei mehreren gleichnamigen Personen muss die
@@ -27,7 +30,9 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   sind getrennte Entscheidungen.
 - **Rücknahme:** bis zu 20 Entscheidungen der laufenden Sitzung, einschließlich Ablehnungen
   und Pins. Eine Rücknahme scheitert, wenn eine spätere Nutzeränderung dieselben Gesichter
-  betrifft. Eine dabei angelegte, noch ungenutzte Person wird wieder entfernt.
+  betrifft. Eine dabei angelegte, noch ungenutzte Person wird wieder entfernt. Knopf und
+  Strg+Z lösen dieselbe Rücknahme aus; Strg+Z nur ohne Textfeldfokus und wenn der Knopf
+  aktiv wäre.
 - **Sofortiges Speichern:** Entschiedene Gesichter verschwinden sofort aus der Seite
   (`queue_hiding`), der Schreibauftrag läuft dahinter in Eingabereihenfolge. Der
   Ausblendstand ergibt sich aus den laufenden Aufträgen; bei einem Fehler erscheinen die
@@ -48,7 +53,6 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 
 ## Beschlossen, noch nicht umgesetzt (2026-11-15)
 
-- Abgelehnte Gesichter zeigen unter „Benennen“ den Hinweis „nicht X“.
 - **„Vorschläge prüfen“** enthält nur sichere Treffer (Schwelle und Abstand siehe
   Gesichtserkennung), sicherste zuerst, mit Personenfilter, Referenzporträt und den Aktionen
   „Alle sind X“ und „Keines ist X“.
@@ -58,12 +62,12 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Navigation:** Hauptpunkte Importieren, Sammlung, Gesichter, Personen. „Bestätigt“ und
   „Ignoriert“ werden ein Umschalter; Stammbaum, Graph und Zeitreise werden Ansichten der
   gewählten Person.
-- Keine IDs als Beschriftung; Tastenkürzel für Bestätigen, Vorschläge, Ablehnen, Rücknahme.
+- Tastenkürzel für Bestätigen, Vorschläge und Ablehnen.
 
 ## Grenzen
 
 Gesichter ohne Namensmerkmale (Qualität unter 0,5) erscheinen nicht in diesen Reitern, nur
-am Foto. Die Kachelablage wächst unbegrenzt und ist löschbar. Tastatur- und
+am Foto; „Benennen“ nennt ihre Anzahl. Die Kachelablage wächst unbegrenzt und ist löschbar. Tastatur- und
 Screenreader-Bedienung sind nicht langfristig geprüft.
 
 ## Beim Ändern beachten

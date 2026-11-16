@@ -80,6 +80,7 @@ impl PhotoApp {
                 self.refresh_faces();
             }
             self.undo_face_button(ui);
+            self.undo_shortcut(ui.ctx());
             if ui.button("Aktualisieren").clicked() {
                 self.refresh_faces();
             }
@@ -96,6 +97,14 @@ impl PhotoApp {
                 let _ = self.settings.save();
             }
         });
+        if self.face_mode == "unknown"
+            && let Some(hint) = unnamed_hint(
+                self.face_page.status.unknown,
+                self.face_page.status.nameable,
+            )
+        {
+            ui.label(RichText::new(hint).small().weak());
+        }
         if self.face_page.groups.is_empty() {
             if self.analysing_current_collection() {
                 self.empty(
@@ -383,6 +392,7 @@ impl PhotoApp {
                     ui.horizontal(|ui| {
                         for face in chunk {
                             ui.vertical(|ui| {
+                                ui.set_max_width(size);
                                 let request = PreviewRequest {
                                     root: Some(PathBuf::from(&root)),
                                     path: Path::new(&root).join(&face.source),
@@ -397,27 +407,35 @@ impl PhotoApp {
                                     &exiftool,
                                     egui::vec2(size, size),
                                 );
+                                let response =
+                                    response.on_hover_text(format!("Gesicht {}", face.id));
                                 if hover_enabled && response.hovered() {
                                     self.hover_face = Some(face.clone());
                                 }
-                                let mut included = !draft.excluded.contains(&face.id);
                                 if response.clicked() {
-                                    included = !included;
-                                    if included {
-                                        draft.excluded.remove(&face.id);
-                                    } else {
-                                        draft.excluded.insert(face.id);
-                                    }
+                                    toggle_excluded(&mut draft.excluded, face.id);
                                 }
-                                if ui
-                                    .checkbox(&mut included, format!("#{}", face.id))
-                                    .changed()
-                                {
-                                    if included {
-                                        draft.excluded.remove(&face.id);
-                                    } else {
-                                        draft.excluded.insert(face.id);
-                                    }
+                                if draft.excluded.contains(&face.id) {
+                                    let painter = ui.painter();
+                                    let rect = response.rect;
+                                    painter.rect_filled(
+                                        rect,
+                                        2.0,
+                                        egui::Color32::from_black_alpha(150),
+                                    );
+                                    painter.line_segment(
+                                        [rect.left_bottom(), rect.right_top()],
+                                        egui::Stroke::new(2.0_f32, egui::Color32::from_gray(230)),
+                                    );
+                                }
+                                if let Some(note) = rejection_note(
+                                    self.face_page.rejections.get(&face.id),
+                                    &self.face_page.people,
+                                ) {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(note).small().weak())
+                                            .truncate(),
+                                    );
                                 }
                             });
                         }
@@ -443,6 +461,75 @@ impl PhotoApp {
                 Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
             });
         }
+    }
+}
+
+/// Klick auf eine Kachel: abgewählt wird angewählt und umgekehrt.
+fn toggle_excluded(excluded: &mut BTreeSet<i64>, id: i64) {
+    if !excluded.remove(&id) {
+        excluded.insert(id);
+    }
+}
+
+/// „nicht Anna, Ben“ unter einer Kachel; unbekannte Personen-IDs entfallen.
+fn rejection_note(rejected: Option<&Vec<i64>>, people: &[faces::Person]) -> Option<String> {
+    let names: Vec<&str> = rejected?
+        .iter()
+        .filter_map(|id| people.iter().find(|p| p.id == *id))
+        .map(|p| p.name.as_str())
+        .collect();
+    (!names.is_empty()).then(|| format!("nicht {}", names.join(", ")))
+}
+
+/// Hinweis auf Gesichter, die zu schlecht für Namensvorschläge sind.
+fn unnamed_hint(unknown: usize, nameable: usize) -> Option<String> {
+    (unknown > nameable).then(|| {
+        format!(
+            "{} weitere Gesichter sind zu klein oder unscharf für Namensvorschläge. Du kannst sie am Foto in der Sammlung benennen.",
+            unknown - nameable
+        )
+    })
+}
+#[cfg(test)]
+mod tile_note_tests {
+    use super::*;
+    use crate::core::faces::Person;
+    fn person(id: i64, name: &str) -> Person {
+        Person {
+            id,
+            name: name.into(),
+            birth: String::new(),
+            count: 0,
+            gender: String::new(),
+            note: String::new(),
+        }
+    }
+    #[test]
+    fn rejection_note_lists_known_people_only() {
+        let people = [person(1, "Anna"), person(2, "Ben")];
+        assert_eq!(rejection_note(None, &people), None);
+        assert_eq!(rejection_note(Some(&vec![9]), &people), None);
+        assert_eq!(
+            rejection_note(Some(&vec![1]), &people).as_deref(),
+            Some("nicht Anna")
+        );
+        assert_eq!(
+            rejection_note(Some(&vec![1, 9, 2]), &people).as_deref(),
+            Some("nicht Anna, Ben")
+        );
+    }
+    #[test]
+    fn clicking_a_tile_twice_selects_it_again() {
+        let mut excluded = BTreeSet::new();
+        toggle_excluded(&mut excluded, 4);
+        assert!(excluded.contains(&4));
+        toggle_excluded(&mut excluded, 4);
+        assert!(excluded.is_empty());
+    }
+    #[test]
+    fn hint_appears_only_when_faces_lack_name_features() {
+        assert!(unnamed_hint(10, 4).is_some_and(|text| text.starts_with("6 weitere Gesichter")));
+        assert_eq!(unnamed_hint(4, 4), None);
     }
 }
 

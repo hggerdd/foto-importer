@@ -445,3 +445,28 @@ fn a_later_rematch_never_suggests_the_rejected_person_again() -> anyhow::Result<
     );
     Ok(())
 }
+
+#[test]
+fn page_lists_the_rejected_people_per_face() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    suggested_for_anna(&c, 3)?;
+    faces::name_group(
+        &mut c,
+        &[1, 2, 3],
+        &BTreeSet::from([1, 2]),
+        Some(1),
+        "",
+        false,
+    )?;
+    let page = faces::page(&c, "unknown", 0)?;
+    assert_eq!(page.rejections.get(&3), Some(&vec![1]));
+    assert_eq!(
+        page.rejections.len(),
+        1,
+        "nur abgelehnte Gesichter haben einen Eintrag"
+    );
+    let confirmed = faces::page(&c, "persons", 0)?;
+    assert!(confirmed.rejections.is_empty());
+    Ok(())
+}
