@@ -544,10 +544,7 @@ fn plans(root: &Path) -> anyhow::Result<()> {
             "people: Zähler je Person",
             "SELECT p.id,(SELECT count(*) FROM faces f WHERE f.person_id=p.id AND f.assignment='user' AND f.retained=0) FROM persons p WHERE p.merged_into IS NULL",
         ),
-        (
-            "page(review): Teile",
-            "WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/28 part FROM faces f WHERE f.retained=0 AND f.assignment IN ('auto','suggested') AND f.ignored=0) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT 8 OFFSET 0",
-        ),
+        ("page(review): Teile", faces::REVIEW_ROWS),
         (
             "page(confirmed): Zeilen einer Person",
             "SELECT f.id FROM faces f JOIN (SELECT f.id,row_number() OVER(ORDER BY f.id) rn FROM faces f WHERE f.person_id IS 3 AND f.retained=0 AND f.assignment='user' AND f.ignored=0) r ON r.id=f.id WHERE r.rn>0 AND r.rn<=28 ORDER BY r.rn LIMIT 28",

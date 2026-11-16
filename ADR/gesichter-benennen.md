@@ -42,6 +42,14 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Seitenabfragen** bilden Teilgruppen aus Zählungen je Person, ohne Fensterfunktionen über
   alle Gesichter. Referenzen und Porträts werden je Seite einmal geladen und leben nur einen
   Lesestand lang.
+- **Reihenfolge in „Vorschläge prüfen“:** Je Person werden die Vorschläge nach Ähnlichkeit
+  absteigend in Gruppen zu höchstens 28 geschnitten; alle Gruppen sind nach ihrer mittleren
+  Ähnlichkeit absteigend geordnet (Gleichstand: Person, dann Teil). Das Mittel statt des
+  besten Werts, damit ein einzelner hoher Treffer keine schwache Gruppe nach vorn zieht.
+  Dazu liest die Seite alle offenen Vorschläge mit einer Abfrage über `ix_faces_review`
+  (`faces::REVIEW_ROWS`) und ordnet im Speicher. `faces::page_filtered` beschränkt
+  „Vorschläge prüfen“, „Bestätigt“ und „Ignoriert“ auf eine Person; „Bestätigt“ und
+  „Ignoriert“ bleiben nach Größe geordnet.
 - **Gesichtskacheln:** Ausschnitte für die Oberfläche liegen als abgeleitete Dateien unter
   `<Sammlung>/.myfotomanager_tiles/` (Schlüssel aus Pfad, Größe, Änderungszeit, Ausschnitt,
   Kantenlänge, Ausrichtung). Sie werden nie ersetzt, vom Indizieren übersprungen und von

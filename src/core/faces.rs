@@ -75,9 +75,11 @@ pub struct FacePage {
     pub questions: Vec<super::gaps::Suggestion>,
     /// Zeilen der Personentabelle; nur im Reiter „persons“ gefüllt (ADR 0063).
     pub rows: Vec<super::people_table::PersonRow>,
-    /// Porträt je Person (Gesicht mit bester Qualität, ohne Merkmale berechnet);
-    /// nur im Reiter „persons“.
+    /// Porträt je Person: im Reiter „persons“ das Gesicht mit bester Qualität (ohne
+    /// Merkmale berechnet), im Reiter „review“ das Referenzporträt der Personen der Seite.
     pub portraits: BTreeMap<i64, Face>,
+    /// Offene Vorschläge je Person (ohne Personenfilter gezählt); nur im Reiter „review“.
+    pub review_people: BTreeMap<i64, usize>,
     /// Abgelehnte Personen je Gesicht der geladenen Gruppen (Gesichts-ID → Personen-IDs).
     pub rejections: BTreeMap<i64, Vec<i64>>,
 }
@@ -449,13 +451,77 @@ fn page_rejections(
     }
     Ok(found)
 }
+/// Gesichts-IDs je Teilgruppe und offene Vorschläge je Person.
+type ReviewParts = (Vec<Vec<i64>>, BTreeMap<i64, usize>);
+/// Teilgruppen des Reiters „Vorschläge prüfen“ als Gesichts-IDs, sicherste zuerst, dazu
+/// die Zahl offener Vorschläge je Person.
+///
+/// Je Person werden die Vorschläge nach Ähnlichkeit absteigend in Teile zu höchstens
+/// `GROUP_MAX` geschnitten; die Teile aller Personen sind nach ihrer **mittleren
+/// Ähnlichkeit** absteigend geordnet (bei Gleichstand Person, dann Teil). Das Mittel statt
+/// des besten Werts verhindert, dass ein einzelner hoher Treffer eine schwache Gruppe nach
+/// vorn zieht. Eine Abfrage über den Teilindex `ix_faces_review`, keine Fensterfunktion.
+fn review_parts(collection: &Collection, only: Option<i64>) -> Result<ReviewParts> {
+    let mut by_person: BTreeMap<Option<i64>, Vec<(f32, i64)>> = BTreeMap::new();
+    let mut statement = collection.db.prepare_cached(REVIEW_ROWS)?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        by_person.entry(row.get(0)?).or_default().push((
+            row.get::<_, Option<f32>>(1)?.unwrap_or_default(),
+            row.get(2)?,
+        ));
+    }
+    let people = by_person
+        .iter()
+        .filter_map(|(person, faces)| Some(((*person)?, faces.len())))
+        .collect();
+    let mut parts: Vec<(f32, Option<i64>, usize, Vec<i64>)> = Vec::new();
+    for (person, mut faces) in by_person {
+        if only.is_some() && person != only {
+            continue;
+        }
+        faces.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (part, chunk) in faces.chunks(crate::config::GROUP_MAX).enumerate() {
+            let mean = chunk.iter().map(|face| face.0).sum::<f32>() / chunk.len() as f32;
+            parts.push((mean, person, part, chunk.iter().map(|f| f.1).collect()));
+        }
+    }
+    parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    Ok((parts.into_iter().map(|part| part.3).collect(), people))
+}
+/// Alle offenen Vorschläge mit Person und Ähnlichkeit (Reiter „Vorschläge prüfen“).
+pub const REVIEW_ROWS: &str = "SELECT f.person_id,f.confidence,f.id FROM faces f WHERE f.retained=0 AND f.assignment IN ('suggested','auto') AND f.ignored=0 ORDER BY f.person_id,f.id";
+/// Gesichter in genau der Reihenfolge von `ids`; inzwischen entfallene fehlen.
+fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
+    let marks = vec!["?"; ids.len()].join(",");
+    let mut found: BTreeMap<i64, Face> = collection
+        .db
+        .prepare_cached(&format!(
+            "SELECT {FACE_COLUMNS} FROM faces f WHERE f.id IN ({marks})"
+        ))?
+        .query_map(rusqlite::params_from_iter(ids.iter()), face_row)?
+        .map(|face| face.map(|face| (face.id, face)))
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
+}
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
+    page_filtered(collection, mode, page, None)
+}
+/// Wie [`page`], zusätzlich mit Personenfilter: `person` beschränkt die Reiter „review“,
+/// „confirmed“ und „ignored“ auf Gesichter dieser Person; andere Reiter beachten ihn nicht.
+pub fn page_filtered(
+    collection: &Collection,
+    mode: &str,
+    page: usize,
+    person: Option<i64>,
+) -> Result<FacePage> {
     let max = crate::config::GROUP_MAX as i64;
     let over = max + 1;
     let per_page = crate::config::FACE_GROUPS_PER_PAGE as i64;
     let status = status(collection)?;
     let mut groups = Vec::new();
     let total_groups: usize;
+    let mut review_people = BTreeMap::new();
     if matches!(mode, "persons" | "tree" | "graph") {
         // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
         let (relations, family, questions) = tree_state(collection)?;
@@ -474,6 +540,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             rows,
             portraits,
             rejections: BTreeMap::new(),
+            review_people: BTreeMap::new(),
         });
     }
     if mode == "unknown" && status.embedder.is_empty() {
@@ -490,6 +557,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
             rows: Vec::new(),
             portraits: BTreeMap::new(),
             rejections: BTreeMap::new(),
+            review_people: BTreeMap::new(),
         });
     }
     if mode == "unknown" && !status.embedder.is_empty() {
@@ -505,15 +573,34 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
                 groups.push(group);
             }
         }
+    } else if mode == "review" {
+        let (parts, people) = review_parts(collection, person)?;
+        review_people = people;
+        total_groups = parts.len();
+        for ids in parts
+            .iter()
+            .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
+            .take(crate::config::FACE_GROUPS_PER_PAGE)
+        {
+            let rows = faces_in_order(collection, ids)?;
+            if !rows.is_empty() {
+                groups.push(rows);
+            }
+        }
     } else {
         // Teilgruppen je Person zu höchstens `max` Gesichtern; die Reihenfolge (größte zuerst,
         // dann Person, dann Teil) entsteht aus den Zählungen je Person statt aus Fensterfunktionen
         // über alle Gesichter des Reiters (ADR 0066).
         let predicate = match mode {
-            "review" => "f.assignment IN ('suggested','auto') AND f.ignored=0",
             "ignored" => "f.ignored=1",
             "confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
+        };
+        let predicate = match person {
+            Some(id) if matches!(mode, "ignored" | "confirmed") => {
+                format!("{predicate} AND f.person_id={id}")
+            }
+            _ => predicate.to_string(),
         };
         let counts: Vec<(Option<i64>, i64)> = collection
             .db
@@ -560,8 +647,18 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
     let rejections = page_rejections(collection, &groups)?;
     let (relations, family, questions) = tree_state(collection)?;
     let people = people(collection)?;
-    let (rows, portraits) =
+    let (rows, mut portraits) =
         table_state(collection, mode, &people, &relations, &family, &questions)?;
+    if mode == "review" && !status.embedder.is_empty() {
+        for id in groups.iter().filter_map(|group| group[0].person) {
+            // Ein fehlendes Bild darf die Seite nicht verhindern.
+            if !portraits.contains_key(&id)
+                && let Ok(Some(face)) = person_portrait(collection, id, &status.embedder)
+            {
+                portraits.insert(id, face);
+            }
+        }
+    }
     Ok(FacePage {
         groups,
         people,
@@ -574,6 +671,7 @@ pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage
         rows,
         portraits,
         rejections,
+        review_people,
     })
 }
 
