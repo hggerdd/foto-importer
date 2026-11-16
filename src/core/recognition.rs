@@ -430,11 +430,9 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
                 control.checkpoint()?;
                 let year: Option<i32> = collection
                     .db
-                    .query_row(
-                        "SELECT captured_at FROM faces WHERE id=?",
-                        [face.id],
-                        |r| r.get::<_, Option<String>>(0),
-                    )?
+                    .query_row("SELECT captured_at FROM faces WHERE id=?", [face.id], |r| {
+                        r.get::<_, Option<String>>(0)
+                    })?
                     .as_deref()
                     .and_then(|v| v.get(..4))
                     .and_then(|v| v.parse().ok());
