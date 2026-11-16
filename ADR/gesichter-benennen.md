@@ -10,7 +10,7 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   keine versteckten ausgewählten Gesichter.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
   Vorschläge mit Porträt (ein Klick wählt und speichert), „Bestätigen“, „Nicht interessiert“.
-  Der Vorschlag ist das Mittel über bis zu acht Gesichter der Gruppe
+  Der Vorschlag ist das Mittel über bis zu fünf Gesichter der Gruppe
   (`config::GROUP_SUGGESTION_FACES`).
   Alle Gesichter sind zunächst ausgewählt; ein Klick auf die Kachel wählt sie ab (abgedunkelt
   und durchgestrichen), ein zweiter wieder an. Die Gesichts-ID steht nur im Tooltip. Unter
