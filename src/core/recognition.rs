@@ -211,6 +211,69 @@ fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
     Ok(raw.and_then(|v| v.parse().ok()).unwrap_or(default))
 }
 
+/// Grenzen für maschinelle Namensvorschläge im Abgleich. Vorgaben aus `config`, je Sammlung
+/// und Modell überschreibbar (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Limits {
+    /// Mindestwert, ab dem ein Gesicht einen Vorschlag erhält.
+    pub review: f32,
+    /// Mindestabstand zur zweitbesten Person.
+    pub margin: f32,
+    /// Ab hier gilt ein Vorschlag als sicher (`auto`), darunter als `suggested`.
+    pub sure: f32,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            review: crate::config::FACE_REVIEW_MIN,
+            margin: crate::config::FACE_REVIEW_MARGIN,
+            sure: crate::config::FACE_SURE_MIN,
+        }
+    }
+}
+impl Limits {
+    pub fn load(collection: &Collection) -> Result<Self> {
+        let default = Self::default();
+        Ok(Self {
+            review: option(collection, "rust.review", default.review)?,
+            margin: option(collection, "rust.margin", default.margin)?,
+            sure: option(collection, "rust.sure", default.sure)?,
+        })
+    }
+    /// Die Person, die ein Gesicht vorgeschlagen bekommt: die beste, wenn sie die Schwelle
+    /// erreicht und mindestens `margin` vor der zweitbesten liegt. `ranking` ist absteigend
+    /// sortiert und enthält nur zulässige Personen.
+    pub fn accept(&self, ranking: &[(i64, f32)]) -> Option<(i64, f32)> {
+        let (person, best) = *ranking.first()?;
+        let second = ranking.get(1).map_or(f32::NEG_INFINITY, |r| r.1);
+        (best >= self.review && best - second >= self.margin).then_some((person, best))
+    }
+}
+/// Zulässiger Bereich der einstellbaren Vorschlagsschwelle.
+pub const REVIEW_RANGE: (f32, f32) = (0.5, 0.75);
+/// Setzt die Vorschlagsschwelle der Sammlung für das aktive Modell und stößt den Abgleich
+/// neu an. Bestätigte Namen bleiben unberührt.
+pub fn set_review_threshold(collection: &mut Collection, value: f32) -> Result<()> {
+    collection.writable()?;
+    if !value.is_finite() || value < REVIEW_RANGE.0 || value > REVIEW_RANGE.1 {
+        anyhow::bail!(
+            "Die Schwelle muss zwischen {} und {} liegen",
+            REVIEW_RANGE.0,
+            REVIEW_RANGE.1
+        );
+    }
+    let key =
+        faces::setting(collection, "rust.embedder_key")?.context("Zuerst Fotos analysieren")?;
+    let tx = collection.db.transaction()?;
+    tx.execute(
+        "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
+        params![format!("rust.thresholds.{key}.review"), value.to_string()],
+    )?;
+    tx.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn apply_knowledge(collection: &mut Collection, control: &Control) -> Result<String> {
     rebuild(collection, control, true)
 }
@@ -339,10 +402,7 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         )
         .optional()?
         .unwrap_or(0);
-    let (auto, suggest) = (
-        option(collection, "rust.auto", 0.6)?,
-        option(collection, "rust.suggest", 0.363)?,
-    );
+    let limits = Limits::load(collection)?;
     let births: BTreeMap<i64, i32> = collection
         .db
         .prepare("SELECT person_id,value FROM person_attrs WHERE key='birth_year'")?
@@ -350,7 +410,6 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         .filter_map(|r| r.ok().and_then(|(id, year)| Some((id, year.parse().ok()?))))
         .collect();
     let references = References::load(collection, key)?;
-    let mut prior_memo: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
     loop {
         control.checkpoint()?;
         let photos=collection.db.prepare("SELECT DISTINCT photo_id FROM faces WHERE photo_id>? AND retained=0 ORDER BY photo_id LIMIT 32")?.query_map([cursor],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -364,72 +423,57 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
                 .iter()
                 .filter(|f| !f.ignored && f.assignment.as_deref() != Some("user"))
                 .collect();
-            let occupied:BTreeSet<i64>=collection.db.prepare("SELECT DISTINCT person_id FROM faces WHERE photo_id=? AND assignment='user' AND person_id IS NOT NULL")?.query_map([photo],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            let mut priors: BTreeMap<i64, f32> = BTreeMap::new();
-            for known in &occupied {
-                // Nutzerbestätigungen ändern sich während des Laufs nicht (jede Nutzeraktion
-                // bricht ihn ab); je bekannter Person genügt eine Abfrage (ADR 0066).
-                if !prior_memo.contains_key(known) {
-                    let rows=collection.db.prepare("SELECT b.person_id,count(DISTINCT a.photo_id) FROM faces a JOIN faces b ON b.photo_id=a.photo_id WHERE a.person_id=? AND a.assignment='user' AND b.assignment='user' AND a.ignored=0 AND b.ignored=0 AND b.person_id!=? GROUP BY b.person_id")?.query_map(params![known,known],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                    prior_memo.insert(*known, rows);
-                }
-                for (person, count) in prior_memo[known].iter().copied() {
-                    let value = (count as f32 * 0.005).min(0.03);
-                    priors
-                        .entry(person)
-                        .and_modify(|v| *v = v.max(value))
-                        .or_insert(value);
-                }
-            }
-            let mut rankings = Vec::new();
-            let mut people = BTreeSet::new();
+            // Je Gesicht höchstens ein Kandidat: die beste zulässige Person, wenn sie die
+            // Schwelle erreicht und klar vor der zweitbesten liegt.
+            let mut proposals: Vec<Option<(i64, f32)>> = Vec::with_capacity(candidates.len());
             for face in &candidates {
                 control.checkpoint()?;
-                let ranking = ranked_with(collection, &references, face.id, key)?;
-                for (person, _, _) in &ranking {
-                    people.insert(*person);
-                }
-                rankings.push(ranking);
-            }
-            let people: Vec<_> = people.into_iter().collect();
-            let mut matrix =
-                vec![vec![suggest - 0.000001; people.len() + candidates.len()]; candidates.len()];
-            for (row, (face, ranking)) in candidates.iter().zip(&rankings).enumerate() {
-                let (quality, captured): (f32, Option<String>) = collection.db.query_row(
-                    "SELECT quality,captured_at FROM faces WHERE id=?",
-                    [face.id],
-                    |r| Ok((r.get::<_, Option<f32>>(0)?.unwrap_or_default(), r.get(1)?)),
-                )?;
-                let year = captured
+                let year: Option<i32> = collection
+                    .db
+                    .query_row("SELECT captured_at FROM faces WHERE id=?", [face.id], |r| {
+                        r.get::<_, Option<String>>(0)
+                    })?
                     .as_deref()
                     .and_then(|v| v.get(..4))
-                    .and_then(|v| v.parse::<i32>().ok());
+                    .and_then(|v| v.parse().ok());
+                // `ranked_with` schließt Ablehnungen, im Foto bestätigte Personen und Gesichter
+                // ohne ausreichende Qualität bereits aus und liefert absteigend sortiert.
+                let ranking = ranked_with(collection, &references, face.id, key)?;
+                let allowed: Vec<(i64, f32)> = ranking
+                    .into_iter()
+                    .filter(|(person, _, _)| {
+                        !year.zip(births.get(person)).is_some_and(|(y, b)| y < *b)
+                    })
+                    .map(|(person, _, score)| (person, score))
+                    .collect();
+                proposals.push(limits.accept(&allowed));
+            }
+            // Gemeinsame Entscheidung je Foto: Dieselbe Person kommt höchstens einmal vor;
+            // das Gesicht mit dem höheren Wert erhält sie, das andere bleibt unbenannt.
+            let people: Vec<i64> = proposals
+                .iter()
+                .flatten()
+                .map(|p| p.0)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let unknown = limits.review - 0.000001;
+            let mut matrix = vec![vec![unknown; people.len() + candidates.len()]; candidates.len()];
+            for (row, proposal) in proposals.iter().enumerate() {
                 for (col, person) in people.iter().enumerate() {
-                    let mut score = ranking
-                        .iter()
-                        .find(|r| r.0 == *person)
-                        .map(|r| r.2)
-                        .unwrap_or(-2.0);
-                    if score >= suggest - 0.03 && score < auto {
-                        score = (score + priors.get(person).copied().unwrap_or_default())
-                            .min(auto - 0.000001);
-                    }
-                    if quality < 0.5
-                        || occupied.contains(person)
-                        || year.zip(births.get(person)).is_some_and(|(y, b)| y < *b)
-                    {
-                        score = -2.0;
-                    }
-                    matrix[row][col] = score;
+                    matrix[row][col] = match proposal {
+                        Some((id, score)) if id == person => *score,
+                        _ => -2.0,
+                    };
                 }
             }
             let decisions = matching::assignment(&matrix)?;
             let tx = collection.db.transaction()?;
             tx.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE photo_id=? AND assignment IN ('auto','suggested')",[photo])?;
             for (row, col) in decisions.into_iter().enumerate() {
-                if col < people.len() && matrix[row][col] >= suggest {
+                if col < people.len() && matrix[row][col] >= limits.review {
                     let score = matrix[row][col];
-                    tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=?,assigned_at=datetime('now') WHERE id=? AND assignment IS NOT 'user'",params![people[col],if score>=auto{"auto"}else{"suggested"},score,candidates[row].id])?;
+                    tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=?,assigned_at=datetime('now') WHERE id=? AND assignment IS NOT 'user'",params![people[col],if score>=limits.sure{"auto"}else{"suggested"},score,candidates[row].id])?;
                 }
             }
             tx.execute(

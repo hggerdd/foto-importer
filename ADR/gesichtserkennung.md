@@ -41,11 +41,19 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 **Abgleich** (`recognition::rematch`)
 
 - Personenscore = Mittel der bis zu drei besten Kosinuswerte gegen die Referenzen der Person.
-- Je Foto entscheidet eine gemeinsame Zuordnung, sodass keine Person doppelt vorkommt.
-  Ausgeschlossen sind: abgelehnte Personen, im Foto schon bestätigte Personen, Aufnahmen vor
-  dem Geburtsjahr, Gesichter unter Qualität 0,5. Gemeinsames Auftreten gibt höchstens 0,03 Bonus.
-- Zuordnung `suggested` ab Schwelle `suggest`, `auto` ab `auto`; beide sind Vorschläge und
-  werden erst durch Bestätigung zu `user`. Nutzerzuordnungen werden nie überschrieben.
+- Ausgeschlossen sind: abgelehnte Personen, im Foto schon bestätigte Personen, Aufnahmen vor
+  dem Geburtsjahr, Gesichter unter Qualität 0,5.
+- Ein Gesicht erhält nur dann einen Vorschlag, wenn die beste zulässige Person mindestens
+  **0,60** erreicht **und** mindestens **0,05** vor der zweitbesten liegt
+  (`recognition::Limits`, Vorgaben in `config.rs`). Ab **0,70** heißt die Zuordnung `auto`,
+  darunter `suggested`; beide sind Vorschläge und werden erst durch Bestätigung zu `user`.
+  Nutzerzuordnungen werden nie überschrieben. Gemeinsames Auftreten gibt keinen Bonus.
+- Je Foto kommt keine Person doppelt vor: Schlagen zwei Gesichter dieselbe Person vor,
+  erhält sie das ähnlichere; das andere bleibt unbenannt.
+- Die drei Werte sind je Sammlung und Modell überschreibbar
+  (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `set_review_threshold` setzt die
+  Schwelle (0,50 bis 0,75) und startet den Abgleich neu. Die früheren Werte `auto` und
+  `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
 - Jede Änderung an Bestätigungen setzt den Foto-Cursor zurück; der Lauf ist fortsetzbar,
   arbeitet 32 Fotos je Schritt und weicht jeder Nutzeraktion. Ein abgebrochener Lauf
   protokolliert keinen Abschluss.
@@ -75,10 +83,7 @@ Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet
 
 ## Beschlossen, noch nicht umgesetzt (2026-11-15)
 
-- Ein Gesicht erhält nur dann einen Vorschlag, wenn der Score mindestens **0,60** beträgt
-  **und** mindestens **0,05** vor der zweitbesten Person liegt. Beide Werte sind je Sammlung
-  überschreibbar und unter Einstellungen (Erweitert) einstellbar. Der Bonus für gemeinsames
-  Auftreten hebt kein Gesicht über die Schwelle.
+- Die Vorschlagsschwelle ist unter Einstellungen (Erweitert) einstellbar.
 
 ## Grenzen
 

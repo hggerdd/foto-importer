@@ -470,3 +470,100 @@ fn page_lists_the_rejected_people_per_face() -> anyhow::Result<()> {
     assert!(confirmed.rejections.is_empty());
     Ok(())
 }
+
+/// Anna bei 0°, Cara bei 30°, Ben bei 120°; je ein bestätigtes Gesicht als Referenz.
+fn three_people(c: &Collection) -> anyhow::Result<()> {
+    c.db.execute_batch(
+        "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key','\"test\"');
+         INSERT INTO persons(id) VALUES(1),(2),(3);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben'),(3,'name','Cara');",
+    )?;
+    for (id, degrees) in [(1, 0.0), (2, 120.0), (3, 30.0)] {
+        polar(c, id, id, degrees)?;
+        c.db.execute(
+            "UPDATE faces SET person_id=?,assignment='user' WHERE id=?",
+            [id, id],
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn rematch_suggests_only_above_the_threshold_and_clear_of_the_runner_up() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 10, 10, 5.0)?; // Anna 0,996, Cara 0,906
+    polar(&c, 11, 11, 13.0)?; // Anna 0,974, Cara 0,956: Abstand zu klein
+    polar(&c, 12, 12, 70.0)?; // Ben 0,643, Cara 0,766: Abstand 0,12
+    polar(&c, 13, 13, 170.0)?; // Ben 0,643, übrige negativ: unter „sicher“
+    polar(&c, 14, 14, 175.0)?; // Ben 0,574: unter der Schwelle
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 10)?, (Some(1), Some("auto".into())));
+    assert_eq!(
+        state(&c, 11)?,
+        (None, None),
+        "zwei fast gleich ähnliche Personen ergeben keinen Vorschlag"
+    );
+    assert_eq!(state(&c, 12)?, (Some(3), Some("auto".into())));
+    assert_eq!(state(&c, 13)?, (Some(2), Some("suggested".into())));
+    assert_eq!(
+        state(&c, 14)?,
+        (None, None),
+        "0,57 lag über der alten Grenze 0,363 und bleibt jetzt unbenannt"
+    );
+    Ok(())
+}
+
+#[test]
+fn rematch_gives_a_person_to_one_face_per_photo_only() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 10, 10, 4.0)?;
+    polar(&c, 11, 10, 2.0)?;
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(
+        state(&c, 11)?.0,
+        Some(1),
+        "das ähnlichere Gesicht erhält Anna"
+    );
+    assert_eq!(
+        state(&c, 10)?,
+        (None, None),
+        "das zweite Gesicht bekommt keinen Ersatzvorschlag"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_review_threshold_is_stored_per_collection_and_restarts_the_rematch() -> anyhow::Result<()> {
+    use foto_importer::core::recognition;
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 13, 13, 170.0)?; // Ben 0,643
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 13)?.0, Some(2));
+    assert!(recognition::set_review_threshold(&mut c, 0.9).is_err());
+    assert!(recognition::set_review_threshold(&mut c, f32::NAN).is_err());
+    assert_eq!(count(&c, "SELECT count(*) FROM face_maintenance")?, 0);
+    recognition::set_review_threshold(&mut c, 0.7)?;
+    assert_eq!(recognition::Limits::load(&c)?.review, 0.7);
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM face_maintenance WHERE embedder_id='test' AND after_photo=0"
+        )?,
+        1,
+        "der Abgleich beginnt von vorn"
+    );
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 13)?, (None, None));
+    assert_eq!(
+        state(&c, 2)?,
+        (Some(2), Some("user".into())),
+        "bestätigte Namen bleiben"
+    );
+    Ok(())
+}
