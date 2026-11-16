@@ -27,6 +27,8 @@ pub const GROUP_SUGGESTION_FACES: usize = 5;
 pub const FACE_REVIEW_MIN: f32 = 0.60;
 pub const FACE_REVIEW_MARGIN: f32 = 0.05;
 pub const FACE_SURE_MIN: f32 = 0.70;
+/// Anzeigedauer eines normalen Hinweises; Fehler bleiben bis zum Schließen.
+pub const NOTICE_SECONDS: std::time::Duration = std::time::Duration::from_secs(15);
 /// Gruppen je Seite in den Gesichtsreitern.
 pub const FACE_GROUPS_PER_PAGE: usize = 8;
 /// Zeitreise (ADR 0069): kürzere Gesichtsseite im Quellbild in Pixeln (kleinster, Standard,
