@@ -27,7 +27,15 @@
   (atomar geschrieben, `FOTO_IMPORTER_SETTINGS` überschreibt den Pfad), Sammlungsoptionen in
   der Sammlungsdatenbank (`settings`, `face_settings`), Modellbeschreibungen als Manifeste
   unter `models/`.
-- **Oberfläche:** Feste Navigation links, ein Arbeitsbereich, Kontext rechts, sichtbare
+- **Navigation:** links fest, Hauptpunkte Importieren, Sammlung, Gesichter, Personen; unten
+  abgesetzt Aufgaben und Einstellungen (`NAV_MAIN`, `NAV_BOTTOM`). Die Zeitreise ist kein
+  Hauptpunkt, sondern eine Ansicht der gewählten Person (siehe [Personen](personen.md)).
+- **Sammlung einmal wählen:** Die aktive Sammlung steht in der Seitenleiste (Ordnername,
+  voller Pfad im Hinweistext) mit dem einzigen Knopf zum Wechseln. Ansichten ohne Sammlung
+  zeigen einen Leerzustand, der dorthin weist. Alles, was beim Wechsel endet oder neu
+  gelesen wird (Entwürfe, Filter, Seiten, Auswahl, Rücknahmen, Revisionen), steht in
+  `PhotoApp::set_collection`.
+- **Oberfläche:** Ein Arbeitsbereich, Kontext rechts, sichtbare
   Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen:
   Bekannte Fehler erscheinen als verständlicher Satz, der Originaltext steht im Verlauf.
   Hinweise gehören zur Ansicht, in der die Aktion (bei Aufträgen: der Start) stattfand, und
@@ -44,6 +52,9 @@ läuft nur bei geöffneter App.
 
 ## Beim Ändern beachten
 
-Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden. Neue Grenzwerte gehören in
+Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden. Neuer Zustand, der nur für
+eine Sammlung gilt, wird in `set_collection` zurückgesetzt. Ansichten wechseln über
+`open_view`, `set_face_mode` und `set_person_mode`, damit die passende Seite gelesen wird
+(`page_mode`). Neue Grenzwerte gehören in
 `config.rs`, nicht in Widgets. Für jede neue Einstellung den Geltungsbereich festlegen.
 Fortschrittsereignisse dürfen Eingabefelder und Namensentwürfe nicht neu aufbauen.

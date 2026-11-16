@@ -12,7 +12,7 @@ impl PhotoApp {
                 self.empty(
                     ui,
                     "Ein Zuhause für deine Fotos.",
-                    "Wähle den Wurzelordner deiner Sammlung.",
+                    "Wähle links unter „Sammlung“ den Ordner, in dem deine Fotos liegen.",
                 );
                 return;
             }
@@ -82,28 +82,6 @@ impl PhotoApp {
     fn collection_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Sammlung").size(23.0).strong());
-            let root = super::import_view::display_path(&self.settings.collection);
-            let name = Path::new(&self.settings.collection)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or(root.as_ref());
-            let label = if name.is_empty() {
-                "Sammlung wählen …"
-            } else {
-                name
-            };
-            if ui
-                .add_sized([160.0, 30.0], egui::Button::new(label).truncate())
-                .on_hover_text(if root.is_empty() {
-                    "Sammlung wählen"
-                } else {
-                    root.as_ref()
-                })
-                .clicked()
-            {
-                self.pick(Pick::Collection);
-            }
             if !self.settings.collection.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Bestand …").clicked() {

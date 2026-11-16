@@ -21,7 +21,9 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
 
 * **Importieren:** Quelle wählen, Datumsmethode einstellen, Tage markieren,
   Ziel und einen gültigen Ordnernamen wählen, Zielplan prüfen, sicher importieren.
-* **Sammlung:** Wurzelordner wählen, im Raster suchen und rechts Foto samt
+* **Sammlung wählen:** einmal links in der Seitenleiste; **Wechseln …** öffnet einen
+  anderen Ordner.
+* **Sammlung:** im Raster suchen und rechts Foto samt
   Metadaten prüfen. **Bestand** enthält Aktualisierung, Metadatenimport und
   Integritätsprüfung. **Filter** öffnet die kombinierten Suchkriterien.
   Die Suchzeile findet auch bestätigte Personennamen. **Gesichter** und
@@ -30,23 +32,23 @@ Direktstart: `target\release\foto-importer.exe`. Ein portables ZIP entsteht mit
   Kamera oder weiteren Kriterien kombinieren.
   Für **Nur diese Personen · kein weiteres erkanntes Gesicht** wähle
   die gewünschte Person unter **Alle diese Personen**. Nach einem Wechsel
-  der Erkennungsregel startet **Personen → Fotos analysieren** die nötige
+  der Erkennungsregel startet **Gesichter → Fotos analysieren** die nötige
   Neuanalyse. Auch schwache, unbenannte Treffer zählen bei der Suche.
-* **Personen:** lokale Modelle konfigurieren, Fotos analysieren, Gruppen
-  benennen oder ignorieren. Abgewählte Gruppenmitglieder werden für den Namen
-  abgelehnt. Rücknahme schützt spätere Nutzerentscheidungen.
-  Die Übersicht unterscheidet Fotoanalyse, Referenzauswahl nach Bestätigungen
-  und Abgleich für Namensvorschläge. **Automatik & Werkzeuge** zeigt den
-  Zeitplan und enthält Einrichtung, Export und Wartung.
-  **Personen & Beziehungen → Beziehungsgraph** zeigt gemeinsame Fotos.
-  Dickere Linien stehen für mehr gemeinsame Aufnahmen, gestrichelte für
-  eingetragene Beziehungen ohne gemeinsames Foto.
+* **Gesichter:** Fotos analysieren, Gruppen benennen oder ignorieren, Vorschläge
+  prüfen; **Erledigt** zeigt Bestätigte und Ignorierte. Abgewählte
+  Gruppenmitglieder werden für den Namen abgelehnt. Rücknahme schützt spätere
+  Nutzerentscheidungen. Die Statuszeile nennt den Stand und den nächsten Schritt.
+  **Automatik & Werkzeuge** zeigt Fotoanalyse, Referenzauswahl nach Bestätigungen
+  und Abgleich für Namensvorschläge sowie den Zeitplan und enthält Einrichtung,
+  Export, Validierung und die ausdrücklich bestätigte Biometrie-Bereinigung.
   Nach dem Speichern rückt die nächste offene Gruppe an die bisherige
   Bildschirmposition, soweit die Liste genug Platz zum Scrollen bietet.
   Namen am Bild lassen sich anklicken; Details bieten Löschen und Referenzaktionen.
-  Unter Personen & Beziehungen stehen Bearbeitung, Fotosuche, Zusammenführung
-  und Familienbeziehungen bereit. Erkennungswissen verwalten enthält Export,
-  Validierung, opt-in Automatik und ausdrücklich bestätigte Biometrie-Bereinigung.
+* **Personen:** Die Übersicht bietet Bearbeitung, Fotosuche, Zusammenführung
+  und Familienbeziehungen. **Stammbaum**, **Graph** und **Zeitreise** zeigen die
+  in der Tabelle gewählte Person. Der Graph zeigt gemeinsame Fotos: dickere Linien
+  stehen für mehr gemeinsame Aufnahmen, gestrichelte für eingetragene
+  Beziehungen ohne gemeinsames Foto.
 * **Aufgaben:** Fortschritt, Abbruch und sitzungsbezogener Verlauf.
 
 ExifTool für Sammlungsexif und RAW-Vorschauen, Adobe DNG Converter für optionale

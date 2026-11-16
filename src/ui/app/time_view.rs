@@ -1,4 +1,4 @@
-//! Seite „06 Zeitreise“ (ADR 0069): Gesichter einer Person über die Zeit. Domainlogik steht in
+//! Ansicht „Zeitreise“ der gewählten Person (ADR 0069): ihre Gesichter über die Zeit. Domainlogik steht in
 //! `core::timeline`; diese Datei zeichnet und startet Worker. Abfrage und Berechnung laufen nie
 //! auf dem UI-Thread; veraltete Antworten werden über Revisionen verworfen. Kacheln laden über
 //! den vorhandenen Vorschau-Cache nur, wenn sie sichtbar sind.
@@ -280,6 +280,16 @@ impl PhotoApp {
         }
     }
 
+    /// Öffnet die Zeitreise für diese Person; geladen wird auf einem Worker.
+    pub(super) fn show_time_for(&mut self, person: i64) {
+        if self.time_ui.person != Some(person) {
+            self.time_ui.person = Some(person);
+            self.time_ui.selected = None;
+            self.time_ui.focus = None;
+            self.time_ui.need_load = true;
+        }
+    }
+
     /// Übernimmt die Antwort eines Workers der Zeitreise.
     pub(super) fn accept_time(&mut self, outcome: TimeOutcome) {
         let ui = &mut self.time_ui;
@@ -327,7 +337,7 @@ impl PhotoApp {
             self.empty(
                 ui,
                 "Wie hat sich jemand verändert?",
-                "Wähle eine Sammlung mit analysierten Gesichtern, um Personen über die Zeit zu sehen.",
+                "Wähle links eine Sammlung mit analysierten Gesichtern, um Personen über die Zeit zu sehen.",
             );
             return;
         }
@@ -376,8 +386,6 @@ impl PhotoApp {
     }
 
     fn time_header(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Zeitreise").size(23.0).strong());
-        ui.add_space(8.0);
         let items: Vec<Choice<i64>> = select::person_choices(&self.time_ui.people, None);
         let mut person = self.time_ui.person;
         let (mut load, mut compute) = (false, false);
@@ -408,7 +416,7 @@ impl PhotoApp {
                     egui::Button::selectable(self.time_ui.axis == Axis::Age, "Alter"),
                 )
                 .on_disabled_hover_text(
-                    "Für das Alter braucht die Person ein Geburtsjahr (Personen & Beziehungen).",
+                    "Für das Alter braucht die Person ein Geburtsjahr. Du trägst es in der Übersicht ein.",
                 )
                 .clicked()
                 && self.time_ui.axis != Axis::Age
@@ -493,6 +501,10 @@ impl PhotoApp {
             self.time_ui.person = person;
             self.time_ui.selected = None;
             self.time_ui.focus = None;
+            // Wer hier eine Person wählt, wählt sie für alle Personenansichten.
+            if let Some(person) = person {
+                self.relation_from = Some(person);
+            }
         }
         if load {
             self.time_ui.need_load = true;
@@ -1196,6 +1208,56 @@ mod tests {
             &before,
             app.time_ui.computed.as_ref().expect("computed")
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn timeline_opens_for_the_person_selected_under_personen() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let people = {
+            let c = Collection::open(root.path(), true)?;
+            // Anna hat die meisten Gesichter und wäre ohne Auswahl die Vorgabe; gewählt ist Ben.
+            for (id, name) in [(1, "Anna"), (2, "Ben")] {
+                c.db.execute("INSERT INTO persons(id) VALUES(?)", [id])?;
+                c.db.execute(
+                    "INSERT INTO person_attrs VALUES(?,?,?)",
+                    rusqlite::params![id, "name", name],
+                )?;
+            }
+            for (id, person) in [(1, 1), (2, 1), (3, 2)] {
+                let rel = format!("2020/{id}.jpg");
+                c.db.execute(
+                    "INSERT INTO photos(id,status) VALUES(?,?)",
+                    rusqlite::params![id, "present"],
+                )?;
+                c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status,meta_state) VALUES(?,?,?,?,?,?,?,1,0,?,?,?)", rusqlite::params![id, rel, rel, "2020", format!("{id}.jpg"), id.to_string(), "jpg", id, "present", "done"])?;
+                c.db.execute("INSERT INTO meta(file_id,dt_original,width,height,orientation) VALUES(?,?,800,600,1)", rusqlite::params![id, "2020:06:01 12:00:00"])?;
+                c.db.execute("INSERT INTO faces(id,photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality,person_id,assignment) VALUES(?,?,?,?,?,0.3,0.2,0.7,0.8,?,0.95,0.9,?,?)", rusqlite::params![id, id, id, rel, "d", "[[300.0,200.0],[400.0,200.0],[350.0,260.0],[310.0,320.0],[390.0,320.0]]", person, "user"])?;
+            }
+            faces::people(&c)?
+        };
+        let ctx = egui::Context::default();
+        let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = PhotoApp::with_settings(&creation, Settings::default());
+        app.settings.collection = root.path().to_string_lossy().into_owned();
+        app.face_page.people = people;
+        app.select_person(2);
+        app.set_person_mode(PersonMode::Time);
+        assert_eq!(
+            (app.view, app.person_mode),
+            (View::People, PersonMode::Time)
+        );
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.person, Some(2));
+        assert_eq!(app.time_ui.loaded_person, Some(2));
+        let computed = app.time_ui.computed.clone().expect("computed");
+        assert_eq!(computed.total, 1, "nur Bens Gesicht");
+        assert_eq!(app.selected_person(), Some(2), "die Auswahl bleibt");
+        // Ohne gewählte Person bleibt die Zeitreise bei ihrer eigenen Wahl.
+        app.relation_from = None;
+        app.set_person_mode(PersonMode::Time);
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.person, Some(2));
         Ok(())
     }
 }

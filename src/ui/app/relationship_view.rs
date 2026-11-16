@@ -44,6 +44,11 @@ impl Default for RelationshipView {
 }
 
 impl RelationshipView {
+    /// Wählt die Person und holt sie beim nächsten Zeichnen in den Ausschnitt.
+    pub(super) fn show_person(&mut self, person: i64) {
+        self.selected = Some(person);
+        self.focus_request = Some(person);
+    }
     pub(super) fn clear(&mut self) {
         *self = Self {
             revision: self.revision + 1,
@@ -158,17 +163,6 @@ fn node_radius(photos: usize, max: usize) -> f32 {
 }
 
 impl PhotoApp {
-    /// Springt aus der Personenliste in den Graph-Reiter und wählt die Person.
-    pub(super) fn open_relationship_graph(&mut self, person: i64) {
-        self.relationship_graph.selected = Some(person);
-        self.relationship_graph.focus_request = Some(person);
-        self.face_mode = "graph".into();
-        self.face_index = 0;
-        self.face_advance = None;
-        self.face_row_tops.clear();
-        self.refresh_faces();
-    }
-
     fn load_relationship_graph(&mut self) {
         self.relationship_graph.revision += 1;
         self.relationship_graph.stale = false;
@@ -192,6 +186,7 @@ impl PhotoApp {
     }
 
     pub(super) fn relationship_graph_tab(&mut self, ui: &mut egui::Ui) {
+        let selected_before = self.relationship_graph.selected;
         let view = &self.relationship_graph;
         if (view.stale || (view.data.is_none() && !view.attempted))
             && !self.settings.collection.is_empty()
@@ -227,7 +222,7 @@ impl PhotoApp {
             });
         if network.nodes.is_empty() {
             ui.label("In dieser Sammlung gibt es noch keine Personen.");
-            ui.label("Benenne Gesichter im Reiter „Benennen“, dann erscheinen sie hier.");
+            ui.label("Benenne Gesichter unter „Gesichter“, dann erscheinen sie hier.");
         } else {
             refresh = toolbar(ui, &mut self.relationship_graph, &network, loading);
             let source = PortraitSource {
@@ -238,6 +233,12 @@ impl PhotoApp {
             canvas(ui, &mut self.relationship_graph, &network, dark, source);
         }
         self.relationship_graph.data = Some(network);
+        // Wer im Graph eine Person wählt, wählt sie für alle Personenansichten.
+        if self.relationship_graph.selected != selected_before
+            && let Some(person) = self.relationship_graph.selected
+        {
+            self.relation_from = Some(person);
+        }
         if refresh {
             self.relationship_graph.stale = true;
         }

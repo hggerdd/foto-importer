@@ -125,14 +125,11 @@ impl PhotoApp {
             .map(|p| p.id)
     }
 
-    /// Reiter „Stammbaum“: Baum um eine Fokus-Person, Verwandtschaftsprüfung, Textliste.
+    /// Ansicht „Stammbaum“: Baum um eine Fokus-Person, Verwandtschaftsprüfung, Textliste.
     pub(super) fn tree_tab(&mut self, ui: &mut egui::Ui) {
         if self.face_page.people.is_empty() {
             ui.label(
-                RichText::new(
-                    "Noch keine Personen. Lege im Reiter „Personen & Beziehungen“ Personen an.",
-                )
-                .weak(),
+                RichText::new("Noch keine Personen. Lege in der Übersicht Personen an.").weak(),
             );
             return;
         }
@@ -141,6 +138,7 @@ impl PhotoApp {
         }
         let people = self.face_page.people.clone();
         let mut ui_state = std::mem::take(&mut self.family_ui);
+        let focus_before = ui_state.focus;
         ui.horizontal_wrapped(|ui| {
             Self::person_combo(ui, "tree-focus", "Person", &people, &mut ui_state.focus);
             ui.add(
@@ -152,6 +150,12 @@ impl PhotoApp {
                     .text("unten"),
             );
         });
+        // Wer hier eine Person wählt, wählt sie für alle Personenansichten.
+        if ui_state.focus != focus_before
+            && let Some(person) = ui_state.focus
+        {
+            self.relation_from = Some(person);
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Verwandtschaft prüfen").strong());
             Self::person_combo(ui, "check-a", "Person A", &people, &mut ui_state.check_a);
@@ -164,9 +168,8 @@ impl PhotoApp {
                     "{open_questions} vorgeschlagene Beziehungen warten auf deine Bestätigung."
                 ));
                 if ui.small_button("Zu den Rückfragen").clicked() {
-                    self.face_mode = "persons".into();
                     self.people_ui.panel = super::people_table::Panel::Questions;
-                    self.refresh_faces();
+                    self.set_person_mode(PersonMode::Overview);
                 }
             });
         }
@@ -198,7 +201,7 @@ impl PhotoApp {
                 );
             }
             if layout.nodes.len() <= 1 {
-                ui.label(RichText::new("Zu dieser Person sind noch keine Eltern, Kinder oder Partner erfasst. Beziehungen trägst du im Reiter „Personen & Beziehungen“ ein.").weak());
+                ui.label(RichText::new("Zu dieser Person sind noch keine Eltern, Kinder oder Partner erfasst. Beziehungen trägst du in der Übersicht ein.").weak());
             }
             let needed = (layout.height - 1.0) * UNIT_Y + BOX_H + 2.0 * PAD + 20.0;
             let height = needed.min((ui.available_height() - 50.0).max(180.0));
