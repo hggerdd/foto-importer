@@ -180,9 +180,18 @@ struct Running {
     /// Gesichter, die bis zum Ende dieses Auftrags aus den Seiten ausgeblendet bleiben.
     hides: Vec<i64>,
 }
+/// Hintergrundarbeit mit niedriger Priorität: zählt nicht als belegt und weicht jedem
+/// Nutzerschreibauftrag.
+fn low_priority(kind: &str) -> bool {
+    matches!(kind, "maintenance" | "metadata-bg")
+}
 impl Running {
     fn is_face_matching(&self) -> bool {
         matches!(self.kind, "maintenance" | "face-knowledge")
+    }
+    /// Lässt sich der Auftrag pausieren (statt abbrechen) und später fortsetzen?
+    fn can_pause(&self) -> bool {
+        self.is_face_matching() || self.kind == "metadata-bg"
     }
     /// Explains what the running job leaves for later, so a half-finished index is not a surprise.
     fn catch_up_note(&self) -> Option<&'static str> {
@@ -316,6 +325,9 @@ pub struct PhotoApp {
     dng_status: String,
     closing: bool,
     maintenance_paused: bool,
+    /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
+    metadata_paused: bool,
+    metadata_bg_failed: bool,
     /// Am Regler gewählte Vorschlagsschwelle samt Sammlung, für die sie gilt.
     review_draft: Option<(String, f32)>,
     recognition_tools_open: bool,
@@ -421,6 +433,8 @@ impl PhotoApp {
             dng_status: "Converter-Version wird gelesen …".into(),
             closing: false,
             maintenance_paused: false,
+            metadata_paused: false,
+            metadata_bg_failed: false,
             review_draft: None,
             recognition_tools_open: false,
             auto_analysis_pending: false,
@@ -514,7 +528,7 @@ impl PhotoApp {
         self.tasks.iter().find(|t| {
             t.write
                 && t.kind != "copy"
-                && t.kind != "maintenance"
+                && !low_priority(t.kind)
                 && t.collection == self.settings.collection
         })
     }
@@ -545,9 +559,9 @@ impl PhotoApp {
         hides: Vec<i64>,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
-        if write && kind != "copy" && kind != "maintenance" {
+        if write && kind != "copy" && !low_priority(kind) {
             for task in &self.tasks {
-                if task.kind == "maintenance" {
+                if low_priority(task.kind) {
                     task.task.control.stop();
                 }
             }
@@ -834,6 +848,7 @@ impl PhotoApp {
         self.recognition_tools_open = false;
         self.delete_phrase.clear();
         self.maintenance_paused = false;
+        self.metadata_paused = false;
         self.auto_analysis_pending = false;
         self.auto_metadata_pending = false;
         self.thumbnails.clear();
@@ -889,12 +904,60 @@ impl PhotoApp {
                 .flatten(),
         )
     }
+    /// Startet den Hintergrundlauf der Metadaten, solange ungelesene Dateien da sind und
+    /// nichts anderes schreibt. Er hat niedrige Priorität: Nutzeraufträge stoppen ihn, danach
+    /// setzt er fort. Höchstens ein Hintergrundschreiber je Sammlung (erst Metadaten, dann
+    /// Gesichter). Fehlgeschlagene Dateien werden nicht erneut versucht.
+    fn start_metadata_background(&mut self) {
+        if self.closing
+            || self.metadata_paused
+            || self.metadata_bg_failed
+            || self.busy()
+            || self.settings.collection.is_empty()
+            || self.settings.exiftool.trim().is_empty()
+            || self.status.unread == 0
+            || self.tasks.iter().any(|t| low_priority(t.kind))
+        {
+            return;
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        self.launch(
+            "Metadaten im Hintergrund lesen",
+            true,
+            "metadata-bg",
+            move |control| {
+                let mut c = Collection::open(Path::new(&root), true)?;
+                Ok(Outcome::Done(metadata::enrich_background(
+                    &mut c, &exiftool, &control,
+                )?))
+            },
+        );
+    }
+    /// Liest die Metadaten der Dateien des gewählten Fotos jetzt (Bilddetails).
+    fn read_photo_metadata(&mut self) {
+        let Some(photo) = self.selected_photo.as_ref().map(|p| p.id) else {
+            return;
+        };
+        if self.busy() || self.settings.collection.is_empty() {
+            return;
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        self.launch("Metadaten lesen", true, "mutation", move |control| {
+            let mut c = Collection::open(Path::new(&root), true)?;
+            Ok(Outcome::Done(metadata::enrich_photo(
+                &mut c, &exiftool, &control, photo,
+            )?))
+        });
+    }
     fn collection_action(&mut self, action: &str) {
         if self.busy() || self.settings.collection.is_empty() {
             return;
         }
         if action == "resume" {
             self.maintenance_paused = false;
+            self.metadata_paused = false;
             self.refresh_faces();
             return;
         }
@@ -1074,6 +1137,23 @@ impl PhotoApp {
                 other => other,
             };
             match result {
+                Err(e) if running.kind == "metadata-bg" => {
+                    // Abbruch durch einen Nutzerauftrag ist kein Fehler: der Lauf setzt später
+                    // fort. Jeder andere Fehler (z. B. ExifTool fehlt) stoppt ihn für die
+                    // Sitzung, damit nichts in einer Schleife neu startet.
+                    if !running.task.control.cancel.load(Ordering::Relaxed) {
+                        self.metadata_bg_failed = true;
+                        self.message(
+                            format!(
+                                "Metadaten im Hintergrund lesen gestoppt: {e:#} Den Rest mit „Metadaten lesen“ nachholen."
+                            ),
+                            true,
+                        );
+                    }
+                    if running.collection == self.settings.collection && !self.closing {
+                        self.query_collection(self.applied.clone());
+                    }
+                }
                 Err(e) if running.kind == "timeline" => {
                     if !running.task.control.cancel.load(Ordering::Relaxed) {
                         self.time_ui.failed(format!("{e:#}"));
@@ -1156,6 +1236,12 @@ impl PhotoApp {
                     self.filters.folder.clone_from(&filters.folder);
                     self.filters.page = filters.page;
                     self.applied = filters;
+                    // Kopfzeile der Bilddetails (Aufnahme, Kamera, Objektiv) folgt neuen Werten.
+                    if let Some(selected) = &mut self.selected_photo
+                        && let Some(fresh) = self.page.photos.iter().find(|p| p.id == selected.id)
+                    {
+                        *selected = fresh.clone();
+                    }
                     if !self.large
                         && self.selected_photo.as_ref().is_some_and(|selected| {
                             !self.page.photos.iter().any(|photo| photo.id == selected.id)
@@ -1230,7 +1316,10 @@ impl PhotoApp {
                     if running.kind == "undo" && running.collection == self.settings.collection {
                         self.undo.pop();
                     }
-                    self.message(message, false);
+                    let background = running.kind == "metadata-bg";
+                    if !background {
+                        self.message(message, false);
+                    }
                     if running.task.label == "Sammlung indizieren"
                         && self.settings.auto_metadata
                         && running.collection == self.settings.collection
@@ -1241,7 +1330,11 @@ impl PhotoApp {
                         self.relationship_graph.stale = true;
                         self.query_collection(self.applied.clone());
                         self.refresh_faces();
-                        if let Some(photo) = self.selected_photo.clone() {
+                        // Der Hintergrundlauf lädt die Details nur neu, wenn sie noch fehlen.
+                        let missing = self.detail_rows.iter().any(|(key, _)| key == "Status");
+                        if let Some(photo) = self.selected_photo.clone()
+                            && (!background || missing)
+                        {
                             self.choose_photo(photo);
                         }
                     }
@@ -1392,7 +1485,10 @@ impl PhotoApp {
                         Pick::Target => self.settings.target = value,
                         Pick::Collection => self.set_collection(value),
                         Pick::Converter => self.settings.converter = value,
-                        Pick::Exiftool => self.settings.exiftool = value,
+                        Pick::Exiftool => {
+                            self.settings.exiftool = value;
+                            self.metadata_bg_failed = false;
+                        }
                         Pick::Models => {
                             self.settings.model_dir = value;
                             self.models = crate::core::inference::manifests(Path::new(
@@ -1422,6 +1518,7 @@ impl PhotoApp {
             self.auto_analysis_pending = false;
             self.collection_action("automatic");
         }
+        self.start_metadata_background();
         let now = chrono::Local::now();
         if !self.closing
             && !self.busy()
@@ -1442,7 +1539,7 @@ impl PhotoApp {
             && !self
                 .tasks
                 .iter()
-                .any(|t| matches!(t.kind, "maintenance" | "faces"))
+                .any(|t| matches!(t.kind, "maintenance" | "metadata-bg" | "faces"))
             && !self.settings.collection.is_empty()
         {
             let root = self.settings.collection.clone();
@@ -1573,7 +1670,7 @@ impl PhotoApp {
                             ui.label(RichText::new(format!("· {}", progress.phase)).weak());
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let can_pause = running.is_face_matching();
+                            let can_pause = running.can_pause();
                             if ui
                                 .add_enabled(
                                     !stopping,
@@ -1586,7 +1683,11 @@ impl PhotoApp {
                                 .clicked()
                             {
                                 if can_pause {
-                                    self.maintenance_paused = true;
+                                    if running.kind == "metadata-bg" {
+                                        self.metadata_paused = true;
+                                    } else {
+                                        self.maintenance_paused = true;
+                                    }
                                 }
                                 running.task.control.stop();
                             }
@@ -1632,10 +1733,8 @@ impl PhotoApp {
                     if dismissed {
                         self.dismiss_notice();
                     }
-                    if self.view != View::Tasks
-                        && let Some(hint) = self.catch_up_hint()
-                    {
-                        ui.label(RichText::new(hint).small().weak());
+                    if self.view != View::Tasks {
+                        self.catch_up_row(ui);
                     }
                 }
             });

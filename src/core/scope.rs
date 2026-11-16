@@ -78,3 +78,25 @@ pub fn metadata_order(collection: &Collection, scope: &Scope) -> Result<Vec<i64>
         .query_map(params_from_iter(args.iter()), |r| r.get::<_, i64>(0))?
         .collect::<rusqlite::Result<_>>()?)
 }
+
+/// Datei-IDs, deren Metadaten noch nie gelesen wurden (`meta_state` pending oder stale), neueste
+/// zuerst. Fehlgeschlagene Dateien fehlen absichtlich: Der Hintergrundlauf wiederholt sie nicht.
+pub fn metadata_unread(collection: &Collection, limit: usize) -> Result<Vec<i64>> {
+    Ok(collection
+        .db
+        .prepare(
+            "SELECT f.id FROM files f WHERE f.status='present' AND f.meta_state IN ('pending','stale')
+             ORDER BY f.mtime_ns DESC, f.id DESC LIMIT ?",
+        )?
+        .query_map([limit as i64], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Vorhandene Dateien eines Fotos (Original, Varianten, Sidecars).
+pub fn photo_files(collection: &Collection, photo: i64) -> Result<Vec<i64>> {
+    Ok(collection
+        .db
+        .prepare("SELECT id FROM files WHERE photo_id=? AND status='present' ORDER BY id")?
+        .query_map([photo], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}

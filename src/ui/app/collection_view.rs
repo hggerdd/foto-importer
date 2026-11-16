@@ -622,6 +622,19 @@ impl PhotoApp {
                 if !self.detail_faces.is_empty() || self.inspect_people {
                     ui.checkbox(&mut self.show_frames, "Rahmen");
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let busy = self.busy();
+                    let mut button = ui.add_enabled(!busy, egui::Button::new("Metadaten lesen"));
+                    button = button.on_hover_text(if busy {
+                        self.busy_reason()
+                    } else {
+                        "Liest Aufnahmedatum, Kamera und weitere Angaben dieses Fotos mit ExifTool und speichert sie in der Sammlung."
+                            .into()
+                    });
+                    if button.clicked() {
+                        self.read_photo_metadata();
+                    }
+                });
             });
             ui.separator();
             let scroller = egui::ScrollArea::vertical().id_salt((

@@ -23,7 +23,8 @@ impl PhotoApp {
     pub(super) fn naming_blocked(&self) -> bool {
         self.tasks.iter().any(|t| {
             t.write
-                && !matches!(t.kind, "copy" | "maintenance" | "naming")
+                && !low_priority(t.kind)
+                && !matches!(t.kind, "copy" | "naming")
                 && t.collection == self.settings.collection
         })
     }

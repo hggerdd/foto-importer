@@ -25,7 +25,8 @@
   nachvollzogen.
 - **Indizierung in vier Schritten:** Ordner lesen, Bestand vergleichen, Dateien eintragen
   (Stapel zu 500 je Transaktion, sofort sichtbar), abschließen. Metadaten (ExifTool) und
-  BLAKE3-Prüfung sind eigene, fortsetzbare Läufe.
+  BLAKE3-Prüfung sind eigene, fortsetzbare Läufe. Ungelesene Dateien liest zusätzlich ein Hintergrundlauf
+  (siehe [Anwendung](anwendung.md)); `CollectionStatus.unread` zählt sie ohne frühere Fehler.
 - **Schutz vor Massenverlust:** Nur ein vollständig durchgelaufener Lauf markiert Dateien als
   fehlend; bei Lesefehlern nie, über 20 % nur nach Bestätigung. Ein abgebrochener Lauf behält
   Eingetragenes. Bei Hash-Abweichung bleibt der gespeicherte Vergleichswert erhalten.

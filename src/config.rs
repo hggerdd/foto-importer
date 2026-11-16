@@ -5,6 +5,13 @@ pub const PAGE_SIZE: usize = 48;
 /// Zulässige Breite des Ordnerbaums (Minimum, Maximum) in Punkten.
 pub const FOLDER_TREE_WIDTH: (f32, f32) = (170.0, 380.0);
 pub const COPY_CHUNK: usize = 1024 * 1024;
+/// Dateien je ExifTool-Aufruf beim ausdrücklichen Metadatenlauf.
+pub const METADATA_CHUNK: usize = 128;
+/// Dateien je ExifTool-Aufruf im Hintergrundlauf: klein, damit ein Nutzerauftrag binnen
+/// etwa einer Sekunde Vorrang bekommt.
+pub const METADATA_BACKGROUND_CHUNK: usize = 32;
+/// Dateien je Hintergrundauftrag; danach startet die App den nächsten.
+pub const METADATA_BACKGROUND_PORTION: usize = 512;
 /// Dateien je Transaktion beim Indizieren (ADR 0064).
 pub const SCAN_BATCH: usize = 500;
 /// Dateien je Transaktion beim Speichern neuer BLAKE3-Werte.
