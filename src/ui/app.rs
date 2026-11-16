@@ -38,7 +38,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum View {
     Import,
     Collection,
@@ -87,11 +87,21 @@ enum Outcome {
     Pick(Pick, Option<PathBuf>),
     Time(time_view::TimeOutcome),
 }
+/// Hinweis samt Ansicht, in der er entstand, und Zeitpunkt für das Ablaufen.
+struct Notice {
+    text: String,
+    error: bool,
+    /// `None`: ohne sinnvolle Herkunft, in jeder Ansicht sichtbar (z. B. beim Start).
+    view: Option<View>,
+    set: std::time::Instant,
+}
 struct Running {
     task: Task<Outcome>,
     write: bool,
     kind: &'static str,
     collection: String,
+    /// Ansicht, in der der Auftrag gestartet wurde; Meldungen zum Ergebnis gehören dorthin.
+    view: View,
     /// Gesichter, die bis zum Ende dieses Auftrags aus den Seiten ausgeblendet bleiben.
     hides: Vec<i64>,
 }
@@ -150,8 +160,9 @@ pub struct PhotoApp {
     view: View,
     tasks: Vec<Running>,
     history: Vec<String>,
-    notice: String,
-    error: bool,
+    notice: Option<Notice>,
+    /// Während der Ergebnisverarbeitung: Ansicht des Auftrags statt der aktuellen.
+    notice_origin: Option<View>,
     scan: Scan,
     import_cache: ImportCache,
     scan_revision: u64,
@@ -251,8 +262,13 @@ impl PhotoApp {
             view: View::Import,
             tasks: Vec::new(),
             history: Vec::new(),
-            notice: "Bereit für deine nächsten Erinnerungen".into(),
-            error: false,
+            notice: Some(Notice {
+                text: "Bereit für deine nächsten Erinnerungen".into(),
+                error: false,
+                view: None,
+                set: std::time::Instant::now(),
+            }),
+            notice_origin: None,
             scan: Scan::default(),
             import_cache: ImportCache::default(),
             scan_revision: 0,
@@ -496,6 +512,7 @@ impl PhotoApp {
             write,
             kind,
             collection: self.settings.collection.clone(),
+            view: self.view,
             hides,
         });
     }
@@ -511,8 +528,12 @@ impl PhotoApp {
         } else {
             (text.clone(), text)
         };
-        self.notice = notice;
-        self.error = error;
+        self.notice = Some(Notice {
+            text: notice,
+            error,
+            view: Some(self.notice_origin.unwrap_or(self.view)),
+            set: std::time::Instant::now(),
+        });
         self.history.push(format!(
             "{} · {text}",
             chrono::Local::now().format("%H:%M:%S")
@@ -520,6 +541,18 @@ impl PhotoApp {
         if self.history.len() > 100 {
             self.history.remove(0);
         }
+    }
+    /// Der Hinweis, der in der aktuellen Ansicht gezeigt wird: nur seine eigene Ansicht, normale
+    /// Hinweise nur bis zum Ablauf der Anzeigedauer, Fehler bis zum Schließen.
+    fn visible_notice(&self, now: std::time::Instant) -> Option<&Notice> {
+        self.notice.as_ref().filter(|notice| {
+            notice.view.is_none_or(|view| view == self.view)
+                && (notice.error
+                    || now.saturating_duration_since(notice.set) < config::NOTICE_SECONDS)
+        })
+    }
+    fn dismiss_notice(&mut self) {
+        self.notice = None;
     }
     fn save(&mut self) -> bool {
         if let Err(e) = self.settings.save() {
@@ -823,6 +856,7 @@ impl PhotoApp {
         }
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
+            self.notice_origin = Some(running.view);
             let result = match result {
                 Ok(Outcome::Synced(inner, note)) => {
                     if running.collection == self.settings.collection {
@@ -1207,6 +1241,7 @@ impl PhotoApp {
                 _ => {}
             }
         }
+        self.notice_origin = None;
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -1332,12 +1367,16 @@ impl PhotoApp {
             )
             .show(ctx, |ui| {
                 theme::dark_panel(ui);
-                if let Some(running) = self
-                    .tasks
-                    .iter()
-                    .find(|t| t.write)
-                    .or_else(|| self.tasks.first())
-                {
+                // In der Aufgabenansicht stehen die laufenden Aufträge schon als Karten da.
+                let running = if self.view == View::Tasks {
+                    None
+                } else {
+                    self.tasks
+                        .iter()
+                        .find(|t| t.write)
+                        .or_else(|| self.tasks.first())
+                };
+                if let Some(running) = running {
                     let progress = running.task.control.snapshot();
                     let stopping = running.task.control.cancel.load(Ordering::Relaxed);
                     ui.horizontal(|ui| {
@@ -1378,20 +1417,37 @@ impl PhotoApp {
                         Self::progress_bar(ui, &progress, ui.available_width());
                     }
                 } else {
+                    let now = std::time::Instant::now();
+                    let shown = self
+                        .visible_notice(now)
+                        .map(|n| (n.text.clone(), n.error, n.set));
+                    let mut dismissed = false;
                     ui.horizontal(|ui| {
+                        let error = shown.as_ref().is_some_and(|n| n.1);
                         ui.label(
-                            RichText::new(if self.error { "Hinweis" } else { "Bereit" }).color(
-                                if self.error {
-                                    theme::WARM
-                                } else {
-                                    theme::ACCENT
-                                },
-                            ),
+                            RichText::new(if error { "Hinweis" } else { "Bereit" })
+                                .color(if error { theme::WARM } else { theme::ACCENT }),
                         );
-                        ui.add(egui::Label::new(&self.notice).truncate())
-                            .on_hover_text(&self.notice);
+                        if let Some((text, error, set)) = &shown {
+                            if *error {
+                                if ui.small_button("✕").on_hover_text("Schließen").clicked() {
+                                    dismissed = true;
+                                }
+                            } else {
+                                ctx.request_repaint_after(
+                                    config::NOTICE_SECONDS.saturating_sub(now.duration_since(*set)),
+                                );
+                            }
+                            ui.add(egui::Label::new(text).truncate())
+                                .on_hover_text(text);
+                        }
                     });
-                    if let Some(hint) = self.catch_up_hint() {
+                    if dismissed {
+                        self.dismiss_notice();
+                    }
+                    if self.view != View::Tasks
+                        && let Some(hint) = self.catch_up_hint()
+                    {
                         ui.label(RichText::new(hint).small().weak());
                     }
                 }

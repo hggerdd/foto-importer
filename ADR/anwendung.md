@@ -30,6 +30,10 @@
 - **Oberfläche:** Feste Navigation links, ein Arbeitsbereich, Kontext rechts, sichtbare
   Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen:
   Bekannte Fehler erscheinen als verständlicher Satz, der Originaltext steht im Verlauf.
+  Hinweise gehören zur Ansicht, in der die Aktion (bei Aufträgen: der Start) stattfand, und
+  erscheinen nur dort. Normale Hinweise verschwinden nach `NOTICE_SECONDS` (15 s), Fehler
+  bleiben bis zum Schließen. Ein laufender Auftrag erscheint je Ansicht nur einmal (in der
+  Aufgabenansicht als Karte, sonst in der Fußleiste).
   Ergebnisse gelten erst nach erfolgreichem Speichern als gespeichert.
 
 ## Grenzen
