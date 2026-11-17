@@ -183,12 +183,12 @@ fn face_info(face: &TimeFace, computed: &Computed) -> String {
     )
 }
 
-/// Gestrichelter Rand für Gesichter mit unsicherem Datum.
 /// Anzahl Kacheln je Zeile für die verfügbare Breite (mindestens eine).
 fn tile_columns(width: f32, spacing: f32) -> usize {
     (((width + spacing) / (TILE + spacing)).floor() as usize).max(1)
 }
 
+/// Gestrichelter Rand für Gesichter mit unsicherem Datum.
 fn dashed_border(ui: &egui::Ui, rect: egui::Rect) {
     let stroke = egui::Stroke::new(1.5_f32, theme::WARM);
     let points = vec![
