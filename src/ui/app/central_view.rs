@@ -33,29 +33,42 @@ impl PhotoApp {
         theme::card(ui).show(ui, |ui| {
             ui.label(RichText::new("Zentraler Personenbestand").size(20.0).strong());
             ui.label("Personen (Name, Geschlecht, Geburtsjahr, Notiz) werden zwischen allen Sammlungen dieses Rechners abgeglichen.");
-            ui.checkbox(&mut self.settings.central_enabled, "Zentralen Bestand verwenden");
+            let mut changed = ui
+                .checkbox(&mut self.settings.central_enabled, "Zentralen Bestand verwenden")
+                .changed();
             ui.label("Ort der Zentraldatei (leer = neben den Einstellungen; ein Netzlaufwerk ist möglich)");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.settings.central_path)
-                    .hint_text(crate::config::Settings::default_central_path().to_string_lossy())
-                    .desired_width(570.0),
-            );
-            ui.add_enabled(
-                self.settings.central_enabled,
-                egui::Checkbox::new(
-                    &mut self.settings.central_relations,
-                    "Beziehungen zentral mitführen",
+            self.path_field(
+                ui,
+                settings_view::PathSetting::Central,
+                Some(
+                    crate::config::Settings::default_central_path()
+                        .to_string_lossy()
+                        .into_owned(),
                 ),
             );
+            changed |= ui
+                .add_enabled(
+                    self.settings.central_enabled,
+                    egui::Checkbox::new(
+                        &mut self.settings.central_relations,
+                        "Beziehungen zentral mitführen",
+                    ),
+                )
+                .changed();
             ui.label(
                 RichText::new("Eltern, Partner, Freunde usw. werden zwischen Sammlungen über die zentralen Personen abgeglichen; nichts wird überschrieben oder still gelöscht. Abschalten verändert keine Sammlung. Beziehungen enthalten keine Biometrie.")
                     .small()
                     .weak(),
             );
-            ui.checkbox(
-                &mut self.settings.central_images,
-                "Referenzbilder (Gesichtsausschnitte) zentral speichern",
-            );
+            changed |= ui
+                .checkbox(
+                    &mut self.settings.central_images,
+                    "Referenzbilder (Gesichtsausschnitte) zentral speichern",
+                )
+                .changed();
+            if changed {
+                self.save();
+            }
             ui.label(
                 RichText::new("Standard aus. Gesichtsausschnitte sind biometrische Daten und verlassen die Sammlung nur mit dieser Zustimmung. Originalfotos werden nie kopiert. „Biometrie entfernen“ kann sie auch zentral löschen.")
                     .small()

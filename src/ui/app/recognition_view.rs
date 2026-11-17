@@ -277,15 +277,14 @@ impl PhotoApp {
                 ui.separator();
                 ui.label(RichText::new("Erkennung einrichten").strong());
                 ui.label(format!("Gewählte Modelle: {} · {}", self.detector, self.embedder));
-                if self.runtime_downloading() || !Path::new(&self.settings.onnx_runtime).is_file() {
+                if !self.runtime_ready() {
                     ui.label("Die Laufzeit führt die Modelle auf deinem Rechner aus.");
-                    self.runtime_download_button(ui);
                 }
-                if self.models_installing() || !self.model_weights_present() {
-                    self.model_install_button(ui);
-                    if ui.add_enabled(!self.models_installing(), egui::Button::new("Modellordner wählen …")).clicked() {
-                        self.pick(Pick::Models);
-                    }
+                self.face_setup_button(ui);
+                if (self.models_installing() || !self.model_weights_present())
+                    && ui.add_enabled(!self.models_installing(), egui::Button::new("Modellordner wählen …")).clicked()
+                {
+                    self.pick(Pick::Models);
                 }
                 ui.separator();
                 ui.label(RichText::new("Wann wird analysiert?").strong());
