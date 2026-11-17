@@ -20,18 +20,35 @@
   Zielordner, Tage und Ergebnis. Die Warteschlange lebt nur in der Sitzung.
 - **Fortschritt in Phasen:** Der Auftragstitel nennt Ordnername und „mit DNG“; der Zähler
   gehört zur laufenden Phase: „Bereits Importiertes prüfen“, „Kopieren“ (alle Dateien),
-  „DNG erstellen“ (nur NEF), danach die Schritte der Indexaktualisierung.
+  „DNG erstellen“ (nur NEF). Ein Import kopiert nur; er liest weder den Index neu noch die
+  Sammlungsansicht.
+- **Aufnahme in die Sammlung erst nach den Imports:** Hat ein Import (auch abgebrochen oder
+  teilweise fehlgeschlagen) Dateien in einen Ordner mit `.myfotomanager` kopiert, merkt die
+  App den Ordner sofort dauerhaft in den Einstellungen (`index_pending`). Erst wenn kein
+  Import mehr wartet oder läuft und kein Nutzerauftrag schreibt, startet je Ordner der
+  Auftrag „Neue Dateien in die Sammlung aufnehmen“ (`import_service::index_new_files`:
+  Schreiberspur des Ordners, dann der unveränderte Schnellindex `quick_scan`). Er hat
+  niedrige Priorität wie die Hintergrundschreiber, ist pausierbar, und jeder neue Import oder
+  Nutzerschreibauftrag stoppt ihn; danach setzt er neu an. Erfolg nimmt den Ordner aus der
+  Liste; ist es die offene Sammlung, folgen Neulesen von Ansicht und Gesichtern, die
+  automatische Analyse und die Hintergrundläufe. Ein Fehler bleibt in der Liste, wird einmal
+  gemeldet und erst nach dem nächsten Import dorthin oder beim nächsten Start erneut
+  versucht. Beim Start werden gemerkte Ordner nach derselben Regel abgearbeitet, auch wenn
+  sie nicht die offene Sammlung sind. Eine Sammlung entsteht dabei nie: fehlt
+  `.myfotomanager`, fällt der Eintrag weg.
 - **Tagesstreifen nach dem Festlegen:** Auswahl, angezeigter Tag und Ordnername werden
   sofort geleert. Tage zeigen den Stand ihres letzten Imports derselben Quelle: eingeplant
   und laufend ausgegraut und nicht wählbar, importiert ausgegraut (bewusster zweiter Klick
   wählt erneut, „Alle auswählen“ nicht), Fehler hervorgehoben und wieder wählbar.
-- **Vorrang:** Während Imports warten oder laufen, starten weder Hintergrundschreiber noch
-  die automatische Analyse; ein Import stoppt laufende Hintergrundschreiber, damit seine
-  Indexaktualisierung nicht auf sie wartet.
+- **Vorrang:** Imports haben höchste Priorität. Während Imports warten oder laufen, starten
+  weder die Aufnahme in die Sammlung noch Hintergrundschreiber oder die automatische
+  Analyse; ein neuer Import stoppt sie sofort.
 - **Datumsquelle wählbar:** Dateisystemdatum oder Aufnahmedatum aus EXIF/IPTC mit Rückfall
   auf das Dateisystem. Zeitstempel werden nicht umgedeutet.
 - **Duplikate überspringen (wählbar):** bevorzugt über die Kameraidentität; schwache Treffer
-  über Name und Größe werden zusätzlich per schnellem Inhaltshash geprüft.
+  über Name und Größe werden zusätzlich per schnellem Inhaltshash geprüft. Weil der Index
+  Kopien erst nach der Aufnahme kennt, gelten zusätzlich die Quelldateien als importiert,
+  die frühere Imports dieser Sitzung ins selbe Ziel kopiert haben.
 - **ExifTool** liefert Sammlungsmetadaten und eingebettete RAW-Vorschauen, ausschließlich
   lesend. Der Quellscan funktioniert auch ohne ExifTool.
 - **DNG (optional):** Der separat installierte Adobe DNG Converter läuft als eigener Prozess
@@ -47,7 +64,9 @@
 
 ## Grenzen
 
-Keine Garantie bei Stromausfall oder auf Netzlaufwerken. Die DNG-Prüfung stellt Erfolg und
+Keine Garantie bei Stromausfall oder auf Netzlaufwerken. Wird derselbe Tag nach einem
+Neustart erneut importiert, bevor die Aufnahme lief, erkennt „Überspringen“ ihn nicht; es
+entstehen Kopien mit Nummernsuffix (nie Ersetzungen). Die DNG-Prüfung stellt Erfolg und
 nicht leere Datei fest, nicht die inhaltliche Richtigkeit. Echter Adobe-Lauf und seltene
 Kamera-Metadaten sind nicht umfassend geprüft.
 

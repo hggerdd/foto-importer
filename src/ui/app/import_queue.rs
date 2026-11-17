@@ -26,6 +26,18 @@ pub(super) struct ImportBatch {
     pub(super) skip: bool,
     pub(super) exiftool: String,
     pub(super) state: BatchState,
+    /// Quelldateien, die dieser Import tatsächlich kopiert hat.
+    pub(super) copied: Vec<PathBuf>,
+}
+
+/// Gleicher Ordner trotz `\\?\`-Präfix und Groß-/Kleinschreibung (Windows).
+pub(super) fn same_folder(a: &str, b: &str) -> bool {
+    let plain = |s: &str| {
+        s.trim_start_matches(r"\\?\")
+            .trim_end_matches(['\\', '/'])
+            .to_owned()
+    };
+    plain(a).eq_ignore_ascii_case(&plain(b))
 }
 
 impl ImportBatch {
@@ -163,6 +175,7 @@ impl PhotoApp {
             skip: self.settings.skip_imported,
             exiftool: self.settings.exiftool.clone(),
             state: BatchState::Queued,
+            copied: Vec::new(),
         };
         let waiting = self.imports_pending() > 0;
         let text = format!(
@@ -191,23 +204,42 @@ impl PhotoApp {
         {
             return;
         }
-        let Some(batch) = self
+        let Some(index) = self
             .imports
-            .iter_mut()
-            .find(|b| b.state == BatchState::Queued)
+            .iter()
+            .position(|b| b.state == BatchState::Queued)
         else {
             return;
         };
+        // Der Sammlungsindex kennt Kopien dieser Sitzung erst nach der Aufnahme. Damit
+        // „Bereits Importiertes überspringen“ sie trotzdem erkennt, zählen die von früheren
+        // Imports dieser Sitzung ins selbe Ziel kopierten Quelldateien als importiert.
+        let (earlier, rest) = self.imports.split_at_mut(index);
+        let batch = &mut rest[0];
+        let known: BTreeSet<PathBuf> = if batch.skip {
+            let target = batch.target.to_string_lossy();
+            earlier
+                .iter()
+                .filter(|b| same_folder(&b.target.to_string_lossy(), &target))
+                .flat_map(|b| b.copied.iter().cloned())
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         batch.state = BatchState::Running;
         let label = batch.label();
-        let files = batch.files.clone();
+        let (files, known): (Vec<SourceFile>, Vec<SourceFile>) = batch
+            .files
+            .iter()
+            .cloned()
+            .partition(|f| !known.contains(&f.path));
         let target = batch.target.clone();
         let name = batch.name.clone();
         let converter = batch.converter.clone();
         let skip = batch.skip;
         let exiftool = batch.exiftool.clone();
         self.launch(&label, true, "copy", move |control| {
-            Ok(Outcome::Imported(crate::core::import_service::execute(
+            let mut report = crate::core::import_service::execute(
                 &files,
                 &target,
                 &name,
@@ -215,17 +247,142 @@ impl PhotoApp {
                 skip,
                 &exiftool,
                 &control,
-            )?))
+            )?;
+            report.skipped.extend(known.into_iter().map(|f| f.path));
+            Ok(Outcome::Imported(report))
         });
     }
 
-    /// Hält das Ergebnis des laufenden Imports fest. Liefert die Überschrift für Hinweis und
-    /// Verlauf: Auftrag, Zielordner und Tage.
+    /// Merkt den Zielordner für die spätere Aufnahme in die Sammlung, dauerhaft in den
+    /// Einstellungen. Nur Ordner mit Sammlung; eine Sammlung wird nie angelegt.
+    pub(super) fn mark_index_pending(&mut self, target: &Path) -> bool {
+        if !target.join(".myfotomanager").is_file() {
+            return false;
+        }
+        let target = target.to_string_lossy().into_owned();
+        self.index_failed.retain(|root| !same_folder(root, &target));
+        self.index_paused = false;
+        if !self
+            .settings
+            .index_pending
+            .iter()
+            .any(|root| same_folder(root, &target))
+        {
+            self.settings.index_pending.push(target);
+            self.save();
+        }
+        true
+    }
+
+    /// Wartet noch ein Ordner auf die Aufnahme neuer Dateien oder läuft sie gerade?
+    /// Hintergrundschreiber der Sammlung starten erst danach.
+    pub(super) fn index_due(&self) -> bool {
+        self.indexing.is_some()
+            || !self.index_paused
+                && self
+                    .settings
+                    .index_pending
+                    .iter()
+                    .any(|root| !self.index_failed.contains(root))
+    }
+
+    /// Nimmt neue Dateien des ältesten gemerkten Ordners in die Sammlung auf, sobald kein
+    /// Import mehr wartet oder läuft und kein Nutzerauftrag schreibt. Niedrige Priorität: jeder
+    /// Nutzerschreibauftrag und jeder neue Import stoppt sie, danach setzt sie neu an.
+    pub(super) fn start_index_update(&mut self) {
+        if self.closing
+            || self.index_paused
+            || self.indexing.is_some()
+            || self.imports_pending() > 0
+            || self
+                .tasks
+                .iter()
+                .any(|t| t.kind == "index-new" || t.write && !low_priority(t.kind))
+        {
+            return;
+        }
+        let Some(root) = self
+            .settings
+            .index_pending
+            .iter()
+            .find(|root| !self.index_failed.contains(*root))
+            .cloned()
+        else {
+            return;
+        };
+        // Die Aufnahme geht anderen Hintergrundschreibern vor.
+        for task in &self.tasks {
+            if low_priority(task.kind) {
+                task.task.control.stop();
+            }
+        }
+        self.indexing = Some(root.clone());
+        self.launch(
+            "Neue Dateien in die Sammlung aufnehmen",
+            true,
+            "index-new",
+            move |control| {
+                Ok(Outcome::Indexed(
+                    crate::core::import_service::index_new_files(Path::new(&root), &control)?,
+                ))
+            },
+        );
+    }
+
+    /// Aufnahme beendet: Ordner aus der Liste nehmen; war es die offene Sammlung, Ansicht und
+    /// Gesichter neu lesen und die automatische Analyse vormerken.
+    pub(super) fn index_finished(&mut self, found: bool) {
+        let Some(root) = self.indexing.take() else {
+            return;
+        };
+        self.settings
+            .index_pending
+            .retain(|pending| !same_folder(pending, &root));
+        self.save();
+        if found && same_folder(&root, &self.settings.collection) && !self.closing {
+            self.message("Neue Dateien sind in der Sammlung".into(), false);
+            if self.face_page.status.auto_import {
+                self.auto_analysis_pending = true;
+            }
+            self.relationship_graph.stale = true;
+            self.requery_collection();
+            self.refresh_faces();
+        }
+    }
+
+    /// Aufnahme abgebrochen oder fehlgeschlagen: Der Ordner bleibt gemerkt. Ein Abbruch
+    /// (Nutzerauftrag, Import, Pause) setzt später fort; ein Fehler wird einmal gemeldet und
+    /// erst nach dem nächsten Import dorthin oder beim nächsten Start erneut versucht.
+    pub(super) fn index_failed_or_paused(&mut self, error: anyhow::Error, cancelled: bool) {
+        let Some(root) = self.indexing.take() else {
+            return;
+        };
+        if !cancelled {
+            self.message(
+                format!(
+                    "Neue Dateien in {} konnten nicht in die Sammlung aufgenommen werden; \
+                     nächster Versuch nach dem nächsten Import dorthin oder beim nächsten Start: \
+                     {error:#}",
+                    import_view::display_path(&root)
+                ),
+                true,
+            );
+            self.index_failed.insert(root.clone());
+        }
+        // Schon Eingetragenes bleibt sichtbar.
+        if same_folder(&root, &self.settings.collection) && !self.closing {
+            self.requery_collection();
+        }
+    }
+
+    /// Hält das Ergebnis des laufenden Imports fest und merkt das Ziel für die spätere Aufnahme
+    /// in die Sammlung. Liefert die Überschrift für Hinweis und Verlauf (Auftrag, Zielordner,
+    /// Tage) und ob die Aufnahme noch folgt.
     pub(super) fn finish_import(
         &mut self,
         result: &Result<Outcome>,
         cancelled: bool,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let batch = self
             .imports
             .iter_mut()
@@ -237,12 +394,25 @@ impl PhotoApp {
             Err(_) if cancelled => BatchState::Cancelled,
             Err(_) => BatchState::Failed,
         };
-        Some(format!(
+        // Auch abgebrochene oder teilweise fehlgeschlagene Imports hinterlassen Kopien. Ein
+        // Fehler ohne Bericht kann nach dem Anlegen des Zielordners liegen.
+        let copied = match result {
+            Ok(Outcome::Imported(report)) => {
+                batch.copied.clone_from(&report.sources);
+                !report.copied.is_empty()
+            }
+            Ok(_) => false,
+            Err(_) => batch.target.join(&batch.name).is_dir(),
+        };
+        let label = format!(
             "{} nach {} ({})",
             batch.label(),
             batch.destination(),
             batch.days_text()
-        ))
+        );
+        let target = batch.target.clone();
+        let later = copied && self.mark_index_pending(&target);
+        Some((label, later))
     }
 
     /// Nimmt einen noch wartenden Import aus der Warteschlange; seine Tage sind wieder frei.

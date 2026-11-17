@@ -146,6 +146,8 @@ enum Outcome {
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
     Imported(files::ImportReport),
+    /// Aufnahme neuer Dateien beendet; `false`: im Ordner gibt es keine Sammlung (mehr).
+    Indexed(bool),
     Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
     RelationshipGraph(u64, crate::core::relationship_graph::Network),
@@ -184,7 +186,7 @@ struct Running {
 /// Hintergrundarbeit mit niedriger Priorität: zählt nicht als belegt und weicht jedem
 /// Nutzerschreibauftrag.
 fn low_priority(kind: &str) -> bool {
-    matches!(kind, "maintenance" | "metadata-bg")
+    matches!(kind, "maintenance" | "metadata-bg" | "index-new")
 }
 impl Running {
     fn is_face_matching(&self) -> bool {
@@ -192,7 +194,7 @@ impl Running {
     }
     /// Lässt sich der Auftrag pausieren (statt abbrechen) und später fortsetzen?
     fn can_pause(&self) -> bool {
-        self.is_face_matching() || self.kind == "metadata-bg"
+        self.is_face_matching() || matches!(self.kind, "metadata-bg" | "index-new")
     }
     /// Explains what the running job leaves for later, so a half-finished index is not a surprise.
     fn catch_up_note(&self) -> Option<&'static str> {
@@ -338,6 +340,13 @@ pub struct PhotoApp {
     /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
     metadata_paused: bool,
     metadata_bg_failed: bool,
+    /// Ordner, deren Aufnahme neuer Dateien gerade läuft (`index-new`).
+    indexing: Option<String>,
+    /// Aufnahme neuer Dateien vom Nutzer pausiert; ein weiterer Import hebt das auf.
+    index_paused: bool,
+    /// Ordner, deren Aufnahme in dieser Sitzung fehlschlug: kein neuer Versuch bis zum nächsten
+    /// Import dorthin oder zum nächsten Start.
+    index_failed: BTreeSet<String>,
     /// Am Regler gewählte Vorschlagsschwelle samt Sammlung, für die sie gilt.
     review_draft: Option<(String, f32)>,
     /// Pfadfelder der Einstellungen, deren Text noch nicht übernommen ist (oder ungültig war).
@@ -454,6 +463,9 @@ impl PhotoApp {
             maintenance_paused: false,
             metadata_paused: false,
             metadata_bg_failed: false,
+            indexing: None,
+            index_paused: false,
+            index_failed: BTreeSet::new(),
             review_draft: None,
             path_drafts: BTreeMap::new(),
             setup_chain: false,
@@ -580,8 +592,8 @@ impl PhotoApp {
         hides: Vec<i64>,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
-        // Auch ein Import lässt Hintergrundschreiber weichen, damit seine Indexaktualisierung
-        // nicht auf sie wartet; sie setzen nach der Warteschlange fort.
+        // Auch ein Import lässt Hintergrundschreiber (samt Aufnahme neuer Dateien) sofort
+        // weichen; sie setzen nach der Warteschlange fort.
         if write && !low_priority(kind) {
             for task in &self.tasks {
                 if low_priority(task.kind) {
@@ -607,7 +619,9 @@ impl PhotoApp {
                     ..Default::default()
                 },
                 move |control| {
-                    let _slot = if write && kind != "copy" {
+                    // Import und Aufnahme neuer Dateien wählen ihre Spur selbst: die Aufnahme
+                    // schreibt in den Zielordner, nicht unbedingt in die offene Sammlung.
+                    let _slot = if write && !matches!(kind, "copy" | "index-new") {
                         let resolved = Path::new(&writer_root).canonicalize()?;
                         Some(control.lane(&format!(
                             "writer:{}",
@@ -1007,6 +1021,7 @@ impl PhotoApp {
             || self.settings.collection.is_empty()
             || self.settings.exiftool.trim().is_empty()
             || self.status.unread == 0
+            || self.index_due()
             || self.tasks.iter().any(|t| low_priority(t.kind))
         {
             return;
@@ -1233,14 +1248,24 @@ impl PhotoApp {
                 other => other,
             };
             // Meldungen eines Imports nennen Zielordner und Tage.
+            let mut index_later = false;
             let label = if running.kind == "copy" {
                 let cancelled = running.task.control.cancel.load(Ordering::Relaxed);
                 self.finish_import(&result, cancelled)
+                    .map(|(label, later)| {
+                        index_later = later;
+                        label
+                    })
             } else {
                 None
             }
             .unwrap_or_else(|| running.task.label.clone());
             match result {
+                Err(e) if running.kind == "index-new" => {
+                    let cancelled = running.task.control.cancel.load(Ordering::Relaxed);
+                    self.index_failed_or_paused(e, cancelled);
+                }
+                Ok(Outcome::Indexed(found)) => self.index_finished(found),
                 Err(e) if running.kind == "metadata-bg" => {
                     // Abbruch durch einen Nutzerauftrag ist kein Fehler: der Lauf setzt später
                     // fort. Jeder andere Fehler (z. B. ExifTool fehlt) stoppt ihn für die
@@ -1545,22 +1570,11 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Imported(report)) => {
-                    if !report.cancelled
-                        && !report.copied.is_empty()
-                        && self.face_page.status.auto_import
-                        && self
-                            .settings
-                            .target
-                            .trim_start_matches(r"\\?\")
-                            .eq_ignore_ascii_case(
-                                self.settings.collection.trim_start_matches(r"\\?\"),
-                            )
-                    {
-                        self.auto_analysis_pending = true;
-                    }
+                    // Kein Neulesen der Sammlung je Import: die neuen Dateien kommen erst mit
+                    // der Aufnahme nach den Imports hinzu (`start_index_update`).
                     self.message(
                         format!(
-                            "{} {} · {} Dateien kopiert · {} übersprungen · {} DNGs · {} Fehler{}",
+                            "{} {} · {} Dateien kopiert · {} übersprungen · {} DNGs · {} Fehler{}{}",
                             label,
                             if report.cancelled {
                                 "abgebrochen"
@@ -1575,12 +1589,15 @@ impl PhotoApp {
                                 String::new()
                             } else {
                                 format!(": {}", report.errors.join("; "))
+                            },
+                            if index_later {
+                                " · wird nach den Imports in die Sammlung aufgenommen"
+                            } else {
+                                ""
                             }
                         ),
                         !report.errors.is_empty(),
                     );
-                    self.requery_collection();
-                    self.refresh_faces();
                 }
                 Ok(Outcome::Suggestions(revision, id, suggestions))
                     if revision == self.naming_revision && self.naming == Some(id) =>
@@ -1623,8 +1640,10 @@ impl PhotoApp {
             }
         }
         self.notice_origin = None;
-        // Der nächste festgelegte Import beginnt, sobald der vorige fertig ist.
+        // Der nächste festgelegte Import beginnt, sobald der vorige fertig ist; erst danach
+        // werden die neuen Dateien in die Sammlung aufgenommen.
         self.start_next_import();
+        self.start_index_update();
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -1634,8 +1653,8 @@ impl PhotoApp {
             self.collection_action("metadata");
         }
         self.live_gallery(ctx);
-        // Die Analyse wartet, bis alle festgelegten Imports durch sind: sie belegt die Sammlung
-        // und hielte sonst die Indexaktualisierung der nächsten Imports auf.
+        // Die Analyse wartet, bis alle festgelegten Imports durch sind; vorgemerkt wird sie
+        // erst nach der Aufnahme der neuen Dateien in die offene Sammlung.
         if !self.closing
             && !self.busy()
             && !self.models_installing()
@@ -1663,6 +1682,7 @@ impl PhotoApp {
             && !self.maintenance_paused
             && !self.busy()
             && self.imports_pending() == 0
+            && !self.index_due()
             && self.face_page.status.pending > 0
             && !self
                 .tasks
@@ -1816,10 +1836,10 @@ impl PhotoApp {
                                 .clicked()
                             {
                                 if can_pause {
-                                    if running.kind == "metadata-bg" {
-                                        self.metadata_paused = true;
-                                    } else {
-                                        self.maintenance_paused = true;
+                                    match running.kind {
+                                        "metadata-bg" => self.metadata_paused = true,
+                                        "index-new" => self.index_paused = true,
+                                        _ => self.maintenance_paused = true,
                                     }
                                 }
                                 running.task.control.stop();

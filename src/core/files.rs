@@ -311,6 +311,8 @@ pub fn copy_one(source: &Path, folder: &Path, control: &Control) -> Result<PathB
 #[derive(Default, Debug)]
 pub struct ImportReport {
     pub copied: Vec<PathBuf>,
+    /// Quelldateien der Kopien in `copied`, in derselben Reihenfolge.
+    pub sources: Vec<PathBuf>,
     pub errors: Vec<String>,
     pub converted: usize,
     pub cancelled: bool,
@@ -359,7 +361,10 @@ pub fn import(
             continue;
         }
         match copy_one(&file.path, &folder, control) {
-            Ok(path) => report.copied.push(path),
+            Ok(path) => {
+                report.copied.push(path);
+                report.sources.push(file.path.clone());
+            }
             Err(e) => report.errors.push(format!("{}: {e}", file.path.display())),
         }
         control.progress(index + 1, files.len());

@@ -570,10 +570,10 @@ impl PhotoApp {
                         .clicked()
                     {
                         if can_pause {
-                            if running.kind == "metadata-bg" {
-                                self.metadata_paused = true;
-                            } else {
-                                self.maintenance_paused = true;
+                            match running.kind {
+                                "metadata-bg" => self.metadata_paused = true,
+                                "index-new" => self.index_paused = true,
+                                _ => self.maintenance_paused = true,
                             }
                         }
                         running.task.control.stop();

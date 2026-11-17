@@ -166,18 +166,24 @@ pub fn execute(
             ..Default::default()
         });
     }
+    // Nur kopieren (und DNG): Die Aufnahme in die Sammlung folgt getrennt mit
+    // `index_new_files`, wenn keine Imports mehr warten (ADR Import).
     let mut report = files::import(&selected, target, name, converter, control)?;
     report.skipped = skipped;
-    if !report.cancelled && !report.copied.is_empty() && target.join(".myfotomanager").is_file() {
-        let root = target.canonicalize()?;
-        let _slot = control.lane(&format!("writer:{}", files::fold(&files::normalize(&root))))?;
-        if let Err(error) =
-            Collection::open(&root, true).and_then(|mut c| c.quick_scan(false, control))
-        {
-            report
-                .errors
-                .push(format!("Dateien kopiert; Indexaktualisierung: {error}"));
-        }
-    }
     Ok(report)
+}
+
+/// Nimmt neu kopierte Dateien in die Sammlung im Zielordner auf (Schnellindex). Legt nie eine
+/// Sammlung an: ohne `.myfotomanager` gibt es nichts aufzunehmen (`Ok(false)`). Ein nicht
+/// erreichbarer Ordner ist ein Fehler, damit der Eintrag für einen späteren Versuch bleibt.
+pub fn index_new_files(target: &Path, control: &Control) -> Result<bool> {
+    let root = target
+        .canonicalize()
+        .context("Sammlung ist nicht erreichbar")?;
+    if !root.join(".myfotomanager").is_file() {
+        return Ok(false);
+    }
+    let _slot = control.lane(&format!("writer:{}", files::fold(&files::normalize(&root))))?;
+    Collection::open(&root, true)?.quick_scan(false, control)?;
+    Ok(true)
 }
