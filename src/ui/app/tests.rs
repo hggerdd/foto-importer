@@ -1601,3 +1601,43 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
     assert_eq!(tasks_of(&app, "model-install"), 0);
     Ok(())
 }
+
+#[test]
+fn filter_dialog_changes_apply_at_once_without_a_draft() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let mut app = metadata_app(root.path());
+    app.filters.text = "Anna".into();
+    app.apply_collection_search();
+    wait_for_tasks(&mut app);
+    assert_eq!(app.applied.text, "Anna");
+    // Getippt, aber nicht gesucht: der Suchtext bleibt beim Filtern außen vor.
+    app.filters.text = "Bert".into();
+    app.filters.oldest = true;
+    app.apply_filter_dialog();
+    assert_eq!(tasks_of(&app, "search"), 1);
+    // Eine Neuanfrage im Hintergrund (z. B. nach einem Lauf) verliert die Änderung nicht.
+    app.requery_collection();
+    wait_for_tasks(&mut app);
+    assert!(app.applied.oldest);
+    assert_eq!(app.applied.text, "Anna");
+    // Ohne Unterschied und mit unvollständigem Kriterium wird nichts gelesen.
+    app.apply_filter_dialog();
+    app.filters.rules.push(Rule {
+        field: "camera".into(),
+        operator: "contains".into(),
+        value: String::new(),
+    });
+    app.apply_filter_dialog();
+    assert_eq!(tasks_of(&app, "search"), 0);
+    app.filters.rules[0].value = "Canon".into();
+    app.apply_filter_dialog();
+    wait_for_tasks(&mut app);
+    assert_eq!(app.applied.rules.len(), 1);
+    // „Suchen“ übernimmt den getippten Text samt Kriterien.
+    app.apply_collection_search();
+    wait_for_tasks(&mut app);
+    assert_eq!(app.applied.text, "Bert");
+    assert!(app.applied.oldest && app.applied.rules.len() == 1);
+    Ok(())
+}

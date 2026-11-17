@@ -133,12 +133,8 @@ impl PhotoApp {
             if ui.add(search_button).clicked() || submit {
                 self.apply_collection_search();
             }
-            let mut draft = self.filters.clone();
-            draft.page = self.applied.page;
-            draft.folder = self.applied.folder.clone();
-            let filter_label = if draft != self.applied {
-                "Filter · Entwurf"
-            } else if Self::has_advanced_filters(&self.applied) {
+            // Filter wirken sofort; die Beschriftung zeigt nur, ob welche aktiv sind.
+            let filter_label = if Self::has_advanced_filters(&self.applied) {
                 "Filter · aktiv"
             } else {
                 "Filter …"
@@ -160,14 +156,42 @@ impl PhotoApp {
         criteria != Search::default()
     }
 
-    fn apply_collection_search(&mut self) {
-        self.filters.folder = self.applied.folder.clone();
+    /// Suchtext aus der Suchzeile („Suchen“, Enter) samt den Kriterien des Filterdialogs.
+    pub(super) fn apply_collection_search(&mut self) {
+        let mut query = self.filter_query();
+        query.text.clone_from(&self.filters.text);
+        self.filters.folder.clone_from(&query.folder);
         self.filters.page = 0;
-        self.refresh_collection();
+        self.query_collection(query);
+    }
+
+    /// Anfrage aus den Kriterien des Filterdialogs. Suchtext und Ordner stammen aus der
+    /// zuletzt angefragten Suche: der Suchtext gilt erst mit „Suchen“. Metadatenkriterien ohne
+    /// Wert sind noch unvollständig und zählen nicht.
+    pub(super) fn filter_query(&self) -> Search {
+        let mut query = self.filters.clone();
+        query.text.clone_from(&self.queried.text);
+        query.folder.clone_from(&self.queried.folder);
+        query.page = 0;
+        query.rules.retain(|rule| {
+            matches!(rule.operator.as_str(), "present" | "empty") || !rule.value.trim().is_empty()
+        });
+        query
+    }
+
+    /// Übernimmt geänderte Kriterien des Filterdialogs sofort (Suche auf dem Worker). Ohne
+    /// Unterschied zur zuletzt angefragten Suche wird nichts gelesen.
+    pub(super) fn apply_filter_dialog(&mut self) {
+        let query = self.filter_query();
+        let mut current = self.queried.clone();
+        current.page = 0;
+        if query != current {
+            self.query_collection(query);
+        }
     }
 
     pub(super) fn navigate_collection(&mut self, page: usize, folder: Option<String>) {
-        let mut filters = self.applied.clone();
+        let mut filters = self.queried.clone();
         filters.page = page;
         filters.folder = folder;
         self.query_collection(filters);
@@ -209,16 +233,11 @@ impl PhotoApp {
                 });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                if dialog == CollectionDialog::Filters {
-                    if theme::primary(ui, "Filter anwenden", true) {
-                        self.apply_collection_search();
-                        self.collection_dialog = None;
-                    }
-                    if ui.button("Filter zurücksetzen").clicked() {
-                        self.filters = Search::default();
-                        self.apply_collection_search();
-                        self.collection_dialog = None;
-                    }
+                if dialog == CollectionDialog::Filters && ui.button("Filter zurücksetzen").clicked()
+                {
+                    self.filters = Search::default();
+                    self.apply_collection_search();
+                    self.collection_dialog = None;
                 }
                 if ui.button("Schließen").clicked() {
                     self.collection_dialog = None;
@@ -227,6 +246,10 @@ impl PhotoApp {
         });
         if response.should_close() {
             self.collection_dialog = None;
+        }
+        if dialog == CollectionDialog::Filters && self.collection_dialog.is_none() {
+            // Ein Datum oder Wert, der beim Schließen noch im Feld stand, gilt ebenfalls.
+            self.apply_filter_dialog();
         }
     }
 
@@ -321,7 +344,10 @@ impl PhotoApp {
             });
         });
     }
+    /// Kriterien des Filterdialogs. Jede Änderung gilt sofort; Textfelder (Datum, Werte)
+    /// gelten bei Fokusverlust oder Enter, nicht bei jedem Tastendruck.
     fn search_builder(&mut self, ui: &mut egui::Ui) {
+        let mut changed = false;
         ui.label(RichText::new("Aufnahmedatum").strong());
         ui.horizontal_wrapped(|ui| {
             for (label, date) in [
@@ -329,13 +355,17 @@ impl PhotoApp {
                 ("Bis", &mut self.filters.end),
             ] {
                 ui.label(label);
-                ui.add(
-                    egui::TextEdit::singleline(date)
-                        .hint_text("JJJJ-MM-TT")
-                        .desired_width(110.0),
-                );
+                changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(date)
+                            .hint_text("JJJJ-MM-TT")
+                            .desired_width(110.0),
+                    )
+                    .lost_focus();
             }
-            ui.checkbox(&mut self.filters.oldest, "Älteste zuerst");
+            changed |= ui
+                .checkbox(&mut self.filters.oldest, "Älteste zuerst")
+                .changed();
         });
         ui.horizontal_wrapped(|ui| {
             for (month, label) in [
@@ -347,6 +377,7 @@ impl PhotoApp {
                 let number = month as u32 + 1;
                 let mut checked = self.filters.months.contains(&number);
                 if ui.checkbox(&mut checked, label).changed() {
+                    changed = true;
                     if checked {
                         self.filters.months.push(number);
                     } else {
@@ -376,6 +407,7 @@ impl PhotoApp {
                     .show(ui, &mut added);
                 if let Some(person) = added {
                     group.push(person);
+                    changed = true;
                 }
                 let mut remove = None;
                 for &id in group.iter() {
@@ -391,18 +423,23 @@ impl PhotoApp {
                 }
                 if let Some(id) = remove {
                     group.retain(|person| *person != id);
+                    changed = true;
                 }
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(
-                &mut self.filters.only_people,
-                "Nur diese Personen · kein weiteres erkanntes Gesicht",
-            );
-            ui.checkbox(
-                &mut self.filters.suggestions,
-                "Unbestätigte Vorschläge einbeziehen",
-            );
+            changed |= ui
+                .checkbox(
+                    &mut self.filters.only_people,
+                    "Nur diese Personen · kein weiteres erkanntes Gesicht",
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut self.filters.suggestions,
+                    "Unbestätigte Vorschläge einbeziehen",
+                )
+                .changed();
             egui::ComboBox::from_id_salt("face-state")
                 .selected_text(face_label(&self.filters.face_state))
                 .show_ui(ui, |ui| {
@@ -413,7 +450,9 @@ impl PhotoApp {
                         ("unknown", "Unbekannte Gesichter"),
                         ("unanalysed", "Noch nicht analysiert"),
                     ] {
-                        ui.selectable_value(&mut self.filters.face_state, value.into(), label);
+                        changed |= ui
+                            .selectable_value(&mut self.filters.face_state, value.into(), label)
+                            .changed();
                     }
                 });
         });
@@ -431,7 +470,9 @@ impl PhotoApp {
                     .selected_text(field_label)
                     .show_ui(ui, |ui| {
                         for (value, label) in metadata::FIELDS {
-                            ui.selectable_value(&mut rule.field, (*value).into(), *label);
+                            changed |= ui
+                                .selectable_value(&mut rule.field, (*value).into(), *label)
+                                .changed();
                         }
                     });
                 let face_count = rule.field == "face_count";
@@ -456,12 +497,16 @@ impl PhotoApp {
                                     (true, "empty") => "Analyse fehlt",
                                     _ => label,
                                 };
-                                ui.selectable_value(&mut rule.operator, value.into(), label);
+                                changed |= ui
+                                    .selectable_value(&mut rule.operator, value.into(), label)
+                                    .changed();
                             }
                         }
                     });
                 if !matches!(rule.operator.as_str(), "present" | "empty") {
-                    ui.add(egui::TextEdit::singleline(&mut rule.value).desired_width(130.0));
+                    changed |= ui
+                        .add(egui::TextEdit::singleline(&mut rule.value).desired_width(130.0))
+                        .lost_focus();
                 }
                 if ui.small_button("Entfernen").clicked() {
                     remove = Some(index);
@@ -470,6 +515,7 @@ impl PhotoApp {
         }
         if let Some(index) = remove {
             self.filters.rules.remove(index);
+            changed = true;
         }
         ui.horizontal_wrapped(|ui| {
             if ui.button("+ Kriterium").clicked() {
@@ -479,11 +525,16 @@ impl PhotoApp {
                     value: String::new(),
                 });
             }
-            ui.checkbox(
-                &mut self.filters.any_rule,
-                "Mindestens ein Metadatenkriterium erfüllt",
-            );
+            changed |= ui
+                .checkbox(
+                    &mut self.filters.any_rule,
+                    "Mindestens ein Metadatenkriterium erfüllt",
+                )
+                .changed();
         });
+        if changed {
+            self.apply_filter_dialog();
+        }
     }
     fn photo_gallery(&mut self, ui: &mut egui::Ui) {
         if self.page.photos.is_empty() {
@@ -754,6 +805,7 @@ impl PhotoApp {
                         if !self.filters.rules.contains(&rule) {
                             self.filters.rules.push(rule);
                         }
+                        self.apply_filter_dialog();
                         self.collection_dialog = Some(CollectionDialog::Filters);
                     }
                 } else {
@@ -810,6 +862,7 @@ impl PhotoApp {
                                 if !self.filters.people_all.contains(&id) {
                                     self.filters.people_all.push(id);
                                 }
+                                self.apply_filter_dialog();
                                 self.collection_dialog = Some(CollectionDialog::Filters);
                                 ui.close();
                             }
