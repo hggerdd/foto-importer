@@ -183,6 +183,11 @@ fn face_info(face: &TimeFace, computed: &Computed) -> String {
     )
 }
 
+/// Anzahl Kacheln je Zeile für die verfügbare Breite (mindestens eine).
+fn tile_columns(width: f32, spacing: f32) -> usize {
+    (((width + spacing) / (TILE + spacing)).floor() as usize).max(1)
+}
+
 /// Gestrichelter Rand für Gesichter mit unsicherem Datum.
 fn dashed_border(ui: &egui::Ui, rect: egui::Rect) {
     let stroke = egui::Stroke::new(1.5_f32, theme::WARM);
@@ -801,9 +806,19 @@ impl PhotoApp {
         let mut focus_next = None;
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_max_width((ui.available_width() - 400.0).max(260.0));
-                ui.horizontal_wrapped(|ui| {
-                    for member in &section.members {
+                // Spalte füllt den freien Platz (neben der großen Vorschau, falls offen);
+                // die Kacheln werden zeilenweise selbst umgebrochen, weil verschachtelte
+                // Spalten in `horizontal_wrapped` nicht umbrechen.
+                let width = if focus.is_some() {
+                    (ui.available_width() - 400.0).max(260.0)
+                } else {
+                    ui.available_width()
+                };
+                ui.set_width(width);
+                let columns = tile_columns(width, ui.spacing().item_spacing.x);
+                for row in section.members.chunks(columns) {
+                    ui.horizontal_top(|ui| {
+                    for member in row {
                         let item = &computed.items[*member];
                         let face = item.face.clone();
                         ui.vertical(|ui| {
@@ -856,7 +871,8 @@ impl PhotoApp {
                             });
                         });
                     }
-                });
+                    });
+                }
             });
             if let Some(face_id) = focus
                 && let Some(item) = computed.items.iter().find(|i| i.face.id == face_id)
@@ -1144,6 +1160,14 @@ impl PhotoApp {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn tile_columns_follow_the_available_width() {
+        assert_eq!(tile_columns(50.0, 8.0), 1);
+        assert_eq!(tile_columns(TILE * 3.0 + 16.0, 8.0), 3);
+        assert_eq!(tile_columns(TILE * 3.0 + 15.0, 8.0), 2);
+        assert_eq!(tile_columns(1200.0, 8.0), 10);
+    }
 
     fn settle(app: &mut PhotoApp, ctx: &egui::Context) {
         for _ in 0..3000 {
