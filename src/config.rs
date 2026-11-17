@@ -115,6 +115,9 @@ pub struct Settings {
     pub timeline_min_px: u32,
     pub window_size: [f32; 2],
     pub dng_update: crate::core::dng_updates::UpdateCache,
+    /// Sammlungsordner, in die importiert wurde und deren Index die neuen Dateien noch nicht
+    /// kennt. Bleibt über das Programmende hinaus erhalten (ADR Import).
+    pub index_pending: Vec<String>,
 }
 
 impl Default for Settings {
@@ -142,6 +145,7 @@ impl Default for Settings {
             timeline_min_px: TIMELINE_MIN_PX.1,
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
+            index_pending: Vec::new(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
             model_dir: resources.join("models").to_string_lossy().into_owned(),

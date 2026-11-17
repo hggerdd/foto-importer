@@ -20,7 +20,9 @@
   Hintergrund lesen“): Portionen zu 512 Dateien in Blöcken zu 32, damit der Haltepunkt
   binnen etwa einer Sekunde greift. Sie haben wie `maintenance` niedrige Priorität
   (zählen nicht als belegt, jeder Nutzerschreibauftrag stoppt sie, danach setzen sie fort)
-  und sind pausierbar. Höchstens ein Hintergrundschreiber je Sammlung. Dateien mit Fehler
+  und sind pausierbar. Ebenso `index-new`, die Aufnahme importierter Dateien
+  (siehe [Import](import.md)); solange sie aussteht, starten `metadata-bg` und `maintenance`
+  nicht. Höchstens ein Hintergrundschreiber je Sammlung. Dateien mit Fehler
   werden nicht wiederholt; fehlt ExifTool oder scheitert der Lauf, endet er für die Sitzung
   mit einem Hinweis. Der ausdrückliche Lauf „Metadaten lesen“ nutzt weiter Blöcke zu 128.
 - **Ein Schreiber je Sammlung:** Schreibaufträge der App werden je Sammlung nacheinander

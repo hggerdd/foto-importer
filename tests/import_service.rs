@@ -82,6 +82,47 @@ fn missing_known_photo_is_eligible_for_reimport() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
+fn import_only_copies_and_the_index_follows_separately() -> anyhow::Result<()> {
+    let card = tempfile::tempdir()?;
+    let archive = tempfile::tempdir()?;
+    let file = source(card.path())?;
+    drop(Collection::open(archive.path(), true)?);
+    let report = import_service::execute(
+        std::slice::from_ref(&file),
+        archive.path(),
+        "Neu",
+        None,
+        false,
+        "exiftool",
+        &Control::default(),
+    )?;
+    assert_eq!(report.copied.len(), 1);
+    assert_eq!(report.sources, [file.path]);
+    // Der Import selbst trägt nichts in die Sammlung ein.
+    assert_eq!(Collection::open(archive.path(), false)?.status()?.files, 0);
+    assert!(import_service::index_new_files(
+        archive.path(),
+        &Control::default()
+    )?);
+    assert_eq!(Collection::open(archive.path(), false)?.status()?.files, 1);
+    Ok(())
+}
+#[test]
+fn indexing_new_files_never_creates_a_collection() -> anyhow::Result<()> {
+    let folder = tempfile::tempdir()?;
+    std::fs::write(folder.path().join("a.jpg"), b"x")?;
+    assert!(!import_service::index_new_files(
+        folder.path(),
+        &Control::default()
+    )?);
+    assert!(!folder.path().join(".myfotomanager").exists());
+    // Ein nicht erreichbarer Ordner ist ein Fehler, damit der Eintrag bleibt.
+    assert!(
+        import_service::index_new_files(&folder.path().join("fehlt"), &Control::default()).is_err()
+    );
+    Ok(())
+}
+#[test]
 fn unreadable_exiftool_stops_import_before_any_copy() -> anyhow::Result<()> {
     let card = tempfile::tempdir()?;
     let archive = tempfile::tempdir()?;

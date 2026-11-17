@@ -2176,3 +2176,170 @@ fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Res
     assert_eq!(app.new_collection_prompt.as_deref(), Some(parent.as_str()));
     Ok(())
 }
+
+fn indexed_files(root: &Path) -> anyhow::Result<usize> {
+    Ok(Collection::open(root, false)?.status()?.files)
+}
+
+#[test]
+fn imports_only_copy_and_the_collection_follows_after_the_last_import() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    drop(Collection::open(target.path(), true)?);
+    let mut app = queue_app(source.path(), target.path())?;
+    queue_days(&mut app, &["2026-11-01"], "Erster");
+    queue_days(&mut app, &["2026-11-02"], "Zweiter");
+    let mut checked_between = false;
+    for _ in 0..3000 {
+        app.poll(&egui::Context::default());
+        if tasks_of(&app, "index-new") > 0 {
+            assert_eq!(app.imports_pending(), 0, "Aufnahme erst nach allen Imports");
+        }
+        if app.imports[0].state == import_queue::BatchState::Done
+            && app.imports_pending() > 0
+            && !checked_between
+        {
+            // Der erste Import ist fertig: das Ziel ist gemerkt, der Index noch unverändert.
+            checked_between = true;
+            assert_eq!(app.settings.index_pending.len(), 1);
+            assert_eq!(indexed_files(target.path())?, 0);
+            assert!(app.notice.as_ref().is_some_and(|n| {
+                n.text
+                    .contains("wird nach den Imports in die Sammlung aufgenommen")
+            }));
+        }
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(checked_between);
+    use import_queue::BatchState::*;
+    assert_eq!(batch_states(&app), [Done, Done]);
+    assert!(app.settings.index_pending.is_empty());
+    assert!(Settings::load().index_pending.is_empty(), "gespeichert");
+    assert_eq!(indexed_files(target.path())?, 4);
+    Ok(())
+}
+
+#[test]
+fn a_pending_index_update_runs_on_the_next_start_and_is_cleared() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    std::fs::write(root.path().join("a.jpg"), b"x")?;
+    let mut settings = Settings::default();
+    settings.collection = root.path().to_string_lossy().into_owned();
+    settings.index_pending = vec![settings.collection.clone()];
+    settings.save()?;
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = PhotoApp::with_settings(&creation, Settings::load());
+    wait_for_tasks(&mut app);
+    assert!(app.settings.index_pending.is_empty());
+    assert!(Settings::load().index_pending.is_empty());
+    assert_eq!(indexed_files(root.path())?, 1);
+    // Die offene Sammlung wurde danach neu gelesen.
+    assert_eq!(app.status.files, 1);
+    Ok(())
+}
+
+#[test]
+fn a_pending_folder_without_collection_is_dropped_and_never_created() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut app = queue_app(root.path(), root.path())?;
+    app.settings.index_pending = vec![root.path().to_string_lossy().into_owned()];
+    wait_for_tasks(&mut app);
+    app.start_index_update();
+    wait_for_tasks(&mut app);
+    assert!(app.settings.index_pending.is_empty());
+    assert!(!root.path().join(".myfotomanager").exists());
+    Ok(())
+}
+
+#[test]
+fn a_failing_index_update_is_reported_once_and_kept() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let missing = root.path().join("fehlt").to_string_lossy().into_owned();
+    let mut app = queue_app(root.path(), root.path())?;
+    app.settings.index_pending = vec![missing.clone()];
+    app.start_index_update();
+    wait_for_tasks(&mut app);
+    assert!(app.notice.as_ref().is_some_and(|n| n.error));
+    assert_eq!(app.settings.index_pending, [missing]);
+    // Kein neuer Versuch in einer Schleife.
+    app.start_index_update();
+    assert_eq!(tasks_of(&app, "index-new"), 0);
+    assert!(!app.index_due());
+    Ok(())
+}
+
+#[test]
+fn a_new_import_stops_the_index_update_which_resumes_afterwards() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    drop(Collection::open(target.path(), true)?);
+    std::fs::write(target.path().join("alt.jpg"), b"alt")?;
+    let mut app = queue_app(source.path(), target.path())?;
+    app.settings.index_pending = vec![app.settings.target.clone()];
+    app.start_index_update();
+    assert_eq!(tasks_of(&app, "index-new"), 1);
+    // Niedrige Priorität: belegt keine Knöpfe.
+    assert!(!app.busy());
+    queue_days(&mut app, &["2026-11-01"], "Neu");
+    assert!(
+        app.tasks
+            .iter()
+            .any(|t| t.kind == "index-new" && t.task.control.cancel.load(Ordering::Relaxed)),
+        "Import geht vor"
+    );
+    assert_eq!(batch_states(&app), [import_queue::BatchState::Running]);
+    wait_for_tasks(&mut app);
+    assert_eq!(batch_states(&app), [import_queue::BatchState::Done]);
+    assert!(app.settings.index_pending.is_empty());
+    assert!(app.index_failed.is_empty());
+    assert_eq!(indexed_files(target.path())?, 3);
+    Ok(())
+}
+
+#[test]
+fn files_copied_earlier_in_the_session_are_skipped_before_the_index_knows_them()
+-> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    drop(Collection::open(target.path(), true)?);
+    let mut app = queue_app(source.path(), target.path())?;
+    // Ein früherer Import dieser Sitzung hat Tag 1 kopiert; der Index kennt es noch nicht.
+    let copied: Vec<PathBuf> = app
+        .scan
+        .files
+        .iter()
+        .filter(|f| f.day == "2026-11-01")
+        .map(|f| f.path.clone())
+        .collect();
+    app.imports.push(import_queue::ImportBatch {
+        id: 1,
+        source: app.settings.source.clone(),
+        days: ["2026-11-01".to_owned()].into(),
+        files: Vec::new(),
+        target: target.path().to_path_buf(),
+        name: "Erster".into(),
+        converter: None,
+        skip: false,
+        exiftool: String::new(),
+        state: import_queue::BatchState::Done,
+        copied,
+    });
+    app.import_serial = 1;
+    assert_eq!(indexed_files(target.path())?, 0);
+    app.settings.skip_imported = true;
+    queue_days(&mut app, &["2026-11-01"], "Nochmal");
+    wait_for_tasks(&mut app);
+    use import_queue::BatchState::*;
+    assert_eq!(batch_states(&app), [Done, Done]);
+    assert!(!target.path().join("Nochmal").exists());
+    assert!(
+        app.history
+            .iter()
+            .any(|line| line.contains("Import „Nochmal“") && line.contains("2 übersprungen"))
+    );
+    Ok(())
+}
