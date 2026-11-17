@@ -43,6 +43,78 @@ pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     Ok(out)
 }
 
+/// Last result of [`directories`] for one collection, kept on the local disk next to the
+/// settings. On a slow (USB) disk the cold query takes many seconds; the cached overview is
+/// shown immediately and replaced when the fresh one arrives. Never written into the collection.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Cached {
+    /// Normalized collection path; a cache for another collection is ignored.
+    pub collection: String,
+    pub photos: usize,
+    pub files: usize,
+    /// Seconds since the Unix epoch when the overview was read.
+    pub saved: u64,
+    pub directories: Vec<(String, usize)>,
+}
+
+/// Comparable form of a collection path: absolute, forward slashes, no trailing slash, lower
+/// case (Windows paths are case-insensitive). Does not touch the disk.
+fn normalized(root: &std::path::Path) -> String {
+    let absolute = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    absolute
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+/// `<settings dir>/cache/folders-<hash>.json` for the collection at `root`.
+pub fn cache_path(root: &std::path::Path) -> std::path::PathBuf {
+    let hash = blake3::hash(normalized(root).as_bytes()).to_hex();
+    crate::config::Settings::path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default()
+        .join("cache")
+        .join(format!("folders-{}.json", &hash[..16]))
+}
+
+/// Cached overview of the collection at `root`; missing, unreadable, corrupt or foreign caches
+/// count as absent.
+pub fn read_cache(root: &std::path::Path) -> Option<Cached> {
+    let bytes = std::fs::read(cache_path(root)).ok()?;
+    let cached: Cached = serde_json::from_slice(&bytes).ok()?;
+    (cached.collection == normalized(root)).then_some(cached)
+}
+
+/// Stores a freshly read overview at `path` (from [`cache_path`], taken on the UI thread)
+/// atomically, so a reader never sees half a file.
+pub fn write_cache(
+    path: &std::path::Path,
+    root: &std::path::Path,
+    photos: usize,
+    files: usize,
+    directories: &[(String, usize)],
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Cache-Pfad ungültig"))?;
+    std::fs::create_dir_all(parent)?;
+    let cached = Cached {
+        collection: normalized(root),
+        photos,
+        files,
+        saved: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+        directories: directories.to_vec(),
+    };
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer(&mut file, &cached)?;
+    file.persist(path)?;
+    Ok(())
+}
+
 /// EXPLAIN QUERY PLAN lines of the directory query on the covering index (regression test).
 pub fn plan(collection: &Collection) -> Result<Vec<String>> {
     let mut statement = collection.db.prepare(
@@ -191,6 +263,8 @@ pub struct FolderTree {
     stale: bool,
     loading: bool,
     failed: bool,
+    /// The shown tree came from the local cache and has not been confirmed by a read yet.
+    cached: bool,
 }
 
 impl FolderTree {
@@ -244,10 +318,36 @@ impl FolderTree {
         self.loading
     }
 
+    /// A read finished. Its result is shown even if the contents changed meanwhile (nothing
+    /// newer exists); a change marked by [`reset`](Self::reset) during the read keeps the tree
+    /// stale, so exactly one follow-up read starts.
     pub fn apply(&mut self, directories: &[(String, usize)]) {
         self.nodes = Some(build(directories));
         self.loading = false;
         self.failed = false;
+        self.cached = false;
+    }
+
+    /// Shows the cached overview until the running read replaces it. Only fills an empty tree.
+    pub fn show_cached(&mut self, directories: &[(String, usize)]) {
+        if self.nodes.is_none() {
+            self.nodes = Some(build(directories));
+            self.cached = true;
+        }
+    }
+
+    pub fn has_nodes(&self) -> bool {
+        self.nodes.is_some()
+    }
+
+    /// A tree is shown and a read to refresh it is running.
+    pub fn is_refreshing(&self) -> bool {
+        self.nodes.is_some() && self.loading
+    }
+
+    /// The shown tree is the cached one, not yet confirmed by a read.
+    pub fn is_cached(&self) -> bool {
+        self.cached
     }
 
     /// A worker failed: do not retry in a loop.
@@ -367,6 +467,58 @@ mod tests {
             3,
             "old tree stays until the new one arrives"
         );
+    }
+
+    #[test]
+    fn changes_during_a_read_keep_its_result_and_ask_for_exactly_one_more() {
+        let mut tree = FolderTree::default();
+        tree.show_cached(&dirs(&[("alt", 1)]));
+        assert!(tree.is_cached() && tree.needs_load());
+        tree.begin();
+        assert!(tree.is_refreshing());
+        tree.reset();
+        tree.reset();
+        assert!(!tree.needs_load(), "the running read is not replaced");
+        tree.apply(&dirs(&[("neu", 1)]));
+        assert_eq!(names(&tree), ["neu"]);
+        assert!(!tree.is_cached() && tree.needs_load());
+        tree.begin();
+        tree.apply(&dirs(&[("neu", 2)]));
+        assert!(!tree.needs_load());
+    }
+
+    #[test]
+    fn the_cache_roundtrips_and_ignores_corrupt_or_foreign_files() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        assert_eq!(read_cache(root.path()), None);
+        write_cache(
+            &cache_path(root.path()),
+            root.path(),
+            5,
+            7,
+            &dirs(&[("a", 2), ("a/b", 3)]),
+        )?;
+        let cached = read_cache(root.path()).expect("cache written");
+        assert_eq!((cached.photos, cached.files), (5, 7));
+        assert_eq!(cached.directories, dirs(&[("a", 2), ("a/b", 3)]));
+        assert!(
+            cache_path(root.path()).starts_with(
+                crate::config::Settings::path()
+                    .parent()
+                    .expect("settings dir")
+            ),
+            "the cache lives next to the settings, never in the collection"
+        );
+        let other = tempfile::tempdir()?;
+        std::fs::copy(cache_path(root.path()), cache_path(other.path()))?;
+        assert_eq!(
+            read_cache(other.path()),
+            None,
+            "cache of another collection"
+        );
+        std::fs::write(cache_path(root.path()), b"{ kaputt")?;
+        assert_eq!(read_cache(root.path()), None);
+        Ok(())
     }
 
     #[test]

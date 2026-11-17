@@ -33,7 +33,18 @@
 - **Ordnerbaum:** Einklappbares Seitenfeld, wird in einem Workerauftrag vollständig gelesen
   und im Speicher gehalten; Auf- und Zuklappen greift nicht auf die Datenbank zu. Ein Klick
   setzt den Ordnerfilter. Zählung und Sortierung folgen denselben Varianten- und Präfixregeln
-  wie die Suche (Test vergleicht beide).
+  wie die Suche (Test vergleicht beide). Ändert sich der Bestand (Fotos, Dateien) während
+  eines Lesens, wird es **nicht abgebrochen**: das Ergebnis wird gezeigt und danach genau
+  einmal nachgelesen. Nur Antworten für eine andere Sammlung werden verworfen.
+- **Ordnerbaum-Cache:** Das letzte Ergebnis je Sammlung liegt als JSON im
+  Einstellungsordner (`cache/folders-<Hash des normalisierten Sammlungspfads>.json`, mit
+  Pfad, Foto- und Dateizahl, Zeitpunkt), nie in der Sammlung. Ist der Baum leer, wird der
+  Cache beim Start des Lesens im UI-Thread geladen (kleine Datei auf der lokalen Platte) und
+  sofort gezeigt; der Kopf zeigt „aktualisiert …“, bis das Lesen ihn ersetzt. Der Worker
+  schreibt den Cache nach jedem erfolgreichen Lesen. Fehlender, defekter oder fremder Cache
+  zählt als nicht vorhanden. Die Abfrage selbst bleibt die über `ix_files_dir_cover`
+  (Messung 2026-11-17, `E:\Bilder`, USB-Festplatte, 98 082 Dateien: kalt 16,6 s, warm
+  0,02 s; die Variante nur über `metadata_photos` kalt 33,7 s).
 - **Vorschauen:** Dekodierung nur auf Workern (zwei bis vier Threads), nur für sichtbare
   Kacheln. Der Texturcache ist nach Wurzel, Pfad, Orientierung, Ausschnitt und Kantenlänge
   verschlüsselt, begrenzt auf 192 MiB und 512 Einträge, und räumt nichts, was im aktuellen

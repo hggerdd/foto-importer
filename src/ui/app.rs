@@ -141,7 +141,8 @@ enum Pick {
 enum Outcome {
     Scan(u64, Scan),
     Search(u64, CollectionStatus, SearchPage, Search),
-    Folders(u64, Vec<(String, usize)>),
+    /// Ordnerübersicht eines Lesens; ein Fehler wird mitgeliefert, damit er dem Lesen zuzuordnen ist.
+    Folders(u64, std::result::Result<Vec<(String, usize)>, String>),
     Faces(u64, usize, FacePage),
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
@@ -265,8 +266,10 @@ pub struct PhotoApp {
     queried: Search,
     query_revision: u64,
     folder_tree: FolderTree,
-    /// Revisionsprüfung für Ordnerbaum-Antworten; Wechsel der Sammlung oder ihres Inhalts erhöht sie.
+    /// Nummer des zuletzt gestarteten Ordnerbaum-Lesens (jeder Start erhöht sie).
     folder_revision: u64,
+    /// Lesen, dessen Antwort der aktuelle Baum erwartet; ein Sammlungswechsel verwirft es.
+    folder_pending: Option<u64>,
     /// Sammlung und Bestand, für die der Baum geladen wurde.
     folder_key: (String, usize, usize),
     /// Zuletzt im Baum aufgeklappter Ordnerfilter.
@@ -403,6 +406,7 @@ impl PhotoApp {
             query_revision: 0,
             folder_tree: FolderTree::default(),
             folder_revision: 0,
+            folder_pending: None,
             folder_key: Default::default(),
             folder_revealed: None,
             page: SearchPage::default(),
@@ -920,7 +924,7 @@ impl PhotoApp {
         self.face_revision += 1;
         self.detail_revision += 1;
         self.folder_tree = FolderTree::default();
-        self.folder_revision += 1;
+        self.folder_pending = None;
         self.folder_revealed = None;
         self.filters = Search::default();
         self.applied = Search::default();
@@ -1290,8 +1294,13 @@ impl PhotoApp {
                 }
                 Ok(Outcome::Time(outcome)) => self.accept_time(outcome),
                 Err(_) if running.kind == "folders" => {
-                    // Never retry a failing or cancelled level in a loop; "Aktualisieren" retries.
-                    self.folder_tree.fail();
+                    // Der Worker liefert Fehler als `Outcome::Folders`; hier landet nur ein
+                    // unerwartetes Ende. Nur das erwartete Lesen der aktuellen Sammlung zählt.
+                    if running.collection == self.settings.collection
+                        && self.folder_pending.take().is_some()
+                    {
+                        self.folder_tree.fail();
+                    }
                 }
                 Err(e) => {
                     // Misslungene Benennung: die Gesichter erscheinen beim Neulesen wieder.
@@ -1379,8 +1388,18 @@ impl PhotoApp {
                         self.detail_revision += 1;
                     }
                 }
-                Ok(Outcome::Folders(revision, levels)) if revision == self.folder_revision => {
-                    self.folder_tree.apply(&levels);
+                Ok(Outcome::Folders(revision, result))
+                    if self.folder_pending == Some(revision)
+                        && running.collection == self.settings.collection =>
+                {
+                    // Auch wenn sich der Bestand inzwischen geändert hat: Neueres gibt es nicht.
+                    // Der Baum bleibt dann veraltet und liest genau einmal nach.
+                    self.folder_pending = None;
+                    match result {
+                        Ok(levels) => self.folder_tree.apply(&levels),
+                        // Never retry a failing or cancelled read in a loop; "↻" retries.
+                        Err(_) => self.folder_tree.fail(),
+                    }
                 }
                 Ok(Outcome::Faces(revision, index, page)) if revision == self.face_revision => {
                     if self.view != View::Settings
