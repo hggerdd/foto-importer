@@ -137,60 +137,6 @@ fn a_content_change_during_a_folder_read_does_not_restart_it() -> anyhow::Result
 }
 
 #[test]
-fn a_fresh_app_shows_the_cached_folder_tree_before_the_read_arrives() -> anyhow::Result<()> {
-    let ctx = egui::Context::default();
-    let (root, mut app) = folder_app(&ctx, &["2024", "2025"])?;
-    settle_folders(&mut app, &ctx);
-    assert_eq!(folder_names(&app), ["2024", "2025"]);
-    let cached = crate::core::folders::read_cache(root.path()).expect("written after the read");
-    assert_eq!((cached.photos, cached.files), (2, 2));
-    // A new folder in the collection: the cache still shows the old state first.
-    {
-        let c = Collection::open(root.path(), true)?;
-        c.db.execute("INSERT INTO photos(id,status) VALUES(3,'present')", [])?;
-        c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(3,'2026/3.jpg','2026/3.jpg','2026','3.jpg','3','jpg',1,1,3,'present')", [])?;
-    }
-    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
-    let mut fresh = PhotoApp::with_settings(&creation, Settings::default());
-    fresh.settings.collection = root.path().to_string_lossy().into_owned();
-    fresh.status.files = 3;
-    fresh.status.photos = 3;
-    fresh.sync_folder_tree();
-    assert_eq!(
-        folder_names(&fresh),
-        ["2024", "2025"],
-        "cached tree, no query result yet"
-    );
-    assert!(fresh.folder_tree.is_refreshing() && fresh.folder_tree.is_cached());
-    settle_folders(&mut fresh, &ctx);
-    assert_eq!(folder_names(&fresh), ["2024", "2025", "2026"]);
-    assert!(!fresh.folder_tree.is_cached());
-    assert_eq!(
-        crate::core::folders::read_cache(root.path()).map(|c| c.files),
-        Some(3)
-    );
-    Ok(())
-}
-
-#[test]
-fn a_corrupt_folder_cache_is_ignored() -> anyhow::Result<()> {
-    let ctx = egui::Context::default();
-    let (root, mut app) = folder_app(&ctx, &["2024"])?;
-    let path = crate::core::folders::cache_path(root.path());
-    std::fs::create_dir_all(path.parent().expect("cache dir"))?;
-    std::fs::write(&path, b"\x00 kein json")?;
-    app.sync_folder_tree();
-    assert!(!app.folder_tree.has_nodes() && app.folder_tree.is_loading());
-    settle_folders(&mut app, &ctx);
-    assert_eq!(folder_names(&app), ["2024"]);
-    assert!(
-        crate::core::folders::read_cache(root.path()).is_some(),
-        "rewritten"
-    );
-    Ok(())
-}
-
-#[test]
 fn confirming_a_group_brings_its_successor_to_the_same_viewport_position() {
     let ctx = egui::Context::default();
     let creation = eframe::CreationContext::_new_kittest(ctx.clone());

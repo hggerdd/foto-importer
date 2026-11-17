@@ -57,25 +57,12 @@ impl PhotoApp {
             return;
         }
         let root = PathBuf::from(&self.settings.collection);
-        if !self.folder_tree.has_nodes() {
-            // A small JSON file next to the settings (local disk): cheap enough to read here.
-            if let Some(cached) = folders::read_cache(&root) {
-                self.folder_tree.show_cached(&cached.directories);
-            }
-        }
         self.folder_tree.begin();
         self.folder_revision += 1;
         let revision = self.folder_revision;
         self.folder_pending = Some(revision);
-        let (photos, files) = (self.status.photos, self.status.files);
-        let cache = folders::cache_path(&root);
         self.launch("Ordner lesen", false, "folders", move |control| {
             let result = read_directories(&root, &control).map_err(|e| format!("{e:#}"));
-            if let Ok(directories) = &result {
-                // Only the app's own config dir is written, never the collection; a failed
-                // write just means no cache next time.
-                let _ = folders::write_cache(&cache, &root, photos, files, directories);
-            }
             Ok(Outcome::Folders(revision, result))
         });
     }
@@ -105,14 +92,17 @@ impl PhotoApp {
                         {
                             self.folder_tree.reset();
                         }
-                        if self.folder_tree.is_refreshing() {
-                            let hint = if self.folder_tree.is_cached() {
-                                "Gespeicherter Stand; die Sammlung wird gelesen"
-                            } else {
-                                "Die Sammlung hat sich geändert; der Baum wird neu gelesen"
-                            };
+                        // Mit `folder_counts` ist das Lesen kurz; der Hinweis erscheint nur, wenn
+                        // es spürbar dauert (ältere, nur lesend geöffnete Sammlung ohne Tabelle).
+                        let slow = self.tasks.iter().any(|task| {
+                            task.kind == "folders"
+                                && task.task.started.elapsed() > Duration::from_millis(500)
+                        });
+                        if self.folder_tree.is_refreshing() && slow {
                             ui.label(RichText::new("aktualisiert …").small().color(theme::MUTED))
-                                .on_hover_text(hint);
+                                .on_hover_text(
+                                    "Die Sammlung hat sich geändert; der Baum wird neu gelesen",
+                                );
                             ui.spinner();
                         }
                     });

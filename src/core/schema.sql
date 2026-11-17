@@ -90,6 +90,8 @@ CREATE TABLE face_sources(photo_id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL)
 
 CREATE TABLE projection_revision(revision INTEGER NOT NULL);
 
+CREATE TABLE folder_counts(dir TEXT PRIMARY KEY,photos INTEGER NOT NULL) WITHOUT ROWID;
+
 CREATE INDEX ix_faces_photo ON faces(photo_id);
 
 CREATE INDEX ix_faces_person ON faces(person_id);
@@ -224,6 +226,12 @@ WHERE f.photo_id=(SELECT photo_id FROM files WHERE id=old.file_id) AND f.status=
 ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
 ;UPDATE projection_revision SET revision=revision+1; END;
+
+CREATE TRIGGER folder_counts_insert AFTER INSERT ON metadata_photos BEGIN INSERT INTO folder_counts VALUES(rtrim(rtrim(new.relpath,replace(new.relpath,'/','')),'/'),1) ON CONFLICT(dir) DO UPDATE SET photos=photos+1; END;
+
+CREATE TRIGGER folder_counts_delete AFTER DELETE ON metadata_photos BEGIN UPDATE folder_counts SET photos=photos-1 WHERE dir=rtrim(rtrim(old.relpath,replace(old.relpath,'/','')),'/'); DELETE FROM folder_counts WHERE dir=rtrim(rtrim(old.relpath,replace(old.relpath,'/','')),'/') AND photos<=0; END;
+
+CREATE TRIGGER folder_counts_update AFTER UPDATE OF relpath ON metadata_photos BEGIN UPDATE folder_counts SET photos=photos-1 WHERE dir=rtrim(rtrim(old.relpath,replace(old.relpath,'/','')),'/'); DELETE FROM folder_counts WHERE dir=rtrim(rtrim(old.relpath,replace(old.relpath,'/','')),'/') AND photos<=0; INSERT INTO folder_counts VALUES(rtrim(rtrim(new.relpath,replace(new.relpath,'/','')),'/'),1) ON CONFLICT(dir) DO UPDATE SET photos=photos+1; END;
 
 CREATE TRIGGER group_embedding_insert
             AFTER INSERT ON face_embeddings BEGIN

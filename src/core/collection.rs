@@ -91,6 +91,7 @@ impl Collection {
             if write {
                 db.execute_batch("PRAGMA journal_mode=WAL;")?;
                 super::migrations::ensure_indexes(&db)?;
+                super::migrations::ensure_folder_counts(&db)?;
                 // Neue Beziehungstypen sind nur Zeilen; ältere Sammlungen erhalten sie beim
                 // Öffnen mit Schreibrecht. Schreibgeschützt bleibt alles unverändert.
                 db.execute_batch(&super::relations::seed_sql())?;
