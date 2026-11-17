@@ -10,6 +10,13 @@
   Monate, Metadatenregeln (UND/ODER), Personen (alle, mindestens eine, keine, nur diese) und
   Gesichtszustand. XMP-Bewertung und -Farbmarkierung haben beim Anzeigen Vorrang. Neue
   Suchanfragen brechen veraltete SQL-Arbeit ab.
+- **Filter ohne Entwurf:** Jede Änderung im Filterdialog fragt die Sammlung sofort neu ab
+  (auf dem Worker); Datums- und Wertfelder bei Fokusverlust, Enter oder Schließen des
+  Dialogs. Es gibt keinen Anwenden-Knopf und keinen Zustand „Entwurf“; der Knopf zeigt
+  „Filter · aktiv“ oder „Filter …“. Metadatenkriterien ohne Wert zählen erst, wenn ein Wert
+  dasteht. Der Suchtext der Leiste gilt weiterhin erst mit „Suchen“ oder Enter; Filter
+  übernehmen den zuletzt gesuchten Text. Neuanfragen nach Bestandsänderungen wiederholen die
+  zuletzt angefragte Suche, damit eine noch laufende Filteränderung nicht verloren geht.
 - **Gesichter als Metadaten:** Gesichtsanzahl und bestätigte Personen stehen im
   Metadatenreiter und lassen sich als Suchkriterium übernehmen. Die Suchzeile findet
   bestätigte Personennamen. Ignorierte Gesichter zählen als anwesend; historische

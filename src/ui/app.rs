@@ -255,6 +255,8 @@ pub struct PhotoApp {
     folder_name: String,
     filters: Search,
     applied: Search,
+    /// Zuletzt angefragte Suche; `applied` folgt erst mit dem Ergebnis.
+    queried: Search,
     query_revision: u64,
     folder_tree: FolderTree,
     /// Revisionsprüfung für Ordnerbaum-Antworten; Wechsel der Sammlung oder ihres Inhalts erhöht sie.
@@ -374,6 +376,7 @@ impl PhotoApp {
             folder_name: String::new(),
             filters: Search::default(),
             applied: Search::default(),
+            queried: Search::default(),
             query_revision: 0,
             folder_tree: FolderTree::default(),
             folder_revision: 0,
@@ -737,6 +740,7 @@ impl PhotoApp {
         }
         self.query_revision += 1;
         let revision = self.query_revision;
+        self.queried = filters.clone();
         let root = PathBuf::from(&self.settings.collection);
         self.launch("Sammlung durchsuchen", false, "search", move |control| {
             let c = Collection::open(&root, false)?;
@@ -749,6 +753,11 @@ impl PhotoApp {
                 filters,
             ))
         });
+    }
+    /// Liest die zuletzt angefragte Suche neu, z. B. nach einer Änderung am Bestand. Eine noch
+    /// laufende Filteränderung geht dabei nicht verloren.
+    fn requery_collection(&mut self) {
+        self.query_collection(self.queried.clone());
     }
     /// Seite, die `refresh_faces` liest: unter „Personen“ die Personenseite der gewählten
     /// Ansicht, sonst der Reiter der Ansicht „Gesichter“.
@@ -768,7 +777,7 @@ impl PhotoApp {
         self.view = view;
         self.recognition_tools_open = false;
         match view {
-            View::Collection => self.query_collection(self.applied.clone()),
+            View::Collection => self.requery_collection(),
             View::Faces | View::People => self.refresh_faces(),
             _ => {}
         }
@@ -821,6 +830,7 @@ impl PhotoApp {
         self.folder_revealed = None;
         self.filters = Search::default();
         self.applied = Search::default();
+        self.queried = Search::default();
         self.page = SearchPage::default();
         self.status = CollectionStatus::default();
         self.selected_photo = None;
@@ -1151,7 +1161,7 @@ impl PhotoApp {
                         );
                     }
                     if running.collection == self.settings.collection && !self.closing {
-                        self.query_collection(self.applied.clone());
+                        self.requery_collection();
                     }
                 }
                 Err(e) if running.kind == "timeline" => {
@@ -1202,7 +1212,7 @@ impl PhotoApp {
                         && running.task.label == "Sammlung indizieren"
                     {
                         // Entered batches of a cancelled or failed index run stay usable.
-                        self.query_collection(self.applied.clone());
+                        self.requery_collection();
                     }
                 }
                 Ok(Outcome::Scan(revision, scan)) if revision == self.scan_revision => {
@@ -1328,7 +1338,7 @@ impl PhotoApp {
                     }
                     if running.write && running.collection == self.settings.collection {
                         self.relationship_graph.stale = true;
-                        self.query_collection(self.applied.clone());
+                        self.requery_collection();
                         self.refresh_faces();
                         // Der Hintergrundlauf lädt die Details nur neu, wenn sie noch fehlen.
                         let missing = self.detail_rows.iter().any(|(key, _)| key == "Status");
@@ -1465,7 +1475,7 @@ impl PhotoApp {
                         ),
                         !report.errors.is_empty(),
                     );
-                    self.query_collection(self.applied.clone());
+                    self.requery_collection();
                     self.refresh_faces();
                 }
                 Ok(Outcome::Suggestions(revision, id, suggestions))

@@ -52,7 +52,7 @@ impl PhotoApp {
             && self.live_refresh.1.elapsed() >= Duration::from_secs(4)
         {
             self.live_refresh = (committed, std::time::Instant::now());
-            self.query_collection(self.applied.clone());
+            self.requery_collection();
             ctx.request_repaint();
         }
     }
