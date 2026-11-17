@@ -152,6 +152,16 @@ impl Default for Settings {
 
 impl Settings {
     pub fn path() -> PathBuf {
+        // Tests schreiben nie in die echten Arbeitsplatzeinstellungen; jeder Testthread hat
+        // eine eigene Datei, damit parallele Tests sich nicht überschreiben.
+        #[cfg(test)]
+        if std::env::var_os("FOTO_IMPORTER_SETTINGS").is_none() {
+            let thread = format!("{:?}", std::thread::current().id());
+            return std::env::temp_dir()
+                .join(format!("foto-importer-tests-{}", std::process::id()))
+                .join(thread.trim_start_matches("ThreadId(").trim_end_matches(')'))
+                .join("settings.json");
+        }
         std::env::var_os("FOTO_IMPORTER_SETTINGS")
             .map(PathBuf::from)
             .unwrap_or_else(|| {

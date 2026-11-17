@@ -35,6 +35,19 @@
   (atomar geschrieben, `FOTO_IMPORTER_SETTINGS` überschreibt den Pfad), Sammlungsoptionen in
   der Sammlungsdatenbank (`settings`, `face_settings`), Modellbeschreibungen als Manifeste
   unter `models/`.
+- **Einstellungen wirken sofort, ohne Speichern-Knopf:** Schalter und Auswahllisten
+  speichern beim Ändern; Pfadfelder beim Fokusverlust, mit Enter, beim Verlassen der
+  Ansicht und sofort nach „Auswählen …“, nicht bei jedem Tastendruck. Ein Pfad wird vorher
+  geprüft (Datei bzw. Ordner mit Modellbeschreibungen vorhanden); ein ungültiger bleibt im
+  Feld stehen, erscheint als Fehlerhinweis der Einstellungen und wird nicht gespeichert.
+  Folgen nur bei echter Änderung: ein neuer ExifTool-Pfad gibt dem gestoppten
+  Hintergrundlauf eine neue Chance, ein neuer Converter liest dessen Version neu, nur eine
+  geänderte Modellauswahl schreibt in die Sammlung.
+- **Gesichtserkennung einrichten:** Ein Knopf startet nacheinander die vorhandenen
+  Aufträge „Laufzeit herunterladen“ (falls die Laufzeit fehlt) und „Modellgewichte
+  installieren“ (falls die Standardgewichte fehlen). Der zweite Schritt beginnt nur nach
+  erfolgreichem ersten; Fehler oder „Abbrechen“ beenden die Kette. Ist beides vorhanden,
+  steht dort „eingerichtet“.
 - **Navigation:** links fest, Hauptpunkte Importieren, Sammlung, Gesichter, Personen; unten
   abgesetzt Aufgaben und Einstellungen (`NAV_MAIN`, `NAV_BOTTOM`). Die Zeitreise ist kein
   Hauptpunkt, sondern eine Ansicht der gewählten Person (siehe [Personen](personen.md)).

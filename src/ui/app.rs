@@ -330,6 +330,10 @@ pub struct PhotoApp {
     metadata_bg_failed: bool,
     /// Am Regler gewählte Vorschlagsschwelle samt Sammlung, für die sie gilt.
     review_draft: Option<(String, f32)>,
+    /// Pfadfelder der Einstellungen, deren Text noch nicht übernommen ist (oder ungültig war).
+    path_drafts: BTreeMap<settings_view::PathSetting, settings_view::PathDraft>,
+    /// „Gesichtserkennung einrichten“ hat die Laufzeit geladen; danach folgen die Modelle.
+    setup_chain: bool,
     recognition_tools_open: bool,
     auto_analysis_pending: bool,
     /// Nach einem Indexlauf folgt der Metadatenlauf, wenn die Automatik an ist.
@@ -436,6 +440,8 @@ impl PhotoApp {
             metadata_paused: false,
             metadata_bg_failed: false,
             review_draft: None,
+            path_drafts: BTreeMap::new(),
+            setup_chain: false,
             recognition_tools_open: false,
             auto_analysis_pending: false,
             auto_metadata_pending: false,
@@ -765,6 +771,10 @@ impl PhotoApp {
     }
     /// Wechselt die Hauptansicht und liest, was sie zeigt, neu.
     fn open_view(&mut self, view: View) {
+        if self.view == View::Settings && view != View::Settings {
+            // Ein Pfad, der beim Verlassen noch im Feld steht, gilt wie bei Fokusverlust.
+            self.commit_path_drafts();
+        }
         self.view = view;
         self.recognition_tools_open = false;
         match view {
@@ -1115,6 +1125,9 @@ impl PhotoApp {
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
             self.notice_origin = Some(running.view);
+            // Die Einrichtung geht nur nach einer erfolgreich geladenen Laufzeit weiter.
+            let chained =
+                running.kind == "runtime-download" && std::mem::take(&mut self.setup_chain);
             let result = match result {
                 Ok(Outcome::Synced(inner, note)) => {
                     if running.collection == self.settings.collection {
@@ -1380,10 +1393,15 @@ impl PhotoApp {
                         path.to_string_lossy().into_owned(),
                     );
                     if self.save() {
+                        self.path_drafts
+                            .remove(&settings_view::PathSetting::Runtime);
                         self.message(
                             "Die Laufzeit ist installiert und ausgewählt. Falls zuvor eine andere geladen wurde, bitte die App neu starten.".into(),
                             false,
                         );
+                        if chained {
+                            self.continue_face_setup(running.view);
+                        }
                     } else {
                         self.settings.onnx_runtime = previous;
                     }
@@ -1394,6 +1412,7 @@ impl PhotoApp {
                         path.to_string_lossy().into_owned(),
                     );
                     if self.save() {
+                        self.path_drafts.remove(&settings_view::PathSetting::Models);
                         self.models = models;
                         self.message(
                             format!(
@@ -1477,28 +1496,34 @@ impl PhotoApp {
                 }
                 Ok(Outcome::Pick(pick, Some(path))) => {
                     let value = path.to_string_lossy().into_owned();
-                    match pick {
+                    let field = match pick {
                         Pick::Source => {
                             self.settings.source = value;
                             self.begin_scan();
+                            None
                         }
-                        Pick::Target => self.settings.target = value,
-                        Pick::Collection => self.set_collection(value),
-                        Pick::Converter => self.settings.converter = value,
-                        Pick::Exiftool => {
-                            self.settings.exiftool = value;
-                            self.metadata_bg_failed = false;
+                        Pick::Target => {
+                            self.settings.target = value;
+                            None
                         }
-                        Pick::Models => {
-                            self.settings.model_dir = value;
-                            self.models = crate::core::inference::manifests(Path::new(
-                                &self.settings.model_dir,
-                            ))
-                            .unwrap_or_default();
+                        Pick::Collection => {
+                            self.set_collection(value);
+                            None
                         }
-                        Pick::Runtime => self.settings.onnx_runtime = value,
+                        Pick::Converter => Some((settings_view::PathSetting::Converter, value)),
+                        Pick::Exiftool => Some((settings_view::PathSetting::Exiftool, value)),
+                        Pick::Models => Some((settings_view::PathSetting::Models, value)),
+                        Pick::Runtime => Some((settings_view::PathSetting::Runtime, value)),
                     };
-                    self.save();
+                    match field {
+                        // Werkzeug- und Modellpfade werden geprüft und wirken sofort.
+                        Some((field, value)) => {
+                            self.set_path_setting(field, value);
+                        }
+                        None => {
+                            self.save();
+                        }
+                    }
                 }
                 _ => {}
             }
