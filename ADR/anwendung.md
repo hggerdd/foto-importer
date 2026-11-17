@@ -56,6 +56,9 @@
   zeigen einen Leerzustand, der dorthin weist. Alles, was beim Wechsel endet oder neu
   gelesen wird (Entwürfe, Filter, Seiten, Auswahl, Rücknahmen, Revisionen), steht in
   `PhotoApp::set_collection`.
+- **Gebauter Stand sichtbar:** Unten links steht Git-Branch und Commit des Builds („main ·
+  1af9a4e“, „+“ bei ungesicherten Änderungen), damit sich bei Fehlern ein Versionsproblem
+  ausschließen lässt. `build.rs` liest beides beim Bauen; ohne Git steht dort „unbekannt“.
 - **Oberfläche:** Ein Arbeitsbereich, Kontext rechts, sichtbare
   Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen:
   Bekannte Fehler erscheinen als verständlicher Satz, der Originaltext steht im Verlauf.
