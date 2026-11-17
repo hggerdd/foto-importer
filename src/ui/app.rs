@@ -1627,11 +1627,11 @@ impl PhotoApp {
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(
-                        RichText::new("Rust · lokal · deine Fotos")
-                            .size(theme::MIN_TEXT)
-                            .weak(),
-                    );
+                    // Gebauter Stand, damit bei Fehlern ein Versionsproblem auszuschließen ist.
+                    ui.label(RichText::new(build_version()).size(theme::MIN_TEXT).weak())
+                        .on_hover_text(
+                            "Git-Branch und Commit dieses Builds; „+“ = ungesicherte Änderungen",
+                        );
                     ui.label(
                         RichText::new("Originale bleiben erhalten")
                             .size(theme::MIN_TEXT)
@@ -1868,6 +1868,15 @@ impl eframe::App for PhotoApp {
         let _ = self.settings.save();
     }
 }
+/// Branch und Commit dieses Builds für die Seitenleiste, z. B. „main · 1af9a4e“ (aus `build.rs`).
+fn build_version() -> String {
+    format!(
+        "{} · {}",
+        env!("FOTO_IMPORTER_GIT_BRANCH"),
+        env!("FOTO_IMPORTER_GIT_COMMIT")
+    )
+}
+
 /// Name und voller Pfad der Sammlung für die Seitenleiste: der Ordnername (bei einem
 /// Laufwerk der ganze Pfad) und der Pfad in der Schreibweise von `display_path`. Ohne
 /// Sammlung gibt es keinen Namen.
