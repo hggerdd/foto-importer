@@ -751,19 +751,20 @@ pub fn exists_at(folder: &Path) -> bool {
 }
 
 /// Grund, warum `folder` keine Sammlung sein darf, oder `None`. Abgelehnt werden die
-/// Importquelle selbst, Ordner in ihr und Ordner, die sie enthalten (die Datenbank läge
-/// sonst zwischen den Originalen), sowie jeder Ordner auf einer Speicherkarte (ein
-/// Pfadteil heißt `DCIM`). Pfade werden, wo möglich, kanonisch und unter Windows ohne
-/// Groß-/Kleinschreibung verglichen.
+/// Importquelle selbst und Ordner in ihr (die Datenbank läge sonst zwischen den Originalen)
+/// sowie jeder Ordner auf einer Speicherkarte (ein Pfadteil heißt `DCIM`). Ein Ordner, der
+/// die Quelle enthält, ist erlaubt: Die Sammlung darf einen Zwischenordner wie
+/// `__einzuordnen` als Quelle haben. Pfade werden, wo möglich, kanonisch und unter Windows
+/// ohne Groß-/Kleinschreibung verglichen.
 pub fn collection_folder_problem(folder: &Path, source: Option<&Path>) -> Option<String> {
     let folder_key = path_key(&canonical(folder));
     if let Some(source) = source.filter(|s| !s.as_os_str().is_empty()) {
         let source_key = path_key(&canonical(source));
-        if folder_key.starts_with(&source_key) || source_key.starts_with(&folder_key) {
+        if folder_key.starts_with(&source_key) {
             return Some(
-                "Dieser Ordner ist die Importquelle, liegt in ihr oder enthält sie. Eine Sammlung \
-                 dort würde ihre Datenbank zwischen die Originale schreiben. Bitte einen eigenen \
-                 Ordner für die Sammlung wählen."
+                "Dieser Ordner ist die Importquelle oder liegt in ihr. Eine Sammlung dort würde \
+                 ihre Datenbank zwischen die Originale schreiben. Bitte einen eigenen Ordner für \
+                 die Sammlung wählen."
                     .into(),
             );
         }
@@ -818,11 +819,16 @@ mod folder_tests {
             r"Q:\Bilder\Eingang",
             r"Q:\Bilder\Eingang\",
             r"Q:\Bilder\Eingang\2024",
-            r"Q:\Bilder",
-            r"Q:\",
         ] {
             assert!(
                 collection_folder_problem(Path::new(folder), Some(source)).is_some(),
+                "{folder}"
+            );
+        }
+        // Eine Sammlung darf ihren Zwischenordner (z. B. `__einzuordnen`) als Quelle haben.
+        for folder in [r"Q:\Bilder", r"Q:\"] {
+            assert!(
+                collection_folder_problem(Path::new(folder), Some(source)).is_none(),
                 "{folder}"
             );
         }
@@ -867,7 +873,7 @@ mod folder_tests {
         fs::create_dir_all(source.join("Tag"))?;
         let inner = source.join("Tag").join("..").join("Tag");
         assert!(collection_folder_problem(&inner, Some(&source)).is_some());
-        assert!(collection_folder_problem(root.path(), Some(&source)).is_some());
+        assert!(collection_folder_problem(root.path(), Some(&source)).is_none());
         let other = root.path().join("Sammlung");
         fs::create_dir(&other)?;
         assert!(collection_folder_problem(&other, Some(&source)).is_none());
