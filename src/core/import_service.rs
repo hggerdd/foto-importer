@@ -128,6 +128,7 @@ pub fn check(
                 photo,
             });
         }
+        control.progress(results.len(), files.len());
     }
     Ok(results)
 }
@@ -150,6 +151,7 @@ pub fn execute(
     let mut selected = files.to_vec();
     if skip && target.join(".myfotomanager").is_file() {
         let collection = Collection::open(target, false)?;
+        control.phase("Bereits Importiertes prüfen", "Dateien");
         let checks = check(&collection, files, exiftool, control)?;
         skipped = checks
             .into_iter()

@@ -312,6 +312,10 @@ pub struct ImportReport {
     pub cancelled: bool,
     pub skipped: Vec<PathBuf>,
 }
+/// Fortschrittsphasen eines Imports, wie sie in Aufgaben und Fußleiste erscheinen.
+pub const COPY_PHASE: &str = "Kopieren";
+pub const DNG_PHASE: &str = "DNG erstellen";
+
 pub fn import(
     files: &[SourceFile],
     target: &Path,
@@ -333,6 +337,8 @@ pub fn import(
         bail!("Zielordner verweist außerhalb des gewählten Ziels");
     }
     let mut report = ImportReport::default();
+    control.phase(COPY_PHASE, "Dateien");
+    control.progress(0, files.len());
     for (index, file) in files.iter().enumerate() {
         if control.checkpoint().is_err() {
             report.cancelled = true;
@@ -357,18 +363,28 @@ pub fn import(
     drop(slot);
     if let Some(converter) = converter.filter(|_| !report.cancelled) {
         let _dng_slot = control.lane("dng")?;
-        for path in &report.copied {
-            if extension(path) == "nef" {
-                if control.checkpoint().is_err() {
-                    report.cancelled = true;
-                    break;
-                }
-                match convert_dng(path, &destination, converter, control) {
-                    Ok(_) => report.converted += 1,
-                    Err(e) => report.errors.push(format!("DNG {}: {e}", path.display())),
-                }
+        let raws: Vec<&PathBuf> = report
+            .copied
+            .iter()
+            .filter(|path| extension(path) == "nef")
+            .collect();
+        control.phase(DNG_PHASE, "Dateien");
+        control.progress(0, raws.len());
+        let mut converted = 0;
+        let mut errors = Vec::new();
+        for (index, path) in raws.iter().enumerate() {
+            if control.checkpoint().is_err() {
+                report.cancelled = true;
+                break;
             }
+            match convert_dng(path, &destination, converter, control) {
+                Ok(_) => converted += 1,
+                Err(e) => errors.push(format!("DNG {}: {e}", path.display())),
+            }
+            control.progress(index + 1, raws.len());
         }
+        report.converted += converted;
+        report.errors.extend(errors);
     }
     Ok(report)
 }

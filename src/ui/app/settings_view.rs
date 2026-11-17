@@ -599,6 +599,7 @@ impl PhotoApp {
                 }
             });
         }
+        self.import_queue_list(ui);
         if self.tasks.is_empty() {
             self.catch_up_row(ui);
         }

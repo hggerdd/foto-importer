@@ -66,6 +66,41 @@ fn repeated_import_preserves_sources_and_destinations() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
+fn import_progress_names_the_copy_and_dng_phases() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut files = Vec::new();
+    for name in ["A.JPG", "B.NEF", "C.NEF"] {
+        let path = temp.path().join(name);
+        fs::write(&path, name)?;
+        files.push(SourceFile {
+            path,
+            day: "2026-11-04".into(),
+            size: 5,
+        });
+    }
+    let target = temp.path().join("archive");
+    fs::create_dir(&target)?;
+    // Ohne DNG endet der Import in der Kopierphase mit allen Dateien.
+    let control = Control::default();
+    files::import(&files, &target, "Ohne", None, &control)?;
+    let progress = control.snapshot();
+    assert_eq!(progress.phase, files::COPY_PHASE);
+    assert_eq!((progress.done, progress.total), (3, 3));
+    // Mit DNG folgt eine eigene Phase, die nur die NEF-Dateien zählt. Der Converter fehlt
+    // hier absichtlich: jede Umwandlung schlägt fehl, die Kopien bleiben.
+    let control = Control::default();
+    let missing = temp.path().join("fehlt").join("converter.exe");
+    let report = files::import(&files, &target, "Mit", Some(&missing), &control)?;
+    let progress = control.snapshot();
+    assert_eq!(progress.phase, files::DNG_PHASE);
+    assert_eq!((progress.done, progress.total), (2, 2));
+    assert_eq!(report.copied.len(), 3);
+    assert_eq!(report.converted, 0);
+    assert_eq!(report.errors.len(), 2);
+    assert_eq!(fs::read(&files[1].path)?, b"B.NEF");
+    Ok(())
+}
+#[test]
 fn cancelled_copy_does_not_publish_output() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let source = temp.path().join("test.jpg");
