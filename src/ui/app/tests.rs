@@ -2152,12 +2152,7 @@ fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Res
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.source = source.to_string_lossy().into_owned();
     app.settings.collection = "tmp/old-collection".into();
-    for folder in [
-        source.clone(),
-        source.join("Tag"),
-        root.path().into(),
-        card.clone(),
-    ] {
+    for folder in [source.clone(), source.join("Tag"), card.clone()] {
         app.notice = None;
         app.choose_collection(folder.to_string_lossy().into_owned());
         assert_eq!(app.settings.collection, "tmp/old-collection", "{folder:?}");
@@ -2173,5 +2168,11 @@ fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Res
     }
     assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
     assert!(std::fs::read_dir(&card)?.next().is_none());
+    // Der Ordner um die Quelle (Sammlung mit Zwischenordner wie `__einzuordnen`) ist erlaubt.
+    app.notice = None;
+    let parent = root.path().to_string_lossy().into_owned();
+    app.choose_collection(parent.clone());
+    assert!(app.notice.as_ref().is_none_or(|n| !n.error));
+    assert_eq!(app.new_collection_prompt.as_deref(), Some(parent.as_str()));
     Ok(())
 }
