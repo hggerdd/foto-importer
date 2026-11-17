@@ -5,6 +5,9 @@ pub const PAGE_SIZE: usize = 48;
 /// Zulässige Breite des Ordnerbaums (Minimum, Maximum) in Punkten.
 pub const FOLDER_TREE_WIDTH: (f32, f32) = (170.0, 380.0);
 pub const COPY_CHUNK: usize = 1024 * 1024;
+/// Gleichzeitige Läufe des Adobe DNG Converters bei einem Import (er nutzt je Datei kaum
+/// mehr als einen Kern).
+pub const DNG_PARALLEL: usize = 3;
 /// Dateien je ExifTool-Aufruf beim ausdrücklichen Metadatenlauf.
 pub const METADATA_CHUNK: usize = 128;
 /// Dateien je ExifTool-Aufruf im Hintergrundlauf: klein, damit ein Nutzerauftrag binnen

@@ -7,6 +7,10 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -370,21 +374,46 @@ pub fn import(
             .collect();
         control.phase(DNG_PHASE, "Dateien");
         control.progress(0, raws.len());
-        let mut converted = 0;
-        let mut errors = Vec::new();
-        for (index, path) in raws.iter().enumerate() {
-            if control.checkpoint().is_err() {
-                report.cancelled = true;
-                break;
+        // Der Converter nutzt je Datei kaum mehr als einen Kern: mehrere Dateien zugleich.
+        // Jeder Lauf hat einen eigenen Zwischenordner, und `copy_one` ersetzt nie eine
+        // vorhandene Datei, gleichnamige Ergebnisse kollidieren also nicht.
+        let next = AtomicUsize::new(0);
+        let finished = AtomicUsize::new(0);
+        let cancelled = AtomicBool::new(false);
+        let outcomes = Mutex::new(Vec::new());
+        let workers = crate::config::DNG_PARALLEL.clamp(1, raws.len().max(1));
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| {
+                    loop {
+                        if control.checkpoint().is_err() {
+                            cancelled.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = raws.get(index) else {
+                            return;
+                        };
+                        let outcome = convert_dng(path, &destination, converter, control)
+                            .map_err(|e| format!("DNG {}: {e}", path.display()));
+                        if let Ok(mut outcomes) = outcomes.lock() {
+                            outcomes.push((index, outcome));
+                        }
+                        let done = finished.fetch_add(1, Ordering::Relaxed) + 1;
+                        control.progress(done, raws.len());
+                    }
+                });
             }
-            match convert_dng(path, &destination, converter, control) {
-                Ok(_) => converted += 1,
-                Err(e) => errors.push(format!("DNG {}: {e}", path.display())),
+        });
+        let mut outcomes = outcomes.into_inner().unwrap_or_default();
+        outcomes.sort_by_key(|(index, _)| *index);
+        for (_, outcome) in outcomes {
+            match outcome {
+                Ok(_) => report.converted += 1,
+                Err(e) => report.errors.push(e),
             }
-            control.progress(index + 1, raws.len());
         }
-        report.converted += converted;
-        report.errors.extend(errors);
+        report.cancelled |= cancelled.load(Ordering::Relaxed);
     }
     Ok(report)
 }

@@ -35,7 +35,9 @@
 - **ExifTool** liefert Sammlungsmetadaten und eingebettete RAW-Vorschauen, ausschließlich
   lesend. Der Quellscan funktioniert auch ohne ExifTool.
 - **DNG (optional):** Der separat installierte Adobe DNG Converter läuft als eigener Prozess
-  je Datei, ohne Shell und ohne Konsolenfenster, in einer eigenen Warteschlange. Die Ausgabe
+  je Datei, ohne Shell und ohne Konsolenfenster, in einer eigenen Warteschlange. Je Import
+  laufen bis zu `DNG_PARALLEL` (3) Umwandlungen gleichzeitig, weil der Converter je Datei
+  kaum mehr als einen Kern nutzt; jede hat ihren eigenen Zwischenordner. Die Ausgabe
   entsteht zuerst temporär und wird nach geprüftem Erfolg mit demselben Schutz veröffentlicht.
   Vorhandene DNGs und RAWs bleiben.
 - **Adobe-Versionsprüfung:** höchstens ein Versuch je lokalem Kalendertag (auch Fehler werden
