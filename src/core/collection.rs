@@ -29,6 +29,11 @@ impl Collection {
             bail!("Sammlung ist kein Ordner");
         }
         let path = root.join(".myfotomanager");
+        // Zweite Schutzschicht: auf einer Speicherkarte entsteht nie eine neue Sammlung,
+        // auch nicht über Wege an der Ordnerwahl vorbei. Vorhandene öffnen weiter.
+        if write && !path.is_file() && on_memory_card(&path_key(&root)) {
+            bail!("{MEMORY_CARD}");
+        }
         let lock_path = root.join(".myfotomanager.lock");
         let lock = if write {
             let mut file = OpenOptions::new().write(true).create_new(true).open(&lock_path)
@@ -737,5 +742,145 @@ fn file_id(path: &Path) -> Option<String> {
     {
         use std::os::unix::fs::MetadataExt;
         path.metadata().ok().map(|m| m.ino().to_string())
+    }
+}
+
+/// Liegt im Ordner schon eine Sammlung? Ein einzelner Metadatenaufruf, nichts wird geöffnet.
+pub fn exists_at(folder: &Path) -> bool {
+    folder.join(".myfotomanager").is_file()
+}
+
+/// Grund, warum `folder` keine Sammlung sein darf, oder `None`. Abgelehnt werden die
+/// Importquelle selbst, Ordner in ihr und Ordner, die sie enthalten (die Datenbank läge
+/// sonst zwischen den Originalen), sowie jeder Ordner auf einer Speicherkarte (ein
+/// Pfadteil heißt `DCIM`). Pfade werden, wo möglich, kanonisch und unter Windows ohne
+/// Groß-/Kleinschreibung verglichen.
+pub fn collection_folder_problem(folder: &Path, source: Option<&Path>) -> Option<String> {
+    let folder_key = path_key(&canonical(folder));
+    if let Some(source) = source.filter(|s| !s.as_os_str().is_empty()) {
+        let source_key = path_key(&canonical(source));
+        if folder_key.starts_with(&source_key) || source_key.starts_with(&folder_key) {
+            return Some(
+                "Dieser Ordner ist die Importquelle, liegt in ihr oder enthält sie. Eine Sammlung \
+                 dort würde ihre Datenbank zwischen die Originale schreiben. Bitte einen eigenen \
+                 Ordner für die Sammlung wählen."
+                    .into(),
+            );
+        }
+    }
+    if on_memory_card(&folder_key) {
+        return Some(MEMORY_CARD.into());
+    }
+    None
+}
+
+const MEMORY_CARD: &str = "Dieser Ordner liegt auf einer Speicherkarte (DCIM). Dort entsteht \
+                           keine Sammlung, damit die Karte unverändert bleibt. Bitte einen \
+                           Ordner auf der Festplatte wählen.";
+
+fn on_memory_card(key: &[String]) -> bool {
+    key.iter().any(|part| part.eq_ignore_ascii_case("dcim"))
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Vergleichbare Pfadteile: ohne `\\?\`-Präfix, mit `/` getrennt, unter Windows gefaltet.
+fn path_key(path: &Path) -> Vec<String> {
+    let text = path.to_string_lossy();
+    let text = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+    };
+    files::normalize(Path::new(&text))
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .map(|part| {
+            if cfg!(windows) {
+                files::fold(part)
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn the_import_source_cannot_be_a_collection() {
+        let source = Path::new(r"Q:\Bilder\Eingang");
+        for folder in [
+            r"Q:\Bilder\Eingang",
+            r"Q:\Bilder\Eingang\",
+            r"Q:\Bilder\Eingang\2024",
+            r"Q:\Bilder",
+            r"Q:\",
+        ] {
+            assert!(
+                collection_folder_problem(Path::new(folder), Some(source)).is_some(),
+                "{folder}"
+            );
+        }
+        assert!(
+            collection_folder_problem(Path::new(r"Q:\Bilder\Eingang2"), Some(source)).is_none(),
+            "ein Nachbarordner mit gleichem Namensanfang ist erlaubt"
+        );
+        if cfg!(windows) {
+            assert!(
+                collection_folder_problem(Path::new(r"q:\bilder\eingang"), Some(source)).is_some(),
+                "unter Windows ohne Groß-/Kleinschreibung"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_on_a_memory_card_cannot_be_a_collection() {
+        for folder in [r"Q:\DCIM\103NZ6_2", r"Q:\dcim", r"E:\Karte\Dcim\100CANON"] {
+            assert_eq!(
+                collection_folder_problem(Path::new(folder), None).as_deref(),
+                Some(MEMORY_CARD),
+                "{folder}"
+            );
+        }
+        assert!(collection_folder_problem(Path::new(r"D:\DCIM-Sicherung"), None).is_none());
+    }
+
+    #[test]
+    fn an_ordinary_folder_is_accepted() {
+        assert!(collection_folder_problem(Path::new(r"D:\Fotos"), None).is_none());
+        assert!(
+            collection_folder_problem(Path::new(r"D:\Fotos"), Some(Path::new(r"Q:\DCIM\100")))
+                .is_none()
+        );
+        assert!(collection_folder_problem(Path::new(r"D:\Fotos"), Some(Path::new(""))).is_none());
+    }
+
+    #[test]
+    fn real_folders_are_compared_canonically() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("Quelle");
+        fs::create_dir_all(source.join("Tag"))?;
+        let inner = source.join("Tag").join("..").join("Tag");
+        assert!(collection_folder_problem(&inner, Some(&source)).is_some());
+        assert!(collection_folder_problem(root.path(), Some(&source)).is_some());
+        let other = root.path().join("Sammlung");
+        fs::create_dir(&other)?;
+        assert!(collection_folder_problem(&other, Some(&source)).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn no_new_collection_is_created_on_a_memory_card() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let card = root.path().join("DCIM").join("100TEST");
+        fs::create_dir_all(&card)?;
+        assert!(Collection::open(&card, true).is_err());
+        assert!(fs::read_dir(&card)?.next().is_none(), "nichts geschrieben");
+        Ok(())
     }
 }

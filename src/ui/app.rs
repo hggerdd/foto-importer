@@ -301,6 +301,8 @@ pub struct PhotoApp {
     show_frames: bool,
     inspector: bool,
     collection_dialog: Option<CollectionDialog>,
+    /// Gewählter Ordner ohne Sammlung, der erst nach Bestätigung zur neuen Sammlung wird.
+    new_collection_prompt: Option<String>,
     inspect_people: bool,
     zoom: f32,
     detector: String,
@@ -420,6 +422,7 @@ impl PhotoApp {
             show_frames: true,
             inspector: true,
             collection_dialog: None,
+            new_collection_prompt: None,
             inspect_people: false,
             zoom: 172.0,
             detector: "yunet".into(),
@@ -837,6 +840,62 @@ impl PhotoApp {
             }
         }
         self.refresh_faces();
+    }
+    /// Ergebnis der Ordnerwahl für die Sammlung. Importquelle und Speicherkarte werden mit
+    /// Hinweis abgelehnt; eine vorhandene Sammlung öffnet sofort, ein Ordner ohne Sammlung
+    /// erst nach Bestätigung im Dialog (`new_collection_dialog`). Bis dahin wird nichts
+    /// geschrieben.
+    fn choose_collection(&mut self, folder: String) {
+        let path = Path::new(&folder);
+        let source = Path::new(&self.settings.source);
+        if let Some(problem) =
+            crate::core::collection::collection_folder_problem(path, Some(source))
+        {
+            self.message(problem, true);
+            return;
+        }
+        if crate::core::collection::exists_at(path) {
+            self.set_collection(folder);
+        } else {
+            self.new_collection_prompt = Some(folder);
+        }
+    }
+    /// Rückfrage, bevor in einem Ordner ohne Sammlung eine neue entsteht.
+    fn new_collection_dialog(&mut self, ctx: &egui::Context) {
+        let Some(folder) = self.new_collection_prompt.as_deref() else {
+            return;
+        };
+        let mut confirmed = false;
+        let mut cancelled = false;
+        let response = egui::Modal::new(egui::Id::new("new-collection")).show(ctx, |ui| {
+            ui.set_width(520.0_f32.min(ctx.content_rect().width() - 64.0));
+            ui.heading("Hier eine neue Sammlung anlegen?");
+            ui.add_space(6.0);
+            ui.label(RichText::new(import_view::display_path(folder).as_ref()).strong());
+            ui.add_space(6.0);
+            ui.label(
+                "In diesem Ordner gibt es noch keine Sammlung. Die App legt hier ihre \
+                 Datenbankdateien (.myfotomanager und Begleitdateien) an und liest die Fotos \
+                 ein. Die Fotos selbst werden nicht verändert.",
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                confirmed = ui.button("Neue Sammlung anlegen").clicked();
+                cancelled = ui.button("Abbrechen").clicked();
+            });
+        });
+        if confirmed {
+            self.confirm_new_collection();
+        } else if cancelled || response.should_close() {
+            self.new_collection_prompt = None;
+        }
+    }
+    /// „Neue Sammlung anlegen“: erst jetzt wird gewechselt und indiziert.
+    fn confirm_new_collection(&mut self) {
+        if let Some(folder) = self.new_collection_prompt.take() {
+            self.set_collection(folder);
+            self.save();
+        }
     }
     /// Stellt die App auf eine Sammlung um. Alles, was nur für die bisherige Sammlung galt
     /// (Entwürfe, Filter, Seiten, Auswahl, Rücknahmen), endet hier; danach wird neu gelesen
@@ -1542,7 +1601,7 @@ impl PhotoApp {
                             None
                         }
                         Pick::Collection => {
-                            self.set_collection(value);
+                            self.choose_collection(value);
                             None
                         }
                         Pick::Converter => Some((settings_view::PathSetting::Converter, value)),
@@ -1701,16 +1760,21 @@ impl PhotoApp {
         }
         let empty = self.settings.collection.is_empty();
         if ui
-            .button(if empty { "Wählen …" } else { "Wechseln …" })
-            .on_hover_text(if empty {
-                "Den Ordner wählen, in dem deine Fotos liegen"
+            .button(if empty {
+                "Sammlung wählen …"
             } else {
-                "Einen anderen Ordner als Sammlung öffnen"
+                "Sammlung wechseln …"
+            })
+            .on_hover_text(if empty {
+                "Den Ordner wählen, in dem deine Fotos dauerhaft liegen (nicht die Speicherkarte)"
+            } else {
+                "Einen anderen Ordner als Sammlung öffnen; ohne Sammlung dort wird vorher gefragt"
             })
             .clicked()
         {
             self.pick(Pick::Collection);
         }
+        self.new_collection_dialog(ui.ctx());
     }
     /// Der Auftrag, den die Fußleiste zeigt. In der Aufgabenansicht stehen die laufenden
     /// Aufträge schon als Karten da.

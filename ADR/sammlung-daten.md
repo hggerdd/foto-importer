@@ -5,6 +5,12 @@
 - **Eine SQLite-Datei je Sammlung:** `.myfotomanager` im Wurzelordner enthält Inventar,
   Metadaten, Gesichter und Personen. WAL, `busy_timeout`, Verbindungen gehören ihrem Thread.
   Lesende Verbindungen nutzen `mmap_size` 512 MB.
+- **Neuanlage nur gewollt und nie auf der Speicherkarte:** Eine neue Sammlung entsteht beim
+  ersten schreibenden Öffnen eines Ordners ohne `.myfotomanager`. Die Oberfläche fragt
+  vorher nach und lehnt Importquelle und Speicherkarten ab (siehe [Anwendung](anwendung.md)).
+  Als zweite Schicht verweigert `Collection::open(.., true)` die Neuanlage in jedem Pfad mit
+  einem Teil `DCIM`, bevor Sperre oder Datenbank entstehen; vorhandene Sammlungen dort öffnen
+  weiter.
 - **Sperre:** Die Host/PID-Sperrdatei `.myfotomanager.lock` erlaubt einen schreibenden
   Prozess; eine weitere Instanz öffnet lesend. Fremde Sperren werden nie entfernt.
 - **Sicherungen:** `.myfotomanager.backup` nach abgeschlossenen Indexoperationen;
