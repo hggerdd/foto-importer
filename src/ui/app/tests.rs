@@ -2026,3 +2026,152 @@ fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view(
     );
     Ok(())
 }
+
+/// Zeichnet ein Bild und liefert alle darin gezeigten Texte.
+fn drawn_texts(context: &egui::Context, app: &mut PhotoApp, events: Vec<egui::Event>) -> String {
+    fn collect(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(text) => {
+                out.push_str(text.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 800.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let output = context.run(input, |ctx| {
+        app.update(ctx, &mut eframe::Frame::_new_kittest())
+    });
+    let mut texts = String::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut texts);
+    }
+    texts
+}
+
+#[test]
+fn a_folder_without_collection_asks_before_anything_is_written() -> anyhow::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = "tmp/old-collection".into();
+    let chosen = folder.path().to_string_lossy().into_owned();
+
+    app.choose_collection(chosen.clone());
+
+    assert_eq!(app.settings.collection, "tmp/old-collection");
+    assert_eq!(app.new_collection_prompt.as_deref(), Some(chosen.as_str()));
+    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    // Ein neues Fenster misst sich im ersten Bild nur aus und erscheint im zweiten.
+    drawn_texts(&context, &mut app, Vec::new());
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("Hier eine neue Sammlung anlegen?"),
+        "{texts}"
+    );
+    assert!(texts.contains("Neue Sammlung anlegen") && texts.contains("Abbrechen"));
+    assert!(texts.contains("Sammlung wechseln …"));
+
+    // Escape schließt den Dialog wie „Abbrechen“: kein Wechsel, keine Datei.
+    let escape = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    drawn_texts(&context, &mut app, vec![escape]);
+    assert_eq!(app.new_collection_prompt, None);
+    assert_eq!(app.settings.collection, "tmp/old-collection");
+    assert!(!folder.path().join(".myfotomanager").exists());
+    assert!(std::fs::read_dir(folder.path())?.next().is_none());
+    Ok(())
+}
+
+#[test]
+fn confirming_the_new_collection_switches_to_it() -> anyhow::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let chosen = folder.path().to_string_lossy().into_owned();
+    app.choose_collection(chosen.clone());
+    app.confirm_new_collection();
+    assert_eq!(app.settings.collection, chosen);
+    assert_eq!(app.new_collection_prompt, None);
+    for _ in 0..5000 {
+        app.poll(&context);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(folder.path().join(".myfotomanager").is_file());
+    Ok(())
+}
+
+#[test]
+fn an_existing_collection_opens_without_asking() -> anyhow::Result<()> {
+    let folder = tempfile::tempdir()?;
+    drop(Collection::open(folder.path(), true)?);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let chosen = folder.path().to_string_lossy().into_owned();
+    app.choose_collection(chosen.clone());
+    assert_eq!(app.new_collection_prompt, None);
+    assert_eq!(app.settings.collection, chosen);
+    for _ in 0..5000 {
+        app.poll(&context);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+
+#[test]
+fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("Quelle");
+    let card = root.path().join("Karte").join("DCIM").join("103TEST");
+    std::fs::create_dir_all(source.join("Tag"))?;
+    std::fs::create_dir_all(&card)?;
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.source = source.to_string_lossy().into_owned();
+    app.settings.collection = "tmp/old-collection".into();
+    for folder in [
+        source.clone(),
+        source.join("Tag"),
+        root.path().into(),
+        card.clone(),
+    ] {
+        app.notice = None;
+        app.choose_collection(folder.to_string_lossy().into_owned());
+        assert_eq!(app.settings.collection, "tmp/old-collection", "{folder:?}");
+        assert_eq!(app.new_collection_prompt, None, "{folder:?}");
+        let notice = app.notice.as_ref().expect("Fehlerhinweis");
+        assert!(notice.error, "{folder:?}");
+        assert!(
+            notice.text.contains("Importquelle") || notice.text.contains("Speicherkarte"),
+            "{}",
+            notice.text
+        );
+        assert!(!folder.join(".myfotomanager").exists(), "{folder:?}");
+    }
+    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    assert!(std::fs::read_dir(&card)?.next().is_none());
+    Ok(())
+}

@@ -52,7 +52,13 @@
   abgesetzt Aufgaben und Einstellungen (`NAV_MAIN`, `NAV_BOTTOM`). Die Zeitreise ist kein
   Hauptpunkt, sondern eine Ansicht der gewählten Person (siehe [Personen](personen.md)).
 - **Sammlung einmal wählen:** Die aktive Sammlung steht in der Seitenleiste (Ordnername,
-  voller Pfad im Hinweistext) mit dem einzigen Knopf zum Wechseln. Ansichten ohne Sammlung
+  voller Pfad im Hinweistext) mit dem einzigen Knopf zum Wechseln („Sammlung wechseln …“,
+  ohne Sammlung „Sammlung wählen …“). Die Ordnerwahl prüft vor jedem Wechsel
+  (`PhotoApp::choose_collection`): Importquelle, Ordner in ihr oder um sie herum und Ordner
+  auf einer Speicherkarte (ein Pfadteil `DCIM`) werden mit Fehlerhinweis abgelehnt
+  (`core::collection::collection_folder_problem`). Eine vorhandene Sammlung öffnet sofort;
+  ein Ordner ohne `.myfotomanager` wird erst nach der Rückfrage „Hier eine neue Sammlung
+  anlegen?“ zur Sammlung, vorher wird nichts geschrieben. Ansichten ohne Sammlung
   zeigen einen Leerzustand, der dorthin weist. Alles, was beim Wechsel endet oder neu
   gelesen wird (Entwürfe, Filter, Seiten, Auswahl, Rücknahmen, Revisionen), steht in
   `PhotoApp::set_collection`.
