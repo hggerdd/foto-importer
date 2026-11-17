@@ -1854,3 +1854,175 @@ fn filter_dialog_changes_apply_at_once_without_a_draft() -> anyhow::Result<()> {
     assert!(app.applied.oldest && app.applied.rules.len() == 1);
     Ok(())
 }
+
+/// Ein Frame mit Eingabeereignissen; liefert Beschriftung und Grenzen aller Bedienelemente
+/// (über AccessKit, damit Tests Kacheln und Menüeinträge wie ein Nutzer treffen).
+fn frame_with(
+    context: &egui::Context,
+    app: &mut PhotoApp,
+    events: Vec<egui::Event>,
+) -> Vec<(String, egui::Rect)> {
+    context.enable_accesskit();
+    let output = context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+    );
+    output
+        .platform_output
+        .accesskit_update
+        .map(|update| {
+            update
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| {
+                    let label = node.label()?.to_string();
+                    let b = node.bounds()?;
+                    Some((
+                        label,
+                        egui::Rect::from_min_max(
+                            egui::pos2(b.x0 as f32, b.y0 as f32),
+                            egui::pos2(b.x1 as f32, b.y1 as f32),
+                        ),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Klickt das Bedienelement mit dieser Beschriftung (ein Frame drücken, einer loslassen).
+fn click_labelled(
+    context: &egui::Context,
+    app: &mut PhotoApp,
+    label: &str,
+    button: egui::PointerButton,
+) {
+    let widgets = frame_with(context, app, Vec::new());
+    let rect = widgets
+        .iter()
+        .find(|(text, _)| text == label)
+        .unwrap_or_else(|| panic!("{label} nicht gezeichnet"))
+        .1;
+    let pos = rect.center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame_with(
+        context,
+        app,
+        vec![egui::Event::PointerMoved(pos), press(true)],
+    );
+    frame_with(context, app, vec![press(false)]);
+}
+
+/// Unbenannte Gruppe aus drei Gesichtern in einer temporären Sammlung, Ansicht „Gesichter“.
+fn single_naming_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    let c = Collection::open(root, true)?;
+    for id in 1..=3_i64 {
+        c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality) VALUES(?,?,?,'det',0,0,1,1,1)",
+            rusqlite::params![id, id, format!("{id}.jpg")],
+        )?;
+    }
+    drop(c);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::Faces;
+    app.face_mode = "unknown".into();
+    app.face_page.groups = vec![
+        (1..=3)
+            .map(|id| Face {
+                source: format!("{id}.jpg"),
+                ..test_face(id)
+            })
+            .collect(),
+    ];
+    app.face_page.total_groups = 1;
+    app.face_page.status.nameable = 3;
+    Ok((context, app))
+}
+
+#[test]
+fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view()
+-> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = single_naming_app(root.path())?;
+    // Rechtsklick auf die mittlere Kachel öffnet das Menü, der Eintrag den Dialog.
+    click_labelled(
+        &context,
+        &mut app,
+        "Gesichtsausschnitt in 2.jpg",
+        egui::PointerButton::Secondary,
+    );
+    assert_eq!(app.naming, None, "erst der Menüeintrag öffnet den Dialog");
+    click_labelled(
+        &context,
+        &mut app,
+        "Einzeln benennen …",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.naming, Some(2));
+    assert!(app.selected_photo.is_none(), "Sammlung nie geöffnet");
+    // Der Rechtsklick wählt die Kachel nicht ab.
+    assert!(app.drafts.values().all(|d| d.excluded.is_empty()));
+    assert!(app.tasks.iter().any(|t| t.kind == "suggestions"));
+    wait_for_tasks(&mut app);
+    // Name eintragen und übernehmen: nur dieses Gesicht, der Dialog schließt sofort.
+    app.name_input = "Bert".into();
+    click_labelled(
+        &context,
+        &mut app,
+        "Übernehmen",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.naming, None);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![1, 3]], "sofort aus der Gruppe");
+    app.time_ui.need_load = false;
+    wait_for_tasks(&mut app);
+    assert_eq!(app.undo.len(), 1, "Strg+Z kann die Benennung zurücknehmen");
+    assert!(
+        app.time_ui.need_load,
+        "Zeitreise liest beim nächsten Zeigen neu"
+    );
+    let c = Collection::open(root.path(), false)?;
+    let rows = c
+        .db
+        .prepare("SELECT id, person_id IS NOT NULL, IFNULL(assignment,'') FROM faces ORDER BY id")?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, bool>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(
+        rows,
+        vec![
+            (1, false, String::new()),
+            (2, true, "user".into()),
+            (3, false, String::new()),
+        ]
+    );
+    let rejections: i64 =
+        c.db.query_row("SELECT COUNT(*) FROM face_rejections", [], |r| r.get(0))?;
+    assert_eq!(
+        rejections, 0,
+        "die übrigen Gesichter bekommen keine Ablehnung"
+    );
+    Ok(())
+}

@@ -886,7 +886,7 @@ impl PhotoApp {
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "Unbekannt".into());
                 if ui.button(format!("{name} · #{}", face.id)).clicked() {
-                    self.open_naming(face.clone());
+                    self.open_naming(face.id);
                 }
                 ui.label(
                     RichText::new(if face.ignored {
@@ -1009,7 +1009,7 @@ impl PhotoApp {
         }
         let handled = selected.is_some();
         if let Some(face) = selected {
-            self.open_naming(face);
+            self.open_naming(face.id);
         }
         handled
     }

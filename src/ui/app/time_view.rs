@@ -3,6 +3,7 @@
 //! auf dem UI-Thread; veraltete Antworten werden über Revisionen verworfen. Kacheln laden über
 //! den vorhandenen Vorschau-Cache nur, wenn sie sichtbar sind.
 
+use super::faces_view::{SINGLE_NAMING_HINT, single_naming_menu};
 use super::*;
 use crate::core::timeline_export;
 use crate::core::{
@@ -73,7 +74,7 @@ pub(super) struct TimeUi {
     include_auto: bool,
     min_date: DateQuality,
     revision: u64,
-    need_load: bool,
+    pub(super) need_load: bool,
     need_compute: bool,
     error: String,
     selected: Option<String>,
@@ -570,7 +571,11 @@ impl PhotoApp {
         if face.date_quality.uncertain() {
             dashed_border(ui, response.rect);
         }
-        response.on_hover_text(info)
+        let response = response.on_hover_text(format!("{info}\n{SINGLE_NAMING_HINT}"));
+        if single_naming_menu(&response) {
+            self.open_naming(face.id);
+        }
+        response
     }
 
     fn strip_tab(&mut self, ui: &mut egui::Ui) {
@@ -879,19 +884,25 @@ impl PhotoApp {
             {
                 let (root, exiftool) = (self.settings.collection.clone(), self.settings.exiftool.clone());
                 ui.vertical(|ui| {
-                    self.thumbnails.image(
-                        ui,
-                        PreviewRequest {
-                            root: Some(PathBuf::from(&root)),
-                            path: Path::new(&root).join(&item.face.source),
-                            orientation: 1,
-                            crop: None,
-                            edge: 800,
-                            generation: 0,
-                        },
-                        &exiftool,
-                        egui::vec2(380.0, 285.0),
-                    );
+                    let response = self
+                        .thumbnails
+                        .image(
+                            ui,
+                            PreviewRequest {
+                                root: Some(PathBuf::from(&root)),
+                                path: Path::new(&root).join(&item.face.source),
+                                orientation: 1,
+                                crop: None,
+                                edge: 800,
+                                generation: 0,
+                            },
+                            &exiftool,
+                            egui::vec2(380.0, 285.0),
+                        )
+                        .on_hover_text(SINGLE_NAMING_HINT);
+                    if single_naming_menu(&response) {
+                        self.open_naming(face_id);
+                    }
                     ui.label(RichText::new(face_info(&item.face, computed)).size(theme::MIN_TEXT).color(theme::MUTED));
                 });
             }

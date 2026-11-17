@@ -306,7 +306,9 @@ pub struct PhotoApp {
     detector: String,
     embedder: String,
     models: Vec<crate::core::inference::Manifest>,
-    naming: Option<Face>,
+    /// Gesicht im Dialog „Gesicht benennen“; aus jeder Ansicht zu öffnen.
+    naming: Option<i64>,
+    naming_revision: u64,
     name_input: String,
     name_person: Option<i64>,
     name_suggestions: Vec<(i64, String, f32)>,
@@ -424,6 +426,7 @@ impl PhotoApp {
             embedder: "sface".into(),
             models,
             naming: None,
+            naming_revision: 0,
             name_input: String::new(),
             name_person: None,
             name_suggestions: Vec::new(),
@@ -1114,11 +1117,13 @@ impl PhotoApp {
             ))
         });
     }
-    fn open_naming(&mut self, face: Face) {
+    /// Öffnet den Dialog für genau dieses Gesicht. Er hängt an keiner Ansicht; Vorschläge
+    /// liest ein Worker, gültig nur für den zuletzt geöffneten Dialog.
+    fn open_naming(&mut self, id: i64) {
         let root = self.settings.collection.clone();
-        let id = face.id;
-        let revision = self.detail_revision;
-        self.naming = Some(face);
+        self.naming_revision += 1;
+        let revision = self.naming_revision;
+        self.naming = Some(id);
         self.name_input.clear();
         self.name_person = None;
         self.name_suggestions.clear();
@@ -1367,6 +1372,9 @@ impl PhotoApp {
                     }
                     if running.write && running.collection == self.settings.collection {
                         self.relationship_graph.stale = true;
+                        if running.kind == "undo" {
+                            self.time_ui.need_load = true;
+                        }
                         self.requery_collection();
                         self.refresh_faces();
                         // Der Hintergrundlauf lädt die Details nur neu, wenn sie noch fehlen.
@@ -1389,8 +1397,9 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
-                    self.naming = None;
                     self.relationship_graph.stale = true;
+                    // Die Zeitreise zeigt bestätigte Gesichter; beim nächsten Zeigen neu lesen.
+                    self.time_ui.need_load = true;
                     self.prepare_group_advance(&undo);
                     let saved = optimistic::decision_message(undo.summary());
                     self.undo.push(undo);
@@ -1515,8 +1524,7 @@ impl PhotoApp {
                     self.refresh_faces();
                 }
                 Ok(Outcome::Suggestions(revision, id, suggestions))
-                    if revision == self.detail_revision
-                        && self.naming.as_ref().is_some_and(|f| f.id == id) =>
+                    if revision == self.naming_revision && self.naming == Some(id) =>
                 {
                     self.name_portraits = suggestions.portraits;
                     self.name_suggestions = suggestions.items
