@@ -16,7 +16,10 @@ enum Action {
 
 impl PhotoApp {
     /// Keeps the tree in step with the collection, the selected folder and running workers.
-    /// Slow work only ever runs on a worker; stale answers are dropped by revision.
+    /// Slow work only ever runs on a worker. A change of the contents never stops a running
+    /// read (on a USB disk a cold read takes many seconds and would restart forever); the tree
+    /// is marked stale and read once more after the running read delivered. Answers for another
+    /// collection are dropped.
     pub(super) fn sync_folder_tree(&mut self) {
         if self.status.files == 0 {
             return;
@@ -27,17 +30,17 @@ impl PhotoApp {
             self.status.files,
         );
         if key != self.folder_key {
-            for task in &self.tasks {
-                if task.kind == "folders" {
-                    task.task.control.stop();
-                }
-            }
             if key.0 != self.folder_key.0 {
+                for task in &self.tasks {
+                    if task.kind == "folders" && task.collection != key.0 {
+                        task.task.control.stop();
+                    }
+                }
                 self.folder_tree = folders::FolderTree::default();
+                self.folder_pending = None;
             } else {
                 self.folder_tree.reset();
             }
-            self.folder_revision += 1;
             self.folder_key = key;
             self.folder_revealed = None;
         }
@@ -53,17 +56,14 @@ impl PhotoApp {
         {
             return;
         }
-        self.folder_tree.begin();
-        let revision = self.folder_revision;
         let root = PathBuf::from(&self.settings.collection);
+        self.folder_tree.begin();
+        self.folder_revision += 1;
+        let revision = self.folder_revision;
+        self.folder_pending = Some(revision);
         self.launch("Ordner lesen", false, "folders", move |control| {
-            let collection = Collection::open(&root, false)?;
-            collection.cancel_with(&control);
-            control.checkpoint()?;
-            Ok(Outcome::Folders(
-                revision,
-                folders::directories(&collection)?,
-            ))
+            let result = read_directories(&root, &control).map_err(|e| format!("{e:#}"));
+            Ok(Outcome::Folders(revision, result))
         });
     }
 
@@ -91,7 +91,19 @@ impl PhotoApp {
                             .clicked()
                         {
                             self.folder_tree.reset();
-                            self.folder_revision += 1;
+                        }
+                        // Mit `folder_counts` ist das Lesen kurz; der Hinweis erscheint nur, wenn
+                        // es spürbar dauert (ältere, nur lesend geöffnete Sammlung ohne Tabelle).
+                        let slow = self.tasks.iter().any(|task| {
+                            task.kind == "folders"
+                                && task.task.started.elapsed() > Duration::from_millis(500)
+                        });
+                        if self.folder_tree.is_refreshing() && slow {
+                            ui.label(RichText::new("aktualisiert …").small().color(theme::MUTED))
+                                .on_hover_text(
+                                    "Die Sammlung hat sich geändert; der Baum wird neu gelesen",
+                                );
+                            ui.spinner();
                         }
                     });
                 });
@@ -216,6 +228,14 @@ impl PhotoApp {
             egui::Stroke::new(1.0_f32, color),
         );
     }
+}
+
+/// Worker part of a folder read: open the collection read-only and run the overview query.
+fn read_directories(root: &Path, control: &Control) -> Result<Vec<(String, usize)>> {
+    let collection = Collection::open(root, false)?;
+    collection.cancel_with(control);
+    control.checkpoint()?;
+    folders::directories(&collection)
 }
 
 /// One tree line. Returns the response of the whole row and whether the click hit the arrow.

@@ -2,6 +2,7 @@ use foto_importer::core::{
     collection::Collection,
     folders::{self, FolderTree, Row},
     metadata::{self, Search},
+    migrations,
 };
 use rusqlite::params;
 use std::time::Instant;
@@ -82,14 +83,171 @@ fn the_tree_counts_photos_below_each_folder_and_sorts_like_the_explorer() -> any
             "{folder}"
         );
     }
-    // Without the additive index (read-only collection of an older version) the result is equal.
-    let covered = folders::directories(&c)?;
+    // The summary table, the join on the covering index and the scan without the additive
+    // index (read-only collection of an older version) give the same result.
+    let summarized = sorted(folders::directories(&c)?);
+    assert_eq!(summarized, sorted(folders::scan_directories(&c)?));
     c.db.execute_batch("DROP INDEX ix_files_dir_cover")?;
-    let mut fallback = folders::directories(&c)?;
-    let mut covered = covered;
-    covered.sort();
-    fallback.sort();
-    assert_eq!(covered, fallback);
+    assert_eq!(summarized, sorted(folders::scan_directories(&c)?));
+    Ok(())
+}
+
+fn sorted(mut list: Vec<(String, usize)>) -> Vec<(String, usize)> {
+    list.sort();
+    list
+}
+
+/// Photos per folder computed from the relative paths in `metadata_photos` alone.
+fn by_relpath(c: &Collection) -> anyhow::Result<Vec<(String, usize)>> {
+    let mut st = c.db.prepare(
+        "SELECT rtrim(rtrim(relpath,replace(relpath,'/','')),'/'),count(*) FROM metadata_photos GROUP BY 1",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+    })?;
+    Ok(sorted(rows.collect::<rusqlite::Result<_>>()?))
+}
+
+/// `folder_counts` equals the join over `files.dir` that the tree used before, and the folder
+/// formula on `relpath` equals `files.dir` of every preferred file.
+fn assert_consistent(c: &Collection, step: &str) -> anyhow::Result<()> {
+    let table = sorted(folders::directories(c)?);
+    assert_eq!(table, sorted(folders::scan_directories(c)?), "{step}: join");
+    assert_eq!(table, by_relpath(c)?, "{step}: relpath");
+    let mismatched: i64 = c.db.query_row(
+        "SELECT count(*) FROM metadata_photos p JOIN files f ON f.id=p.file_id WHERE f.dir IS NOT rtrim(rtrim(p.relpath,replace(p.relpath,'/','')),'/')",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(mismatched, 0, "{step}: files.dir");
+    let empty: i64 = c.db.query_row(
+        "SELECT count(*) FROM folder_counts WHERE photos<=0",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(empty, 0, "{step}: empty folders are removed");
+    Ok(())
+}
+
+fn exists(root: &std::path::Path, name: &str) -> anyhow::Result<bool> {
+    let db = rusqlite::Connection::open(root.join(".myfotomanager"))?;
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?)",
+        [name],
+        |r| r.get(0),
+    )?)
+}
+
+#[test]
+fn folder_counts_follow_every_change_of_the_projection() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    assert_consistent(&c, "empty")?;
+    add(&c, 1, "root.jpg", "jpg", 1)?;
+    add(&c, 2, "Urlaub 2024/IMG 1.final.jpg", "jpg", 2)?;
+    add(&c, 3, "a.b/c d.e/x.y.z.jpg", "jpg", 3)?;
+    add(&c, 4, "a.b/c d.e/.versteckt", "jpg", 4)?;
+    add(&c, 5, "2024/05/g.nef", "nef", 5)?;
+    add(&c, 6, "2024/05/g.jpg", "jpg", 5)?;
+    add(&c, 7, "2024/05/g.xmp", "xmp", 5)?;
+    // RAW and JPG of one photo in different folders: the NEF is preferred first.
+    add(&c, 8, "raw/p.nef", "nef", 8)?;
+    add(&c, 9, "jpg/p.jpg", "jpg", 8)?;
+    assert_consistent(&c, "inserts")?;
+    assert!(folders::directories(&c)?.contains(&("raw".into(), 1)));
+    // Metadata make the JPG the preferred variant: the photo moves to the other folder.
+    c.db.execute_batch(
+        "INSERT INTO meta(file_id,dt_original) VALUES(9,'2024:01:01 10:00:00');
+         UPDATE files SET meta_state='done' WHERE id=9;",
+    )?;
+    assert_consistent(&c, "meta insert")?;
+    assert!(folders::directories(&c)?.contains(&("jpg".into(), 1)));
+    c.db.execute_batch(
+        "UPDATE meta SET dt_original=NULL WHERE file_id=9;
+         UPDATE files SET meta_state='pending' WHERE id=9;",
+    )?;
+    assert_consistent(&c, "meta update")?;
+    c.db.execute("DELETE FROM meta WHERE file_id=9", [])?;
+    assert_consistent(&c, "meta delete")?;
+    // Moves (a renamed folder), missing and deleted files, merged photos.
+    c.db.execute(
+        "UPDATE files SET relpath='neu/x.y.z.jpg',relpath_fold='neu/x.y.z.jpg',dir='neu' WHERE id=3",
+        [],
+    )?;
+    assert_consistent(&c, "move")?;
+    c.db.execute("UPDATE files SET status='missing' WHERE id=1", [])?;
+    assert_consistent(&c, "missing")?;
+    assert!(
+        !folders::directories(&c)?
+            .iter()
+            .any(|(dir, _)| dir.is_empty())
+    );
+    c.db.execute("UPDATE files SET status='present' WHERE id=1", [])?;
+    assert_consistent(&c, "back again")?;
+    c.db.execute("DELETE FROM files WHERE id IN (5,6,7)", [])?;
+    assert_consistent(&c, "delete")?;
+    c.db.execute("UPDATE files SET photo_id=2 WHERE id=4", [])?;
+    assert_consistent(&c, "merge")?;
+    // In-place update of the projection (not done by the app today, kept right anyway).
+    c.db.execute(
+        "UPDATE metadata_photos SET relpath='anders/q.jpg' WHERE photo_id=8",
+        [],
+    )?;
+    assert_eq!(sorted(folders::directories(&c)?), by_relpath(&c)?, "update");
+    // The bulk rebuild of the migration repairs even a damaged summary.
+    c.db.execute("UPDATE folder_counts SET photos=99", [])?;
+    c.db.execute_batch("BEGIN")?;
+    migrations::rebuild_metadata_photos(&c.db)?;
+    c.db.execute_batch("COMMIT")?;
+    assert_consistent(&c, "rebuild")?;
+    add(&c, 20, "nach dem Neuaufbau/n.jpg", "jpg", 20)?;
+    assert_consistent(&c, "triggers active again")?;
+    assert!(folders::directories(&c)?.contains(&("nach dem Neuaufbau".into(), 1)));
+    Ok(())
+}
+
+#[test]
+fn folder_counts_are_added_on_write_open_and_read_only_open_falls_back() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    add(&c, 1, "root.jpg", "jpg", 1)?;
+    add(&c, 2, "2024/a.jpg", "jpg", 2)?;
+    add(&c, 3, "2024/05/b.jpg", "jpg", 3)?;
+    let expected = sorted(folders::directories(&c)?);
+    assert_eq!(expected.len(), 3);
+    // schema.sql contains the same table and triggers (new collections).
+    let schema = include_str!("../src/core/schema.sql");
+    for (name, ddl) in migrations::FOLDER_COUNTS {
+        assert!(schema.contains(ddl), "{name} fehlt in schema.sql");
+    }
+    // A collection of an older version: neither table nor triggers.
+    c.db.execute_batch(
+        "DROP TRIGGER folder_counts_insert; DROP TRIGGER folder_counts_delete;
+         DROP TRIGGER folder_counts_update; DROP TABLE folder_counts;",
+    )?;
+    drop(c);
+    let read = Collection::open(temp.path(), false)?;
+    assert_eq!(sorted(folders::directories(&read)?), expected, "fallback");
+    drop(read);
+    for (name, _) in migrations::FOLDER_COUNTS {
+        assert!(!exists(temp.path(), name)?, "lesend: {name} entsteht nicht");
+    }
+    let write = Collection::open(temp.path(), true)?;
+    for (name, _) in migrations::FOLDER_COUNTS {
+        assert!(
+            exists(temp.path(), name)?,
+            "{name} fehlt nach Öffnen mit Schreibrecht"
+        );
+    }
+    assert_consistent(&write, "initial fill")?;
+    assert!(!migrations::ensure_folder_counts(&write.db)?, "idempotent");
+    // A missing trigger makes the counts unreliable: everything is rebuilt.
+    write
+        .db
+        .execute_batch("DROP TRIGGER folder_counts_insert")?;
+    add(&write, 4, "2025/c.jpg", "jpg", 4)?;
+    assert!(migrations::ensure_folder_counts(&write.db)?);
+    assert_consistent(&write, "repaired")?;
     Ok(())
 }
 

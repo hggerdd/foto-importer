@@ -345,3 +345,42 @@ Tests: Kachel-Cache in `src/core/previews.rs` (erstes gleich zweites Ergebnis, I
 `tests/maintenance.rs`, neuer Zusatzindex im bestehenden Idempotenztest (`tests/face_save_performance.rs`),
 Ausblenden in `src/ui/app/tests.rs`. Nicht geprüft: echte Fotos/RAW, echte Modelle, Netzlaufwerke,
 echte Oberfläche mit mehreren Aufträgen nacheinander, Verhalten bei vollem Datenträger.
+
+## Ordnerbaum aus `folder_counts` (2026-11-17)
+
+Anlass: Auf `E:\Bilder` (USB-Festplatte, 98.082 Dateien, 64.139 Fotos, 697 Ordner) brauchte der
+Ordnerbaum über `ix_files_dir_cover` kalt 16,6 s (warm 0,02 s), nur über `metadata_photos` kalt
+33,7 s: Tausende verstreute Seitenzugriffe. Lesend geprüft (ohne Schreibzugriff): Die Ordnerformel
+`rtrim(rtrim(relpath,replace(relpath,'/','')),'/')` stimmt bei allen 98.082 Dateien und allen
+64.139 bevorzugten Varianten mit `files.dir` überein; keine verwaiste Projektionszeile.
+
+Synthetisch (Release, SSD, 100.000 Fotos in 60.000 Ordnern, Werte schwanken um etwa 20 %):
+
+```text
+cargo run --release --example folder_bench -- tmp/bench-folders 100000 20000
+```
+
+| Schritt | Zeit |
+|---|---|
+| Join über `ix_files_directory_name` | 630 bis 770 ms |
+| Join über `ix_files_dir_cover` | 85 bis 115 ms |
+| nur `metadata_photos` | 155 bis 190 ms |
+| `folder_counts` lesen (529 Seiten) | 12 bis 19 ms |
+| Erstbefüllung beim schreibenden Öffnen | 160 bis 180 ms |
+| Schnellscan 10.000 neue Dateien, mit / ohne Trigger | 1,13 / 1,10 s (+3 bis 9 %) |
+| 10.000 Metadaten-Updates (Meta einfügen, `meta_state='done'`), mit / ohne | 2,6 / 1,9 bis 2,1 s (+25 bis 38 %) |
+| Neuaufbau `metadata_photos` (Migration), Trigger je Zeile / ausgesetzt | 1,87 s / 0,77 s |
+
+Ein Metadaten-Update ersetzt die Projektionszeile mehrmals (Meta- und Datei-Trigger), jede
+Ersetzung kostet ein −1 und ein +1; das sind etwa 50 bis 70 µs je Datei, klein gegen das
+Lesen mit ExifTool. Mit 697 statt 60.000 Ordnern ist die Tabelle auf `E:\Bilder` nur wenige
+Seiten groß. Die Migration setzt die Trigger aus und zählt danach in einer Anweisung.
+
+Tests: `tests/folders.rs` (Tabelle gleich Join über `files.dir` und gleich Zählung über
+`relpath` nach Einfügen, Metadaten einfügen/ändern/löschen, Verschieben, Fehlen, Löschen,
+Zusammenführen, direktem `relpath`-Update und Neuaufbau einer beschädigten Tabelle; Rückfall
+ohne Tabelle beim lesenden Öffnen, Anlage beim schreibenden Öffnen, Neuaufbau bei fehlendem
+Trigger), `src/ui/app/tests.rs` (Bestandsänderung bricht laufendes Lesen nicht ab, genau ein
+Nachlesen). Nicht gemessen: kalter Lesestart von `folder_counts` auf `E:\Bilder` (die Sammlung
+wurde nicht schreibend geöffnet), Dauer der Erstbefüllung auf der USB-Festplatte (erwartet in
+der Größenordnung des kalten Scans über `metadata_photos`, einmalig).

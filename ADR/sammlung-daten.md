@@ -23,7 +23,20 @@
 - **Additive Indizes ohne Versionssprung:** Reine Zusatzindizes auf abgeleiteten Daten stehen
   in `schema.sql` und `migrations::ADDITIVE_INDEXES` (Test prüft Gleichheit) und entstehen beim
   Öffnen mit Schreibrecht per `CREATE INDEX IF NOT EXISTS`. Tabellen, Spalten und Trigger
-  ändern sich nur mit neuer Schemaversion.
+  ändern sich nur mit neuer Schemaversion; einzige Ausnahme ist die Ordnerübersicht.
+- **Ordnerübersicht `folder_counts` (additiv):** `folder_counts(dir PRIMARY KEY, photos)
+  WITHOUT ROWID` zählt die Fotos aus `metadata_photos` je Ordner (`""` = Wurzel; Ordner =
+  `relpath` bis zum letzten `/`, gleich `files.dir`). Trigger auf `metadata_photos`
+  (Einfügen +1, Löschen −1 und Zeile bei 0 entfernen, Ändern von `relpath` beides) halten sie
+  in derselben Transaktion aktuell. Tabelle und Trigger stehen in `schema.sql` und
+  `migrations::FOLDER_COUNTS` (Test prüft Gleichheit); `ensure_folder_counts` legt sie beim
+  Öffnen mit Schreibrecht ohne Versionssprung an und befüllt sie in derselben Transaktion mit
+  einem `GROUP BY`. Fehlt ein Teil, wird alles neu gebaut. Ältere App-Versionen kennen die
+  Tabelle nicht, halten sie aber über die Trigger in der Datenbank mit. Der Neuaufbau von
+  `metadata_photos` in der Migration setzt die Trigger aus und berechnet die Tabelle danach in
+  einer Anweisung neu (je Zeile gefeuert verdoppelten sie seine Dauer). Grund:
+  Der Ordnerbaum las sonst auf einer USB-Festplatte Tausende verstreute Seiten (siehe
+  [Sammlungsansicht](sammlungsansicht.md)).
 - **Foto-Identität:** Dateien verweisen über `files.photo_id` auf ein Foto. Identität kommt
   bevorzugt aus Kameraseriennummer und Auslösezähler, mit festgelegten Rückfällen. Pfade
   beschreiben die Ablage, nicht die Identität. Beim Zusammenführen bleibt der ältere Anker,
@@ -48,7 +61,10 @@ können Nacharbeit brauchen. Beliebig beschädigte Datenbanken werden nicht repa
 
 ## Beim Ändern beachten
 
-Neue Varianten- oder Metadatenfelder ändern Projektion und Trigger gemeinsam. Trigger auf
+Neue Varianten- oder Metadatenfelder ändern Projektion und Trigger gemeinsam. Wer
+`metadata_photos` anders als über Einfügen, Löschen oder `relpath` ändert oder die
+Ordnerformel ändert, passt die `folder_counts`-Trigger an (Test vergleicht Tabelle und
+Zählung über `files.dir` nach jeder Änderungsart). Trigger auf
 `files` feuern bei jedem `UPDATE` einer gelisteten Spalte; unveränderte Zeilen nur über nicht
 gelistete Spalten anfassen. Migrationstests bilden vorhandene Zwischenstände ab. Neue Module
 binden an Foto-IDs und beachten Weiterleitungen.

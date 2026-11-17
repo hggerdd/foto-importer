@@ -16,13 +16,31 @@ struct Node {
 }
 
 /// Photos per directory (`""` is the collection root), one row per photo (preferred variant,
-/// no sidecars). One pass over the collection: the whole overview is read at once, because the
-/// number of directories is small compared to the number of photos.
+/// no sidecars). The whole overview is read at once, because the number of directories is
+/// small compared to the number of photos.
 ///
-/// With the covering index `ix_files_dir_cover` (additive, see ADR 0067) the scan stays inside
-/// the index; without it (read-only collection of an older version) the same result comes from
-/// the relative paths in `metadata_photos`.
+/// Normally this reads the additive summary table `folder_counts` (one row per folder, kept up
+/// to date by triggers on `metadata_photos`; see `migrations::FOLDER_COUNTS`): a few pages
+/// instead of thousands of scattered ones on a slow disk. A collection that was never opened
+/// for writing by this version has no such table; then [`scan_directories`] counts directly.
 pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
+    let summarized: bool = collection.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_counts')",
+        [],
+        |r| r.get(0),
+    )?;
+    if summarized {
+        query(collection, "SELECT dir,photos FROM folder_counts")
+    } else {
+        scan_directories(collection)
+    }
+}
+
+/// Counts the photos per directory from the projection itself (fallback and reference for
+/// `folder_counts`). With the covering index `ix_files_dir_cover` (additive, see ADR 0067) the
+/// scan stays inside the index; without it the same result comes from the relative paths in
+/// `metadata_photos`.
+pub fn scan_directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     let covered: bool = collection.db.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='ix_files_dir_cover')",
         [],
@@ -34,6 +52,10 @@ pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     } else {
         "SELECT rtrim(rtrim(relpath,replace(relpath,'/','')),'/'),count(*) FROM metadata_photos GROUP BY 1"
     };
+    query(collection, sql)
+}
+
+fn query(collection: &Collection, sql: &str) -> Result<Vec<(String, usize)>> {
     let mut statement = collection.db.prepare(sql)?;
     let mut rows = statement.query([])?;
     let mut out = Vec::new();
@@ -244,10 +266,18 @@ impl FolderTree {
         self.loading
     }
 
+    /// A read finished. Its result is shown even if the contents changed meanwhile (nothing
+    /// newer exists); a change marked by [`reset`](Self::reset) during the read keeps the tree
+    /// stale, so exactly one follow-up read starts.
     pub fn apply(&mut self, directories: &[(String, usize)]) {
         self.nodes = Some(build(directories));
         self.loading = false;
         self.failed = false;
+    }
+
+    /// A tree is shown and a read to refresh it is running.
+    pub fn is_refreshing(&self) -> bool {
+        self.nodes.is_some() && self.loading
     }
 
     /// A worker failed: do not retry in a loop.
@@ -367,6 +397,29 @@ mod tests {
             3,
             "old tree stays until the new one arrives"
         );
+    }
+
+    #[test]
+    fn changes_during_a_read_keep_its_result_and_ask_for_exactly_one_more() {
+        let mut tree = FolderTree::default();
+        tree.begin();
+        tree.apply(&dirs(&[("alt", 1)]));
+        tree.reset();
+        assert!(tree.needs_load());
+        tree.begin();
+        assert!(
+            tree.is_refreshing(),
+            "the old tree stays visible while it is read again"
+        );
+        tree.reset();
+        tree.reset();
+        assert!(!tree.needs_load(), "the running read is not replaced");
+        tree.apply(&dirs(&[("neu", 1)]));
+        assert_eq!(names(&tree), ["neu"]);
+        assert!(tree.needs_load());
+        tree.begin();
+        tree.apply(&dirs(&[("neu", 2)]));
+        assert!(!tree.needs_load());
     }
 
     #[test]
