@@ -70,15 +70,18 @@ impl PhotoApp {
                 });
             self.large = open;
         }
-        if let Some(face) = self.naming.clone() {
+        if let Some(face) = self.naming {
             let mut open = true;
-            egui::Window::new(format!("Gesicht #{} benennen", face.id))
+            let mut submitted = false;
+            egui::Window::new(format!("Gesicht #{face} benennen"))
                 .open(&mut open)
                 .default_width(600.0)
                 .show(ctx, |ui| {
                     let mut submit = false;
-                    ui.label("Bestehende Person wählen oder neuen Namen eingeben.");
-                    let busy = self.busy();
+                    ui.label(
+                        "Bestehende Person wählen oder neuen Namen eingeben.                          Nur dieses Gesicht wird benannt.",
+                    );
+                    let busy = self.naming_blocked();
                     ui.label(
                         RichText::new("Ähnlichkeitsvorschläge · die Werte sind keine Garantie")
                             .small()
@@ -145,21 +148,24 @@ impl PhotoApp {
                     if theme::primary(
                         ui,
                         "Übernehmen",
-                        !self.busy() && !self.name_input.trim().is_empty(),
-                    ) || submit && !self.busy()
+                        !busy && !self.name_input.trim().is_empty(),
+                    ) || submit && !busy
                     {
                         let root = self.settings.collection.clone();
                         let name = self.name_input.clone();
                         let person = self.name_person;
                         let config = self.settings.central();
-                        let hidden = vec![face.id];
+                        let hidden = vec![face];
+                        // Der Dialog schließt sofort; das Gesicht verschwindet aus der Seite,
+                        // geschrieben wird dahinter (wie bei Gruppenkarten).
+                        submitted = true;
                         self.queue_hiding("Gesicht benennen", hidden, move |_| {
                             let mut c = Collection::open(Path::new(&root), true)?;
                             let (undo, note) = crate::core::central::name_group_synced(
                                 &mut c,
                                 &config,
-                                &[face.id],
-                                &BTreeSet::from([face.id]),
+                                &[face],
+                                &BTreeSet::from([face]),
                                 person,
                                 &name,
                                 false,
@@ -168,7 +174,7 @@ impl PhotoApp {
                         });
                     }
                 });
-            if !open {
+            if !open || submitted {
                 self.naming = None;
             }
         }

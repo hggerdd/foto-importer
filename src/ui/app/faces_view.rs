@@ -384,6 +384,8 @@ impl PhotoApp {
             }
         });
         let mut decision = None;
+        // Rechtsklick „Einzeln benennen …“ auf einer Kachel: Dialog für genau dieses Gesicht.
+        let mut name_one = None;
         let proposals = group
             .first()
             .and_then(|f| self.face_page.suggestions.get(&f.id))
@@ -405,7 +407,8 @@ impl PhotoApp {
                         let size = egui::vec2(56.0, 56.0);
                         match self.face_page.portraits.get(&person.id) {
                             Some(face) => {
-                                self.thumbnails
+                                let response = self
+                                    .thumbnails
                                     .image(
                                         ui,
                                         PreviewRequest {
@@ -420,9 +423,12 @@ impl PhotoApp {
                                         size,
                                     )
                                     .on_hover_text(format!(
-                                        "Ein bestätigtes Bild von {}",
+                                        "Ein bestätigtes Bild von {}\n{SINGLE_NAMING_HINT}",
                                         person.name
                                     ));
+                                if single_naming_menu(&response) {
+                                    name_one = Some(face.id);
+                                }
                             }
                             None => {
                                 ui.allocate_space(size);
@@ -476,19 +482,27 @@ impl PhotoApp {
                                     let size = egui::vec2(40.0, 40.0);
                                     match proposals.as_ref().and_then(|p| p.portraits.get(person)) {
                                         Some(face) => {
-                                            self.thumbnails.image(
-                                                ui,
-                                                PreviewRequest {
-                                                    root: Some(PathBuf::from(&root)),
-                                                    path: Path::new(&root).join(&face.source),
-                                                    orientation: 1,
-                                                    crop: Some(face.bbox),
-                                                    edge: 160,
-                                                    generation: 0,
-                                                },
-                                                &exiftool,
-                                                size,
-                                            );
+                                            let response = self
+                                                .thumbnails
+                                                .image(
+                                                    ui,
+                                                    PreviewRequest {
+                                                        root: Some(PathBuf::from(&root)),
+                                                        path: Path::new(&root).join(&face.source),
+                                                        orientation: 1,
+                                                        crop: Some(face.bbox),
+                                                        edge: 160,
+                                                        generation: 0,
+                                                    },
+                                                    &exiftool,
+                                                    size,
+                                                )
+                                                .on_hover_text(format!(
+                                                    "Ein bestätigtes Bild von {name}\n{SINGLE_NAMING_HINT}"
+                                                ));
+                                            if single_naming_menu(&response) {
+                                                name_one = Some(face.id);
+                                            }
                                         }
                                         None => {
                                             ui.allocate_space(size);
@@ -607,8 +621,13 @@ impl PhotoApp {
                                     &exiftool,
                                     egui::vec2(size, size),
                                 );
-                                let response =
-                                    response.on_hover_text(format!("Gesicht {}", face.id));
+                                let response = response.on_hover_text(format!(
+                                    "Gesicht {}\n{SINGLE_NAMING_HINT}",
+                                    face.id
+                                ));
+                                if single_naming_menu(&response) {
+                                    name_one = Some(face.id);
+                                }
                                 if hover_enabled && response.hovered() {
                                     self.hover_face = Some(face.clone());
                                 }
@@ -647,6 +666,9 @@ impl PhotoApp {
             && self.decide_group(group, decision)
         {
             self.face_keys = false;
+        }
+        if let Some(id) = name_one {
+            self.open_naming(id);
         }
     }
 
@@ -771,6 +793,22 @@ impl PhotoApp {
 }
 
 /// Gehört der Reiter zu „Erledigt“ („Bestätigt“ oder „Ignoriert“)?
+/// Hinweis unter der Maus für jede Gesichtskachel mit Rechtsklickmenü.
+pub(super) const SINGLE_NAMING_HINT: &str = "Rechtsklick: einzeln benennen";
+
+/// Rechtsklickmenü einer Gesichtskachel; `true`, wenn „Einzeln benennen …“ gewählt wurde.
+/// Der Linksklick der Kachel bleibt unberührt.
+pub(super) fn single_naming_menu(response: &egui::Response) -> bool {
+    let mut chosen = false;
+    response.context_menu(|ui| {
+        if ui.button("Einzeln benennen …").clicked() {
+            chosen = true;
+            ui.close();
+        }
+    });
+    chosen
+}
+
 pub(super) fn done_tab(mode: &str) -> bool {
     matches!(mode, "confirmed" | "ignored")
 }

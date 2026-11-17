@@ -43,6 +43,18 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   Tasten. Die Hinweistexte der Knöpfe der obersten Gruppe nennen die Taste. Nach einer
   Entscheidung per Taste erhält das Namensfeld der nächsten Gruppe keinen Fokus, damit die
   Tasten weiter gelten; nach einem Klick oder Enter erhält es ihn wie bisher.
+- **Einzeln benennen:** Jede Gesichtskachel (Gruppenkarten in „Benennen“, „Vorschläge
+  prüfen“ und „Erledigt“, Referenzporträt der Karte und von „Ist das X?“, Porträt in den
+  Personendetails, Kacheln, Abschnittsansicht und große Vorschau der Zeitreise) hat ein
+  Rechtsklickmenü „Einzeln benennen …“; der Hinweistext nennt „Rechtsklick: einzeln
+  benennen“. Der Linksklick bleibt unverändert (Auswahl bzw. Fokus). Der Eintrag öffnet
+  denselben Dialog wie in den Bilddetails der Sammlung; er ist ein globales Fenster, hängt an
+  keiner Ansicht und liest seine Vorschläge mit eigener Revision. „Übernehmen“ setzt nur
+  dieses Gesicht auf `user` (eine bestehende Ablehnung dieser Person entfällt), andere
+  Gesichter der Gruppe erhalten keine Ablehnung. Der Dialog schließt sofort, das Gesicht
+  verschwindet über `queue_hiding`; danach werden Gesichter, Personen und beim nächsten Zeigen
+  die Zeitreise neu gelesen. Strg+Z nimmt die Benennung zurück. Personentabelle (Zeilen sind
+  Personen), Vorschlagschips (Klick wählt die Person) und der Graph haben keinen Eintrag.
 - **Bestätigen** setzt ausgewählte Gesichter auf `user`. Abgewählte erhalten eine
   gespeicherte Ablehnung für diese Person (`face_rejections`), die jeder spätere Abgleich
   beachtet. Ein neuer Name legt eine Person an; bei mehreren gleichnamigen Personen muss die

@@ -869,19 +869,29 @@ impl PhotoApp {
             let size = Vec2::splat(96.0);
             match portrait {
                 Some(face) => {
-                    self.thumbnails.image(
-                        ui,
-                        PreviewRequest {
-                            root: Some(PathBuf::from(&root)),
-                            path: Path::new(&root).join(&face.source),
-                            orientation: 1,
-                            crop: Some(face.bbox),
-                            edge: 256,
-                            generation: 0,
-                        },
-                        &exiftool,
-                        size,
-                    );
+                    let response = self
+                        .thumbnails
+                        .image(
+                            ui,
+                            PreviewRequest {
+                                root: Some(PathBuf::from(&root)),
+                                path: Path::new(&root).join(&face.source),
+                                orientation: 1,
+                                crop: Some(face.bbox),
+                                edge: 256,
+                                generation: 0,
+                            },
+                            &exiftool,
+                            size,
+                        )
+                        .on_hover_text(format!(
+                            "Gesicht {}\n{}",
+                            face.id,
+                            super::faces_view::SINGLE_NAMING_HINT
+                        ));
+                    if super::faces_view::single_naming_menu(&response) {
+                        self.open_naming(face.id);
+                    }
                 }
                 None => {
                     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
