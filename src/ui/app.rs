@@ -3,6 +3,7 @@ mod collection_view;
 mod errors;
 mod faces_view;
 mod folder_tree;
+mod import_queue;
 mod import_view;
 mod optimistic;
 mod people_table;
@@ -253,6 +254,9 @@ pub struct PhotoApp {
     selected: BTreeSet<String>,
     focused: String,
     folder_name: String,
+    /// Festgelegte Imports dieser Sitzung in Reihenfolge; höchstens einer läuft.
+    imports: Vec<import_queue::ImportBatch>,
+    import_serial: u64,
     filters: Search,
     applied: Search,
     /// Zuletzt angefragte Suche; `applied` folgt erst mit dem Ergebnis.
@@ -378,6 +382,8 @@ impl PhotoApp {
             selected: BTreeSet::new(),
             focused: String::new(),
             folder_name: String::new(),
+            imports: Vec::new(),
+            import_serial: 0,
             filters: Search::default(),
             applied: Search::default(),
             queried: Search::default(),
@@ -568,7 +574,9 @@ impl PhotoApp {
         hides: Vec<i64>,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
-        if write && kind != "copy" && !low_priority(kind) {
+        // Auch ein Import lässt Hintergrundschreiber weichen, damit seine Indexaktualisierung
+        // nicht auf sie wartet; sie setzen nach der Warteschlange fort.
+        if write && !low_priority(kind) {
             for task in &self.tasks {
                 if low_priority(task.kind) {
                     task.task.control.stop();
@@ -933,6 +941,7 @@ impl PhotoApp {
             || self.metadata_paused
             || self.metadata_bg_failed
             || self.busy()
+            || self.imports_pending() > 0
             || self.settings.collection.is_empty()
             || self.settings.exiftool.trim().is_empty()
             || self.status.unread == 0
@@ -1159,6 +1168,14 @@ impl PhotoApp {
                 }
                 other => other,
             };
+            // Meldungen eines Imports nennen Zielordner und Tage.
+            let label = if running.kind == "copy" {
+                let cancelled = running.task.control.cancel.load(Ordering::Relaxed);
+                self.finish_import(&result, cancelled)
+            } else {
+                None
+            }
+            .unwrap_or_else(|| running.task.label.clone());
             match result {
                 Err(e) if running.kind == "metadata-bg" => {
                     // Abbruch durch einen Nutzerauftrag ist kein Fehler: der Lauf setzt später
@@ -1209,12 +1226,11 @@ impl PhotoApp {
                         }
                     }
                     if !running.task.control.cancel.load(Ordering::Relaxed) {
-                        self.message(format!("{}: {e:#}", running.task.label), true);
+                        self.message(format!("{label}: {e:#}"), true);
                     } else {
                         self.message(
                             format!(
-                                "{} abgebrochen. Bereits gespeicherte Ergebnisse bleiben erhalten.",
-                                running.task.label
+                                "{label} abgebrochen. Bereits gespeicherte Ergebnisse bleiben erhalten."
                             ),
                             false,
                         );
@@ -1476,11 +1492,12 @@ impl PhotoApp {
                     }
                     self.message(
                         format!(
-                            "{} · {} Dateien kopiert · {} übersprungen · {} DNGs · {} Fehler{}",
+                            "{} {} · {} Dateien kopiert · {} übersprungen · {} DNGs · {} Fehler{}",
+                            label,
                             if report.cancelled {
-                                "Import abgebrochen"
+                                "abgebrochen"
                             } else {
-                                "Import beendet"
+                                "beendet"
                             },
                             report.copied.len(),
                             report.skipped.len(),
@@ -1539,6 +1556,8 @@ impl PhotoApp {
             }
         }
         self.notice_origin = None;
+        // Der nächste festgelegte Import beginnt, sobald der vorige fertig ist.
+        self.start_next_import();
         if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -1548,7 +1567,13 @@ impl PhotoApp {
             self.collection_action("metadata");
         }
         self.live_gallery(ctx);
-        if !self.closing && !self.busy() && !self.models_installing() && self.auto_analysis_pending
+        // Die Analyse wartet, bis alle festgelegten Imports durch sind: sie belegt die Sammlung
+        // und hielte sonst die Indexaktualisierung der nächsten Imports auf.
+        if !self.closing
+            && !self.busy()
+            && !self.models_installing()
+            && self.imports_pending() == 0
+            && self.auto_analysis_pending
         {
             self.auto_analysis_pending = false;
             self.collection_action("automatic");
@@ -1570,6 +1595,7 @@ impl PhotoApp {
         if !self.closing
             && !self.maintenance_paused
             && !self.busy()
+            && self.imports_pending() == 0
             && self.face_page.status.pending > 0
             && !self
                 .tasks

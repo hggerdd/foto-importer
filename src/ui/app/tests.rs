@@ -959,17 +959,230 @@ fn the_first_click_shows_a_day_and_the_second_toggles_its_import() {
     assert!(app.selected.is_empty());
     assert_eq!(app.focused, "2026-11-04");
     assert_eq!(
-        import_view::day_label("2026-11-04", 1, true),
+        import_view::day_label("2026-11-04", 1, true, None),
         "✔ 2026-11-04\n1 Datei"
     );
     assert_eq!(
-        import_view::day_label("2026-11-04", 2, false),
+        import_view::day_label("2026-11-04", 2, false, None),
         "2026-11-04\n2 Dateien"
     );
-    // Das Häkchen muss in den Schriften der Anwendung vorhanden sein.
+    assert_eq!(
+        import_view::day_label("2026-11-04", 2, false, Some(import_queue::DayMark::Queued)),
+        "2026-11-04\n2 Dateien · ⏳ eingeplant"
+    );
+    // Häkchen und Markierungen müssen in den Schriften der Anwendung vorhanden sein.
     let _ = context.run(egui::RawInput::default(), |ctx| {
-        assert!(ctx.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), "✔")));
+        for glyph in ["✔", "⏳", "⚠"] {
+            assert!(
+                ctx.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(14.0), glyph)),
+                "{glyph} fehlt"
+            );
+        }
     });
+}
+
+/// Quelle mit je zwei JPEGs an drei Tagen und ein Zielordner, beide temporär.
+fn queue_app(source: &Path, target: &Path) -> anyhow::Result<PhotoApp> {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.source = source.to_string_lossy().into_owned();
+    app.settings.target = target.to_string_lossy().into_owned();
+    app.settings.dng = false;
+    app.settings.skip_imported = false;
+    for day in ["2026-11-01", "2026-11-02", "2026-11-03"] {
+        for n in 0..2 {
+            let path = source.join(format!("{day}-{n}.jpg"));
+            std::fs::write(&path, format!("{day} Bild {n}"))?;
+            app.scan.files.push(SourceFile {
+                path,
+                day: day.into(),
+                size: 12,
+            });
+        }
+    }
+    app.scan_revision += 1;
+    Ok(app)
+}
+
+fn queue_days(app: &mut PhotoApp, days: &[&str], folder: &str) {
+    for day in days {
+        app.click_day(day);
+        app.click_day(day);
+    }
+    app.folder_name = folder.into();
+    app.queue_import();
+}
+
+fn batch_states(app: &PhotoApp) -> Vec<import_queue::BatchState> {
+    app.imports.iter().map(|b| b.state.clone()).collect()
+}
+
+#[test]
+fn queuing_an_import_clears_the_selection_and_marks_the_days() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let mut app = queue_app(source.path(), target.path())?;
+    queue_days(&mut app, &["2026-11-01", "2026-11-02"], "2026-11 Herbst");
+    assert!(app.selected.is_empty(), "nichts bleibt ausgewählt");
+    assert!(app.focused.is_empty(), "kein Tag bleibt angezeigt");
+    assert!(
+        app.folder_name.is_empty(),
+        "der nächste Ordner beginnt leer"
+    );
+    assert_eq!(
+        app.notice.as_ref().map(|n| n.text.as_str()),
+        Some("2 Tage für „2026-11 Herbst“ eingeplant")
+    );
+    let marks = app.day_marks();
+    assert!(
+        marks
+            .get("2026-11-01")
+            .is_some_and(|m| m.locked() && m.greyed())
+    );
+    assert!(marks.get("2026-11-02").is_some_and(|m| m.locked()));
+    assert!(!marks.contains_key("2026-11-03"));
+    // Ein festgelegter Tag lässt sich nicht erneut wählen, der nächste schon.
+    app.click_day("2026-11-01");
+    app.click_day("2026-11-01");
+    assert!(app.selected.is_empty());
+    app.click_day("2026-11-03");
+    app.click_day("2026-11-03");
+    assert!(app.selected.contains("2026-11-03"));
+    wait_for_tasks(&mut app);
+    assert_eq!(batch_states(&app), [import_queue::BatchState::Done]);
+    assert_eq!(
+        app.day_marks().get("2026-11-01"),
+        Some(&import_queue::DayMark::Done)
+    );
+    assert_eq!(
+        std::fs::read_dir(target.path().join("2026-11 Herbst").join("jpg"))?.count(),
+        4
+    );
+    Ok(())
+}
+
+#[test]
+fn imports_queued_back_to_back_run_one_after_the_other() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let mut app = queue_app(source.path(), target.path())?;
+    queue_days(&mut app, &["2026-11-01"], "Erster");
+    queue_days(&mut app, &["2026-11-02"], "Zweiter");
+    queue_days(&mut app, &["2026-11-03"], "Dritter");
+    use import_queue::BatchState::*;
+    // Nur einer läuft, die anderen warten in der festgelegten Reihenfolge.
+    assert_eq!(batch_states(&app), [Running, Queued, Queued]);
+    assert_eq!(tasks_of(&app, "copy"), 1);
+    assert_eq!(app.tasks[0].task.label, "Import „Erster“");
+    let mut seen = Vec::new();
+    for _ in 0..3000 {
+        app.poll(&egui::Context::default());
+        assert!(tasks_of(&app, "copy") <= 1, "nie zwei Imports gleichzeitig");
+        if let Some(task) = app.tasks.iter().find(|t| t.kind == "copy")
+            && seen.last() != Some(&task.task.label)
+        {
+            seen.push(task.task.label.clone());
+        }
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        seen,
+        ["Import „Erster“", "Import „Zweiter“", "Import „Dritter“"]
+    );
+    assert_eq!(batch_states(&app), [Done, Done, Done]);
+    // Aufgaben und Verlauf nennen Zielordner und Tage jedes Imports.
+    let destination =
+        import_view::display_path(&target.path().join("Zweiter").to_string_lossy()).into_owned();
+    assert_eq!(app.imports[1].destination(), destination);
+    assert_eq!(app.imports[1].days_text(), "Tag: 2026-11-02");
+    assert!(app.history.iter().any(|line| {
+        line.contains("Import „Zweiter“")
+            && line.contains(&destination)
+            && line.contains("2026-11-02")
+            && line.contains("2 Dateien kopiert")
+    }));
+    for folder in ["Erster", "Zweiter", "Dritter"] {
+        assert_eq!(
+            std::fs::read_dir(target.path().join(folder).join("jpg"))?.count(),
+            2,
+            "{folder}"
+        );
+    }
+    // Die Originale bleiben unverändert.
+    assert_eq!(std::fs::read_dir(source.path())?.count(), 6);
+    Ok(())
+}
+
+#[test]
+fn a_failing_import_does_not_stop_the_next_one() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let mut app = queue_app(source.path(), target.path())?;
+    // Das erste Ziel gibt es nicht: der Import schlägt fehl.
+    app.settings.target = target.path().join("fehlt").to_string_lossy().into_owned();
+    queue_days(&mut app, &["2026-11-01"], "Erster");
+    app.settings.target = target.path().to_string_lossy().into_owned();
+    queue_days(&mut app, &["2026-11-02"], "Zweiter");
+    wait_for_tasks(&mut app);
+    use import_queue::BatchState::*;
+    assert_eq!(batch_states(&app), [Failed, Done]);
+    assert_eq!(
+        app.day_marks().get("2026-11-01"),
+        Some(&import_queue::DayMark::Failed)
+    );
+    assert!(
+        app.history
+            .iter()
+            .any(|line| line.contains("Import „Erster“"))
+    );
+    assert_eq!(
+        std::fs::read_dir(target.path().join("Zweiter").join("jpg"))?.count(),
+        2
+    );
+    // Ein fehlgeschlagener Tag ist wieder wählbar.
+    app.click_day("2026-11-01");
+    app.click_day("2026-11-01");
+    assert!(app.selected.contains("2026-11-01"));
+    Ok(())
+}
+
+#[test]
+fn an_import_task_names_its_folder_and_dng() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let mut app = queue_app(source.path(), target.path())?;
+    app.settings.dng = true;
+    app.settings.converter = target
+        .path()
+        .join("fehlt.exe")
+        .to_string_lossy()
+        .into_owned();
+    queue_days(&mut app, &["2026-11-01"], "Mit Umwandlung");
+    assert_eq!(app.tasks[0].task.label, "Import „Mit Umwandlung“ · mit DNG");
+    wait_for_tasks(&mut app);
+    // Ohne Converter schlägt der Import vor dem Kopieren fehl; nichts wurde angelegt.
+    assert_eq!(batch_states(&app), [import_queue::BatchState::Failed]);
+    assert!(!target.path().join("Mit Umwandlung").exists());
+    Ok(())
+}
+
+#[test]
+fn a_queued_import_can_be_taken_back_before_it_starts() -> anyhow::Result<()> {
+    let source = tempfile::tempdir()?;
+    let target = tempfile::tempdir()?;
+    let mut app = queue_app(source.path(), target.path())?;
+    queue_days(&mut app, &["2026-11-01"], "Erster");
+    queue_days(&mut app, &["2026-11-02"], "Zweiter");
+    let id = app.imports[1].id;
+    app.remove_queued_import(id);
+    assert!(!app.day_marks().contains_key("2026-11-02"));
+    wait_for_tasks(&mut app);
+    assert_eq!(app.imports.len(), 1);
+    assert!(!target.path().join("Zweiter").exists());
+    Ok(())
 }
 
 #[test]

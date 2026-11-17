@@ -8,18 +8,30 @@ pub(super) fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Beschriftung eines Aufnahmetags; das Häkchen zeigt die Importauswahl.
-pub(super) fn day_label(day: &str, count: usize, selected: bool) -> String {
-    let mark = if selected { "✔ " } else { "" };
-    format!("{mark}{day}\n{}", plural(count, "Datei", "Dateien"))
+/// Beschriftung eines Aufnahmetags; das Häkchen zeigt die Importauswahl, die zweite Zeile
+/// nennt den Stand eines festgelegten Imports dieses Tages.
+pub(super) fn day_label(
+    day: &str,
+    count: usize,
+    selected: bool,
+    mark: Option<import_queue::DayMark>,
+) -> String {
+    let files = plural(count, "Datei", "Dateien");
+    match mark {
+        _ if selected => format!("✔ {day}\n{files}"),
+        Some(mark) => format!("{day}\n{files} · {}", mark.text()),
+        None => format!("{day}\n{files}"),
+    }
 }
 
 impl PhotoApp {
     /// Erster Klick zeigt den Tag in der Vorschau, ein Klick auf den angezeigten Tag
-    /// schaltet seine Importauswahl um.
+    /// schaltet seine Importauswahl um. Eingeplante und laufende Tage bleiben abgewählt.
     pub(super) fn click_day(&mut self, day: &str) {
         if self.focused != day {
             self.focused = day.to_owned();
+        } else if self.day_locked(day) {
+            self.selected.remove(day);
         } else if !self.selected.remove(day) {
             self.selected.insert(day.to_owned());
         }
@@ -116,10 +128,19 @@ impl PhotoApp {
         }
         let selected_files = std::sync::Arc::clone(&self.import_cache.selection);
         let days = self.import_cache.days.clone();
+        let marks = self.day_marks();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("02  AUFNAHMETAGE").strong());
-            if ui.small_button("Alle auswählen").clicked() {
-                self.selected = days.keys().cloned().collect();
+            if ui
+                .small_button("Alle auswählen")
+                .on_hover_text("Eingeplante und schon importierte Tage bleiben abgewählt.")
+                .clicked()
+            {
+                self.selected = days
+                    .keys()
+                    .filter(|day| !marks.get(*day).is_some_and(|m| m.greyed()))
+                    .cloned()
+                    .collect();
             }
             if ui.small_button("Auswahl leeren").clicked() {
                 self.selected.clear();
@@ -131,15 +152,31 @@ impl PhotoApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for (day, count) in days.iter().rev() {
+                        let selected = self.selected.contains(day);
+                        let mark = marks.get(day).copied();
+                        let text = RichText::new(day_label(day, *count, selected, mark));
+                        let text = match mark {
+                            // Festgelegte Tage treten zurück, damit die offenen auffallen.
+                            Some(m) if m.greyed() && !selected => text.weak(),
+                            Some(import_queue::DayMark::Failed) if !selected => {
+                                text.strong().color(theme::WARM)
+                            }
+                            _ => text.strong(),
+                        };
+                        let hint = match mark {
+                            Some(m) if m.locked() => {
+                                "Für den Import festgelegt. Klick zeigt die Vorschau; der Tag ist nicht erneut wählbar, solange der Import wartet oder läuft."
+                            }
+                            Some(import_queue::DayMark::Done) => {
+                                "Bereits importiert. Klick zeigt die Vorschau, ein zweiter Klick wählt den Tag trotzdem erneut an."
+                            }
+                            _ => {
+                                "Klick zeigt die Vorschau, ein zweiter Klick wählt den Tag für den Import an oder ab."
+                            }
+                        };
                         if ui
-                            .selectable_label(
-                                self.focused == *day,
-                                RichText::new(day_label(day, *count, self.selected.contains(day)))
-                                    .strong(),
-                            )
-                            .on_hover_text(
-                                "Klick zeigt die Vorschau, ein zweiter Klick wählt den Tag für den Import an oder ab.",
-                            )
+                            .selectable_label(self.focused == *day, text)
+                            .on_hover_text(hint)
                             .clicked()
                         {
                             self.click_day(day);
@@ -160,7 +197,16 @@ impl PhotoApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(format!("{} · Vorschau", self.focused)).strong());
+                        if self.focused.is_empty() {
+                            ui.label(
+                                RichText::new("Nächsten Tag oben anklicken, um ihn anzusehen")
+                                    .weak(),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(format!("{} · Vorschau", self.focused)).strong(),
+                            );
+                        }
                         ui.add(
                             egui::Slider::new(&mut self.zoom, 120.0..=240.0)
                                 .show_value(false)
@@ -284,32 +330,21 @@ impl PhotoApp {
             ))
             .strong(),
         );
-        let ready = valid
-            && !selected_files.is_empty()
-            && !self.settings.target.is_empty()
-            && self.tasks.iter().filter(|t| t.kind == "copy").count() < 8;
+        // Festlegen ist immer möglich; die Warteschlange arbeitet die Imports nacheinander ab.
+        let ready = valid && !selected_files.is_empty() && !self.settings.target.is_empty();
         if theme::primary(ui, "Sicher importieren", ready) {
-            let target = PathBuf::from(&self.settings.target);
-            let name = self.folder_name.clone();
-            let converter = self
-                .settings
-                .dng
-                .then(|| PathBuf::from(&self.settings.converter));
-            let files = selected_files.to_vec();
-            let skip = self.settings.skip_imported;
-            let exiftool = self.settings.exiftool.clone();
-            self.save();
-            self.launch("Fotos sicher kopieren", true, "copy", move |control| {
-                Ok(Outcome::Imported(crate::core::import_service::execute(
-                    &files,
-                    &target,
-                    &name,
-                    converter.as_deref(),
-                    skip,
-                    &exiftool,
-                    &control,
-                )?))
-            });
+            self.queue_import();
+        }
+        let pending = self.imports_pending();
+        if pending > 0 {
+            ui.label(
+                RichText::new(format!(
+                    "Warteschlange: {} · nacheinander, unter Aufgaben sichtbar",
+                    plural(pending, "Import", "Imports")
+                ))
+                .small()
+                .weak(),
+            );
         }
     }
     pub(super) fn source_gallery(&mut self, ui: &mut egui::Ui, files: &[SourceFile]) {
