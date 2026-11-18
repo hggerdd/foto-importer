@@ -7,6 +7,7 @@ use super::*;
 use crate::core::{
     gaps::{self, Answer, Suggestion, SuggestionKind},
     people_table::{self as table, Column, PersonRow, SortKey},
+    person_insights::{self, Insights},
     relations::{Gender, Role},
 };
 use crate::ui::select::{Choice, FilterSelect, person_choices};
@@ -65,6 +66,11 @@ pub(super) struct PeopleUi {
     merge_target: Option<i64>,
     merge_confirm: bool,
     scroll_to: Option<i64>,
+    /// Zusatzangaben der gewählten Person (Worker-Ergebnis) und der Stand, für den sie
+    /// angefragt wurden: (Person, `face_page_serial`).
+    pub(super) insights: Option<Insights>,
+    insights_key: Option<(i64, u64)>,
+    insights_revision: u64,
     /// Nur Sichtprüfung: Suchtext, mit dem das Beziehungs-Auswahlfeld offen bleibt.
     pub(super) capture_popup: Option<String>,
     #[cfg(test)]
@@ -98,6 +104,9 @@ impl Default for PeopleUi {
             merge_target: None,
             merge_confirm: false,
             scroll_to: None,
+            insights: None,
+            insights_key: None,
+            insights_revision: 0,
             capture_popup: None,
             #[cfg(test)]
             bounds: None,
@@ -116,8 +125,16 @@ impl PeopleUi {
         *self = Self {
             sort: std::mem::take(&mut self.sort),
             capture_popup: self.capture_popup.take(),
+            // Die Revision läuft weiter, damit kein Ergebnis der alten Sammlung passt.
+            insights_revision: self.insights_revision + 1,
             ..Self::default()
         };
+    }
+    /// Übernimmt Zusatzangaben nur, wenn sie zur zuletzt angefragten Revision gehören.
+    pub(super) fn accept_insights(&mut self, revision: u64, insights: Insights) {
+        if revision == self.insights_revision {
+            self.insights = Some(insights);
+        }
     }
     /// Nur für Sichtprüfungen: Sortierspalte aus der Umgebung (`name`, `photos`, …).
     pub(super) fn sort_from_env(&mut self) {
@@ -832,6 +849,11 @@ impl PhotoApp {
             .find(|r| r.id == person.id)
             .cloned();
         self.detail_header(ui, &person, row.as_ref());
+        if row.as_ref().is_some_and(|r| r.photos > 0) {
+            self.ensure_insights(person.id);
+            ui.separator();
+            self.detail_companions(ui, &person);
+        }
         ui.separator();
         self.detail_properties(ui, &person);
         ui.separator();
@@ -979,6 +1001,107 @@ impl PhotoApp {
         }
         if time {
             self.set_person_mode(PersonMode::Time);
+        }
+    }
+
+    /// Liest die Zusatzangaben der Person auf einem Worker, einmal je Person und Datenstand.
+    fn ensure_insights(&mut self, person: i64) {
+        let key = (person, self.face_page_serial);
+        if self.people_ui.insights_key == Some(key) || self.settings.collection.is_empty() {
+            return;
+        }
+        self.people_ui.insights_key = Some(key);
+        self.people_ui.insights_revision += 1;
+        let revision = self.people_ui.insights_revision;
+        let root = PathBuf::from(&self.settings.collection);
+        self.launch(
+            "Personendetails lesen",
+            false,
+            "person-insights",
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                Ok(Outcome::PersonInsights(
+                    revision,
+                    person_insights::load(&c, person)?,
+                ))
+            },
+        );
+    }
+
+    /// „Häufig zusammen mit“: Personen mit den meisten gemeinsamen Fotos. Der Name wählt die
+    /// Person, die Zahl öffnet die Sammlung mit genau diesen Fotos.
+    fn detail_companions(&mut self, ui: &mut egui::Ui, person: &faces::Person) {
+        ui.label(RichText::new("Häufig zusammen mit").size(17.0).strong());
+        let Some(insights) = self
+            .people_ui
+            .insights
+            .as_ref()
+            .filter(|i| i.person == person.id)
+            .cloned()
+        else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(muted("Gemeinsame Fotos werden gezählt …"));
+            });
+            return;
+        };
+        if insights.companions.is_empty() {
+            ui.label(muted(
+                "Auf keinem Foto zusammen mit einer anderen benannten Person.",
+            ));
+            return;
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        let mut select = None;
+        let mut photos = None;
+        for companion in &insights.companions {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
+                paint_portrait(
+                    ui,
+                    rect.center(),
+                    14.0,
+                    self.face_page.portraits.get(&companion.person),
+                    &companion.name,
+                    &mut self.thumbnails,
+                    &root,
+                    &exiftool,
+                );
+                if ui
+                    .link(&companion.name)
+                    .on_hover_text("Diese Person wählen")
+                    .clicked()
+                {
+                    select = Some(companion.person);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = super::plural(companion.photos, "Foto", "Fotos");
+                    if ui
+                        .button(label)
+                        .on_hover_text(format!(
+                            "Fotos mit {} und {} in der Sammlung zeigen",
+                            person.name, companion.name
+                        ))
+                        .clicked()
+                    {
+                        photos = Some(companion.person);
+                    }
+                });
+            });
+        }
+        if let Some(id) = select {
+            self.select_person(id);
+            self.people_ui.scroll_to_person(id);
+        }
+        if let Some(other) = photos {
+            self.filters = Search {
+                people_all: vec![person.id, other],
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
         }
     }
 
@@ -1301,6 +1424,55 @@ impl PhotoApp {
     }
 }
 
+/// Rundes Porträt aus dem Vorschau-Cache; Initialen, solange es fehlt oder lädt.
+#[allow(clippy::too_many_arguments)]
+fn paint_portrait(
+    ui: &egui::Ui,
+    centre: Pos2,
+    radius: f32,
+    portrait: Option<&Face>,
+    name: &str,
+    thumbnails: &mut Thumbnails,
+    root: &str,
+    exiftool: &str,
+) {
+    let texture = portrait.and_then(|face| {
+        thumbnails.texture(
+            ui.ctx(),
+            PreviewRequest {
+                root: Some(PathBuf::from(root)),
+                path: Path::new(root).join(&face.source),
+                orientation: 1,
+                crop: Some(face.bbox),
+                edge: 96,
+                generation: 0,
+            },
+            exiftool,
+        )
+    });
+    match texture {
+        Some((id, size)) => textured_circle(
+            ui.painter(),
+            centre,
+            radius,
+            id,
+            square_uv(size),
+            Color32::WHITE,
+        ),
+        None => {
+            ui.painter()
+                .circle_filled(centre, radius, ui.visuals().faint_bg_color);
+            ui.painter().text(
+                centre,
+                Align2::CENTER_CENTER,
+                super::tree_view::initials(name),
+                FontId::proportional((radius * 0.8).max(10.0)),
+                theme::MUTED,
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     ui: &mut egui::Ui,
@@ -1351,41 +1523,16 @@ fn paint_row(
         rect.left() + 8.0 + PORTRAIT_SIZE / 2.0 + 2.0,
         rect.center().y,
     );
-    let texture = portrait.and_then(|face| {
-        thumbnails.texture(
-            ui.ctx(),
-            PreviewRequest {
-                root: Some(PathBuf::from(root)),
-                path: Path::new(root).join(&face.source),
-                orientation: 1,
-                crop: Some(face.bbox),
-                edge: 96,
-                generation: 0,
-            },
-            exiftool,
-        )
-    });
-    match texture {
-        Some((id, size)) => textured_circle(
-            ui.painter(),
-            centre,
-            PORTRAIT_SIZE / 2.0,
-            id,
-            square_uv(size),
-            Color32::WHITE,
-        ),
-        None => {
-            ui.painter()
-                .circle_filled(centre, PORTRAIT_SIZE / 2.0, visuals.faint_bg_color);
-            ui.painter().text(
-                centre,
-                Align2::CENTER_CENTER,
-                super::tree_view::initials(&row.name),
-                FontId::proportional(12.0),
-                theme::MUTED,
-            );
-        }
-    }
+    paint_portrait(
+        ui,
+        centre,
+        PORTRAIT_SIZE / 2.0,
+        portrait,
+        &row.name,
+        thumbnails,
+        root,
+        exiftool,
+    );
     for &(column, x, w) in layout {
         let cell = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(w, rect.height()));
         let text = cell_text(row, column);

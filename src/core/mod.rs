@@ -21,6 +21,7 @@ pub mod metadata;
 pub mod migrations;
 pub mod onnx_runtime;
 pub mod people_table;
+pub mod person_insights;
 pub mod previews;
 pub mod progress;
 pub mod recognition;

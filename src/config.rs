@@ -68,6 +68,9 @@ pub const GRAPH_NEUTRAL: f32 = 1.0;
 /// Faktor für „Bekannter von“ und frühere Partner: rücken unabhängig von der Fotozahl
 /// weiter auseinander.
 pub const GRAPH_DISTANT: f32 = 0.35;
+/// Personendetails: so viele Personen nennt „Häufig zusammen mit“ (meiste gemeinsame Fotos).
+/// Höchstens `relationship_graph::NEIGHBOR_LIMIT`.
+pub const PERSON_COMPANIONS: usize = 8;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",

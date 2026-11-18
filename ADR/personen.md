@@ -66,6 +66,13 @@
   Fotos, Gesichter, Geburt und Alter, Geschlecht, Beziehungen, Familie, erstes und letztes
   Foto, Hinweise; Spalten entfallen bei wenig Breite nach Priorität), Details der gewählten
   Person rechts. Je Spalte genau ein Scrollbereich. Rückfragen stehen hier gesammelt.
+- **Personendetails, Zusatzangaben** (`person_insights`): ein Leseauftrag je Person und
+  Datenstand (`face_page_serial`) auf einem Worker mit Revision, nie je Bild. Fehler bleiben
+  still; der Abschnitt bleibt leer. Nur für Personen mit Fotos.
+  - **Häufig zusammen mit:** bis zu acht Personen (`config::PERSON_COMPANIONS`) mit den meisten
+    gemeinsamen Fotos, gezählt wie der Graph und die Sammlungssuche
+    (`relationship_graph::for_person`). Der Name wählt die Person, die Zahl öffnet die Sammlung
+    mit „alle diese Personen“ = beide.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern
