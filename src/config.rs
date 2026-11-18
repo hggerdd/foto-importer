@@ -37,6 +37,12 @@ pub const GROUP_SUGGESTION_FACES: usize = 5;
 pub const FACE_REVIEW_MIN: f32 = 0.60;
 pub const FACE_REVIEW_MARGIN: f32 = 0.05;
 pub const FACE_SURE_MIN: f32 = 0.70;
+/// Obergrenze für den Speicher des inkrementellen Abgleichs (Vektoren und Personenwerte je
+/// Gesicht, `recognition::MatchCache`). 100.000 Gesichter mit 128 Dimensionen und 40 Personen
+/// brauchen rund 70 MB; darüber hinaus fällt der Abgleich auf den vollständigen Lauf zurück.
+pub const MATCH_CACHE_MAX_BYTES: usize = 768 * 1024 * 1024;
+/// Höchstens so viele Threads rechnen im Abgleich Personenwerte (auf dem Wartungs-Worker).
+pub const MATCH_THREADS: usize = 4;
 /// Anzeigedauer eines normalen Hinweises; Fehler bleiben bis zum Schließen.
 pub const NOTICE_SECONDS: std::time::Duration = std::time::Duration::from_secs(15);
 /// Gruppen je Seite in den Gesichtsreitern.

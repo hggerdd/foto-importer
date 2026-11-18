@@ -29,6 +29,8 @@ pub struct References {
     people: Vec<(i64, String)>,
 }
 const LANES: usize = 8;
+/// Referenzen (Gesichts-ID, Index in der Personenliste, Vektor) und Personen (ID, Name).
+type Entries = (Vec<(i64, usize, Vec<f32>)>, Vec<(i64, String)>);
 /// Die bis zu drei besten Werte einer Person, absteigend.
 #[derive(Clone, Copy, Default)]
 struct Top3 {
@@ -56,6 +58,11 @@ impl Top3 {
 }
 impl References {
     pub fn load(collection: &Collection, key: &str) -> Result<Self> {
+        let (entries, people) = Self::load_entries(collection, key)?;
+        Ok(Self::from_entries(entries, people))
+    }
+    /// Referenzen als Gesichts-ID, Index in `people`, Vektor; nach Person, dann Gesicht.
+    fn load_entries(collection: &Collection, key: &str) -> Result<Entries> {
         // Die Teilnahme an `training_set` steht als nicht korrelierte Unterabfrage da: SQLite
         // bildet sie einmal. Korreliert wählte der Planer ohne `ANALYZE`-Statistik den Index
         // nach Modell und Teil und las je bestätigtem Gesicht alle Referenzzeilen. `CROSS JOIN`
@@ -73,7 +80,7 @@ impl References {
             }
             entries.push((row.get::<_, i64>(0)?, people.len() - 1, vector));
         }
-        Ok(Self::from_entries(entries, people))
+        Ok((entries, people))
     }
     /// `entries`: Gesichts-ID, Index in `people`, Vektor.
     fn from_entries(entries: Vec<(i64, usize, Vec<f32>)>, people: Vec<(i64, String)>) -> Self {
@@ -110,8 +117,14 @@ impl References {
     /// je Person, absteigend (Gleichstand: Name, dann ID). `own` zählt nie als eigene
     /// Referenz; `excluded` schließt Personen aus.
     fn rank(&self, query: &[f32], own: i64, excluded: impl Fn(i64) -> bool) -> Vec<(i64, f32)> {
+        self.order(&self.scores(query, own), excluded)
+    }
+    /// Personenscore je Index in `people` (Mittel der bis zu drei besten Kosinuswerte), `NaN`
+    /// für Personen ohne vergleichbare Referenz. Der Wert einer Person hängt nur von ihren
+    /// eigenen Referenzen ab; Ausschlüsse filtern erst danach (`order`). Darauf beruht der
+    /// inkrementelle Abgleich ([`MatchCache`]).
+    fn scores(&self, query: &[f32], own: i64) -> Vec<f32> {
         let mut top = vec![Top3::default(); self.people.len()];
-        let allowed: Vec<bool> = self.people.iter().map(|p| !excluded(p.0)).collect();
         if self.dim > 0 && query.len() == self.dim {
             for (block, lanes) in self.blocks.chunks_exact(self.dim).enumerate() {
                 let mut sums = [0.0f32; LANES];
@@ -125,7 +138,7 @@ impl References {
                     let Some(slot) = self.slots.get(index) else {
                         break;
                     };
-                    if self.faces[index] != own && allowed[*slot] && sum.is_finite() {
+                    if self.faces[index] != own && sum.is_finite() {
                         top[*slot].push(sum.clamp(-1.0, 1.0));
                     }
                 }
@@ -133,17 +146,23 @@ impl References {
         }
         for (face, slot, vector) in &self.other {
             if *face != own
-                && allowed[*slot]
                 && let Some(score) = inference::cosine(query, vector)
             {
                 top[*slot].push(score);
             }
         }
-        let mut result: Vec<(usize, f32)> = top
+        top.iter()
+            .map(|t| if t.len > 0 { t.mean() } else { f32::NAN })
+            .collect()
+    }
+    /// Rangfolge aus Personenscores (`scores`): zulässige Personen mit Wert, absteigend
+    /// (Gleichstand: Name, dann ID).
+    fn order(&self, scores: &[f32], excluded: impl Fn(i64) -> bool) -> Vec<(i64, f32)> {
+        let mut result: Vec<(usize, f32)> = scores
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.len > 0)
-            .map(|(slot, t)| (slot, t.mean()))
+            .filter(|(slot, score)| !score.is_nan() && !excluded(self.people[*slot].0))
+            .map(|(slot, score)| (slot, *score))
             .collect();
         result.sort_by(|a, b| {
             let (x, y) = (&self.people[a.0], &self.people[b.0]);
@@ -416,6 +435,24 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
     if reset {
         collection.db.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
     }
+    select_references(collection, &key, control, reset)?;
+    rematch(collection, &key, control)?;
+    control.set_face_phase(super::jobs::FacePhase::Groups);
+    super::grouping::rebuild_groups(collection, &key, control)?;
+    Ok("Referenzen balanciert und Namen vorgeschlagen".into())
+}
+/// Wählt die Referenzen der geänderten Personen (`face_reference_dirty`) neu aus, wie die
+/// Wartung vor dem Abgleich (für Messungen ohne Gruppenarbeit).
+pub fn update_references(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
+    collection.writable()?;
+    select_references(collection, key, control, false)
+}
+fn select_references(
+    collection: &mut Collection,
+    key: &str,
+    control: &Control,
+    reset: bool,
+) -> Result<()> {
     let mut people = faces::people(collection)?;
     if !reset {
         let dirty: BTreeSet<i64> = collection
@@ -507,10 +544,7 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
             [],
         )?;
     }
-    rematch(collection, &key, control)?;
-    control.set_face_phase(super::jobs::FacePhase::Groups);
-    super::grouping::rebuild_groups(collection, &key, control)?;
-    Ok("Referenzen balanciert und Namen vorgeschlagen".into())
+    Ok(())
 }
 
 /// Maschinelle Zuordnung: Person, `auto` oder `suggested`, Wert.
@@ -518,6 +552,7 @@ type Proposal = (i64, &'static str, f32);
 /// Ein Gesicht eines Abgleichschritts mit allem, was der Abgleich braucht.
 struct MatchFace {
     id: i64,
+    photo: i64,
     person: Option<i64>,
     assignment: Option<String>,
     confidence: Option<f64>,
@@ -525,7 +560,9 @@ struct MatchFace {
     retained: bool,
     /// Jahr der Aufnahme (erste vier Zeichen von `captured_at`).
     year: Option<i32>,
-    /// Vektor nur für nicht historische Gesichter ab Qualität 0,5 (wie `ranked_with`).
+    /// Nicht historisch und Qualität ab 0,5: nur dann zählt ein Vektor (wie `ranked_with`).
+    wanted: bool,
+    /// Vektor nur für `wanted` (im inkrementellen Abgleich stets `None`, dort im Cache).
     vector: Option<Vec<f32>>,
 }
 /// Gesichter (auch historische) und Ablehnungen einiger Fotos, je Foto nach ID geordnet.
@@ -541,7 +578,8 @@ impl MatchBatch {
         let mut faces: BTreeMap<i64, Vec<MatchFace>> = BTreeMap::new();
         let mut statement = collection.db.prepare_cached(&format!(
             "SELECT f.id,f.photo_id,f.person_id,f.assignment,f.confidence,f.ignored,f.retained,
-                    f.captured_at,CASE WHEN f.retained=0 AND f.quality>=0.5 THEN e.vec END
+                    f.captured_at,CASE WHEN f.retained=0 AND f.quality>=0.5 THEN e.vec END,
+                    coalesce(f.retained=0 AND f.quality>=0.5,0)
              FROM faces f LEFT JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?1
              WHERE f.photo_id IN ({marks}) ORDER BY f.photo_id,f.id"
         ))?;
@@ -551,6 +589,7 @@ impl MatchBatch {
             let captured: Option<String> = row.get(7)?;
             faces.entry(row.get(1)?).or_default().push(MatchFace {
                 id: row.get(0)?,
+                photo: row.get(1)?,
                 person: row.get(2)?,
                 assignment: row.get(3)?,
                 confidence: row.get(4)?,
@@ -560,6 +599,7 @@ impl MatchBatch {
                     .as_deref()
                     .and_then(|v| v.get(..4))
                     .and_then(|v| v.parse().ok()),
+                wanted: row.get(9)?,
                 vector: bytes.as_deref().map(decode).transpose()?,
             });
         }
@@ -581,12 +621,151 @@ impl MatchBatch {
     }
 }
 
-pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
-    control.set_face_phase(super::jobs::FacePhase::Matching);
-    // Eine Nutzeränderung während des Laufs setzt per Trigger den Cursor auf 0 und erhöht
-    // `generation`. Der Lauf schreibt seinen Cursor und das Ende nur für die Generation, mit
-    // der er begann; sonst bleibt der Auftrag stehen und der nächste Lauf beginnt von vorn.
-    let (mut cursor, generation): (i64, Option<i64>) = collection
+fn load_births(collection: &Collection) -> Result<BTreeMap<i64, i32>> {
+    Ok(collection
+        .db
+        .prepare("SELECT person_id,value FROM person_attrs WHERE key='birth_year'")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|r| r.ok().and_then(|(id, year)| Some((id, year.parse().ok()?))))
+        .collect())
+}
+
+/// Entscheidet die Gesichter eines Fotos (alle, auch historische, nach ID) und hängt
+/// abweichende maschinelle Zuordnungen an `writes`. `rank` liefert die Rangfolge eines
+/// Gesichts ohne die übergebenen Ausschlüsse, `None` ohne vergleichbaren Vektor.
+fn photo_writes(
+    faces: &[MatchFace],
+    rejections: &BTreeMap<i64, BTreeSet<i64>>,
+    births: &BTreeMap<i64, i32>,
+    limits: &Limits,
+    mut rank: impl FnMut(&MatchFace, &dyn Fn(i64) -> bool) -> Option<Vec<(i64, f32)>>,
+    writes: &mut Vec<(i64, Option<Proposal>)>,
+) -> Result<()> {
+    // Wie `faces::photo_faces`: nur nicht historische Gesichter, nach ID.
+    let candidates: Vec<&MatchFace> = faces
+        .iter()
+        .filter(|f| !f.retained && !f.ignored && f.assignment.as_deref() != Some("user"))
+        .collect();
+    // Je Gesicht höchstens ein Kandidat: die beste zulässige Person, wenn sie die Schwelle
+    // erreicht und klar vor der zweitbesten liegt.
+    let mut proposals: Vec<Option<(i64, f32)>> = Vec::with_capacity(candidates.len());
+    for face in &candidates {
+        // Wie `ranked_with`: Gesichter ohne Vektor oder unter Qualität 0,5 erhalten keinen
+        // Vorschlag; abgelehnte und im Foto bestätigte Personen zählen nicht.
+        let rejected = rejections.get(&face.id);
+        let excluded = |person: i64| {
+            rejected.is_some_and(|r| r.contains(&person))
+                || faces.iter().any(|o| {
+                    o.id != face.id
+                        && o.person == Some(person)
+                        && o.assignment.as_deref() == Some("user")
+                })
+        };
+        let Some(ranking) = rank(face, &excluded) else {
+            proposals.push(None);
+            continue;
+        };
+        let allowed: Vec<(i64, f32)> = ranking
+            .into_iter()
+            .filter(|(person, _)| {
+                !face
+                    .year
+                    .zip(births.get(person))
+                    .is_some_and(|(y, b)| y < *b)
+            })
+            .collect();
+        proposals.push(limits.accept(&allowed));
+    }
+    // Gemeinsame Entscheidung je Foto: Dieselbe Person kommt höchstens einmal vor; das
+    // Gesicht mit dem höheren Wert erhält sie, das andere bleibt unbenannt.
+    let people: Vec<i64> = proposals
+        .iter()
+        .flatten()
+        .map(|p| p.0)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let unknown = limits.review - 0.000001;
+    let mut matrix = vec![vec![unknown; people.len() + candidates.len()]; candidates.len()];
+    for (row, proposal) in proposals.iter().enumerate() {
+        for (col, person) in people.iter().enumerate() {
+            matrix[row][col] = match proposal {
+                Some((id, score)) if id == person => *score,
+                _ => -2.0,
+            };
+        }
+    }
+    let decisions = matching::assignment(&matrix)?;
+    let mut wanted: BTreeMap<i64, Proposal> = BTreeMap::new();
+    for (row, col) in decisions.into_iter().enumerate() {
+        if col < people.len() && matrix[row][col] >= limits.review {
+            let score = matrix[row][col];
+            let kind = if score >= limits.sure {
+                "auto"
+            } else {
+                "suggested"
+            };
+            wanted.insert(candidates[row].id, (people[col], kind, score));
+        }
+    }
+    // Nur Abweichungen schreiben: Bisher wurden alle maschinellen Zuordnungen des Fotos
+    // gelöscht und neu gesetzt, was je Gesicht Trigger der Gruppen auslöste.
+    for face in faces {
+        let machine = matches!(face.assignment.as_deref(), Some("auto" | "suggested"));
+        match wanted.get(&face.id) {
+            Some(&(person, kind, score)) => {
+                let same = face.person == Some(person)
+                    && face.assignment.as_deref() == Some(kind)
+                    && face.confidence == Some(f64::from(score));
+                if !same {
+                    writes.push((face.id, Some((person, kind, score))));
+                }
+            }
+            None if machine => writes.push((face.id, None)),
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+fn write_proposals(
+    tx: &rusqlite::Transaction<'_>,
+    writes: &[(i64, Option<Proposal>)],
+) -> Result<()> {
+    for (id, value) in writes {
+        match value {
+            Some((person, kind, score)) => {
+                tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=?,assigned_at=datetime('now') WHERE id=? AND assignment IS NOT 'user'",params![person,kind,score,id])?;
+            }
+            None => {
+                tx.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE id=? AND assignment IN ('auto','suggested')",[id])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Schließt einen Abgleich ab, wenn sich seit seinem Beginn nichts geändert hat.
+fn finish_rematch(collection: &mut Collection, key: &str, generation: Option<i64>) -> Result<()> {
+    let tx = collection.db.transaction()?;
+    tx.execute(
+        "DELETE FROM face_maintenance WHERE embedder_id=? AND generation IS ?",
+        params![key, generation],
+    )?;
+    let open: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM face_maintenance WHERE embedder_id=?)",
+        [key],
+        |r| r.get(0),
+    )?;
+    if !open {
+        faces::save_setting(&tx, &applied_key(key), &chrono::Utc::now().to_rfc3339())?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn maintenance_state(collection: &Collection, key: &str) -> Result<(i64, Option<i64>)> {
+    Ok(collection
         .db
         .query_row(
             "SELECT after_photo,generation FROM face_maintenance WHERE embedder_id=?",
@@ -594,14 +773,435 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
             |r| Ok((r.get(0)?, Some(r.get(1)?))),
         )
         .optional()?
-        .unwrap_or((0, None));
+        .unwrap_or((0, None)))
+}
+
+/// Zwischenspeicher des inkrementellen Abgleichs für eine Sammlung und ein Modell: je
+/// Gesicht der Vektor und der Personenscore gegen jede Person mit Referenzen (`NaN` ohne
+/// Wert), dazu der Referenzstand, gegen den gerechnet wurde. Ändern sich die Referenzen
+/// einer Person, wird nur ihre Spalte für alle Gesichter neu gerechnet; Rangfolge,
+/// Ausschlüsse und die Entscheidung je Foto entstehen in jedem Lauf neu aus dem aktuellen
+/// Stand. Er lebt nur im Arbeitsspeicher und ist jederzeit verwerfbar.
+#[derive(Default)]
+pub struct MatchCache {
+    owner: Option<(std::path::PathBuf, String)>,
+    /// Referenzen je Person (Gesichts-ID, Vektor), gegen die die Spalten gerechnet sind.
+    references: BTreeMap<i64, Vec<(i64, Vec<f32>)>>,
+    /// Personen-ID je Spalte, wie `References::people`.
+    people: Vec<i64>,
+    faces: std::collections::HashMap<i64, CachedFace>,
+}
+struct CachedFace {
+    /// `rowid` der Merkmalszeile: `INSERT OR REPLACE` vergibt eine neue, ein ersetzter
+    /// Vektor wird so erkannt.
+    rowid: i64,
+    vector: Option<Vec<f32>>,
+    scores: Vec<f32>,
+}
+impl MatchCache {
+    /// Zahl der zwischengespeicherten Gesichter (für Messungen).
+    pub fn len(&self) -> usize {
+        self.faces.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+}
+/// Gesichter je Rechenrunde; zwischen den Runden weicht der Abgleich Nutzeraktionen.
+const SCORE_ROUND: usize = 4096;
+/// Zuordnungen je Schreibtransaktion.
+const WRITE_CHUNK: usize = 512;
+
+/// Personenscores mehrerer Gesichter, auf bis zu `config::MATCH_THREADS` Threads verteilt.
+/// Jedes Gesicht wird für sich gerechnet; die Werte hängen nicht von der Aufteilung ab.
+fn score_rows(references: &References, faces: &[(i64, Option<&[f32]>)]) -> Vec<Vec<f32>> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, crate::config::MATCH_THREADS);
+    let one = |(id, vector): &(i64, Option<&[f32]>)| match vector {
+        Some(vector) => references.scores(vector, *id),
+        None => vec![f32::NAN; references.people.len()],
+    };
+    if threads == 1 || faces.len() < 64 {
+        return faces.iter().map(one).collect();
+    }
+    let size = faces.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = faces
+            .chunks(size)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(one).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
+}
+
+fn same_references(a: &[(i64, Vec<f32>)], b: &[(i64, Vec<f32>)]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.0 == y.0
+                && x.1.len() == y.1.len()
+                && x.1
+                    .iter()
+                    .zip(&y.1)
+                    .all(|(p, q)| p.to_bits() == q.to_bits())
+        })
+}
+
+/// Was ein Lauf aus einem konsistenten Lesestand braucht (ohne Vektoren).
+struct MatchState {
+    entries: Entries,
+    /// Alle Gesichter, nach Foto und ID; `vector` bleibt leer.
+    faces: Vec<MatchFace>,
+    /// `rowid` der Merkmalszeile je Gesicht des Modells.
+    embeddings: std::collections::HashMap<i64, i64>,
+    rejections: BTreeMap<i64, BTreeSet<i64>>,
+}
+impl MatchState {
+    fn load(collection: &Collection, key: &str) -> Result<Self> {
+        let tx = collection.db.unchecked_transaction()?;
+        let entries = References::load_entries(collection, key)?;
+        // Ohne ORDER BY liest SQLite die Tabelle der Reihe nach statt je Zeile über den
+        // Fotoindex; sortiert wird im Speicher.
+        let mut faces = Vec::new();
+        let mut statement = collection.db.prepare(
+            "SELECT id,photo_id,person_id,assignment,confidence,ignored,retained,captured_at,
+                    coalesce(retained=0 AND quality>=0.5,0)
+             FROM faces",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let captured: Option<String> = row.get(7)?;
+            faces.push(MatchFace {
+                id: row.get(0)?,
+                photo: row.get(1)?,
+                person: row.get(2)?,
+                assignment: row.get(3)?,
+                confidence: row.get(4)?,
+                ignored: row.get(5)?,
+                retained: row.get(6)?,
+                year: captured
+                    .as_deref()
+                    .and_then(|v| v.get(..4))
+                    .and_then(|v| v.parse().ok()),
+                wanted: row.get(8)?,
+                vector: None,
+            });
+        }
+        drop(rows);
+        drop(statement);
+        faces.sort_unstable_by_key(|f| (f.photo, f.id));
+        let embeddings = collection
+            .db
+            .prepare("SELECT face_id,rowid FROM face_embeddings WHERE embedder_id=?")?
+            .query_map([key], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut rejections: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        let mut statement = collection
+            .db
+            .prepare("SELECT face_id,person_id FROM face_rejections")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            rejections
+                .entry(row.get(0)?)
+                .or_default()
+                .insert(row.get(1)?);
+        }
+        drop(rows);
+        drop(statement);
+        tx.commit()?;
+        Ok(Self {
+            entries,
+            faces,
+            embeddings,
+            rejections,
+        })
+    }
+}
+
+impl MatchCache {
+    /// Bringt den Zwischenspeicher auf den Stand von `state` und liefert die aktuellen
+    /// Referenzen. Jeder Schritt hinterlässt einen in sich stimmigen Zwischenspeicher; ein
+    /// Abbruch dazwischen verliert nur die Arbeit des laufenden Schritts.
+    fn sync(
+        &mut self,
+        collection: &Collection,
+        key: &str,
+        state: &mut MatchState,
+        control: &Control,
+    ) -> Result<References> {
+        let (entries, people) = std::mem::take(&mut state.entries);
+        let mut grouped: BTreeMap<i64, Vec<(i64, Vec<f32>)>> = BTreeMap::new();
+        for (face, slot, vector) in &entries {
+            grouped
+                .entry(people[*slot].0)
+                .or_default()
+                .push((*face, vector.clone()));
+        }
+        let references = References::from_entries(entries, people);
+        let ids: Vec<i64> = references.people.iter().map(|p| p.0).collect();
+        // 1. Spalten der Personen, deren Referenzen sich geändert haben (oder neu sind).
+        let changed: Vec<usize> = ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| {
+                self.references
+                    .get(id)
+                    .is_none_or(|old| !same_references(old, &grouped[id]))
+            })
+            .map(|(slot, _)| slot)
+            .collect();
+        if ids != self.people || !changed.is_empty() {
+            let partial = References::from_entries(
+                changed
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(column, slot)| {
+                        grouped[&ids[*slot]]
+                            .iter()
+                            .map(move |(face, vector)| (*face, column, vector.clone()))
+                    })
+                    .collect(),
+                changed
+                    .iter()
+                    .map(|slot| references.people[*slot].clone())
+                    .collect(),
+            );
+            let mut order: Vec<i64> = self.faces.keys().copied().collect();
+            order.sort_unstable();
+            let mut computed: Vec<Vec<f32>> = Vec::with_capacity(order.len());
+            for round in order.chunks(SCORE_ROUND) {
+                control.checkpoint()?;
+                let work: Vec<(i64, Option<&[f32]>)> = round
+                    .iter()
+                    .map(|id| (*id, self.faces[id].vector.as_deref()))
+                    .collect();
+                computed.extend(score_rows(&partial, &work));
+            }
+            // Erst jetzt übernehmen: Ein Abbruch oben lässt den alten Stand stehen.
+            let previous: BTreeMap<i64, usize> = self
+                .people
+                .iter()
+                .enumerate()
+                .map(|(column, id)| (*id, column))
+                .collect();
+            let mut column_of: Vec<Option<usize>> = vec![None; ids.len()];
+            for (column, slot) in changed.iter().enumerate() {
+                column_of[*slot] = Some(column);
+            }
+            for (id, fresh) in order.iter().zip(computed) {
+                let Some(face) = self.faces.get_mut(id) else {
+                    continue;
+                };
+                face.scores = ids
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, person)| match column_of[slot] {
+                        Some(column) => fresh[column],
+                        None => face.scores[previous[person]],
+                    })
+                    .collect();
+            }
+            self.people = ids;
+            self.references = grouped;
+        }
+        // 2. Gesichter: verschwundene, ersetzte oder nicht mehr verglichene entfernen,
+        // fehlende mit allen Spalten rechnen.
+        let wanted: std::collections::HashMap<i64, i64> = state
+            .faces
+            .iter()
+            .filter(|f| f.wanted)
+            .filter_map(|f| state.embeddings.get(&f.id).map(|rowid| (f.id, *rowid)))
+            .collect();
+        self.faces
+            .retain(|id, face| wanted.get(id) == Some(&face.rowid));
+        let mut missing: Vec<i64> = wanted
+            .keys()
+            .filter(|id| !self.faces.contains_key(id))
+            .copied()
+            .collect();
+        missing.sort_unstable();
+        let total = missing.len();
+        control.progress(0, total);
+        // Viele fehlende Gesichter (erster Lauf): Merkmale in einem Durchgang lesen; sonst
+        // gezielt je Gesicht über den Primärschlüssel.
+        let scan = missing.len() > 2048 && missing.len() * 4 > wanted.len();
+        let mut done = 0;
+        if scan {
+            let need: BTreeSet<i64> = missing.iter().copied().collect();
+            let mut statement = collection
+                .db
+                .prepare("SELECT face_id,rowid,vec FROM face_embeddings WHERE embedder_id=?")?;
+            let mut rows = statement.query([key])?;
+            let mut loaded = Vec::with_capacity(SCORE_ROUND);
+            loop {
+                let row = rows.next()?;
+                let end = row.is_none();
+                if let Some(row) = row {
+                    let face: i64 = row.get(0)?;
+                    if need.contains(&face) {
+                        let bytes: Option<Vec<u8>> = row.get(2)?;
+                        loaded.push((face, row.get(1)?, bytes.as_deref().map(decode).transpose()?));
+                    }
+                }
+                if loaded.len() >= SCORE_ROUND || (end && !loaded.is_empty()) {
+                    control.checkpoint()?;
+                    done += loaded.len();
+                    self.insert(&references, std::mem::take(&mut loaded));
+                    control.progress(done, total);
+                }
+                if end {
+                    break;
+                }
+            }
+        } else {
+            let mut statement = collection.db.prepare_cached(
+                "SELECT rowid,vec FROM face_embeddings WHERE face_id=? AND embedder_id=?",
+            )?;
+            for round in missing.chunks(SCORE_ROUND) {
+                control.checkpoint()?;
+                let mut loaded = Vec::with_capacity(round.len());
+                for id in round {
+                    let found: Option<(i64, Option<Vec<u8>>)> = statement
+                        .query_row(params![id, key], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .optional()?;
+                    if let Some((rowid, bytes)) = found {
+                        loaded.push((*id, rowid, bytes.as_deref().map(decode).transpose()?));
+                    }
+                }
+                done += round.len();
+                self.insert(&references, loaded);
+                control.progress(done, total);
+            }
+        }
+        Ok(references)
+    }
+    fn insert(&mut self, references: &References, loaded: Vec<(i64, i64, Option<Vec<f32>>)>) {
+        let work: Vec<(i64, Option<&[f32]>)> = loaded
+            .iter()
+            .map(|(id, _, vector)| (*id, vector.as_deref()))
+            .collect();
+        let rows = score_rows(references, &work);
+        for ((id, rowid, vector), scores) in loaded.into_iter().zip(rows) {
+            self.faces.insert(
+                id,
+                CachedFace {
+                    rowid,
+                    vector,
+                    scores,
+                },
+            );
+        }
+    }
+}
+
+/// Zwischenspeicher des laufenden Programms (eine Sammlung, ein Modell zugleich).
+static MATCH_CACHE: std::sync::Mutex<Option<MatchCache>> = std::sync::Mutex::new(None);
+
+/// Abgleich nach Bestätigungen: inkrementell über den Zwischenspeicher des Programms
+/// ([`MatchCache`]), Ergebnis bitgleich zum vollständigen Lauf ([`rematch_full`]).
+pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
+    let mut cache = MATCH_CACHE
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .unwrap_or_default();
+    let result = rematch_with(collection, key, control, &mut cache);
+    if let Ok(mut slot) = MATCH_CACHE.lock() {
+        *slot = Some(cache);
+    }
+    result
+}
+
+/// Abgleich mit ausdrücklichem Zwischenspeicher. Ein leerer oder fremder Zwischenspeicher
+/// wird zuerst vollständig aufgebaut (alle Vektoren lesen, alle Spalten rechnen).
+pub fn rematch_with(
+    collection: &mut Collection,
+    key: &str,
+    control: &Control,
+    cache: &mut MatchCache,
+) -> Result<()> {
+    control.set_face_phase(super::jobs::FacePhase::Matching);
+    control.checkpoint()?;
+    // Eine Nutzeränderung während des Laufs erhöht per Trigger `generation`. Geschrieben wird
+    // nur, solange die Generation noch die vom Beginn ist; sonst bleibt der Auftrag für einen
+    // neuen Lauf (nach der Referenzauswahl der Wartung) stehen.
+    let (_, generation) = maintenance_state(collection, key)?;
     let limits = Limits::load(collection)?;
-    let births: BTreeMap<i64, i32> = collection
-        .db
-        .prepare("SELECT person_id,value FROM person_attrs WHERE key='birth_year'")?
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-        .filter_map(|r| r.ok().and_then(|(id, year)| Some((id, year.parse().ok()?))))
-        .collect();
+    let births = load_births(collection)?;
+    let mut state = MatchState::load(collection, key)?;
+    let owner = (collection.root.clone(), key.to_string());
+    if cache.owner.as_ref() != Some(&owner) {
+        *cache = MatchCache {
+            owner: Some(owner),
+            ..MatchCache::default()
+        };
+    }
+    let compared = state
+        .faces
+        .iter()
+        .filter(|f| f.wanted && state.embeddings.contains_key(&f.id))
+        .count();
+    let dim = state.entries.0.first().map_or(512, |e| e.2.len());
+    let bytes = compared * ((dim + state.entries.1.len()) * 4 + 96);
+    if bytes > crate::config::MATCH_CACHE_MAX_BYTES {
+        *cache = MatchCache::default();
+        return rematch_full(collection, key, control);
+    }
+    let references = cache.sync(collection, key, &mut state, control)?;
+    control.checkpoint()?;
+    let mut writes: Vec<(i64, Option<Proposal>)> = Vec::new();
+    for photo in state.faces.chunk_by(|a, b| a.photo == b.photo) {
+        // Wie der vollständige Lauf: nur Fotos mit mindestens einem aktuellen Gesicht.
+        if photo.iter().all(|f| f.retained) {
+            continue;
+        }
+        photo_writes(
+            photo,
+            &state.rejections,
+            &births,
+            &limits,
+            |face, excluded| {
+                let cached = cache.faces.get(&face.id)?;
+                cached.vector.as_ref()?;
+                Some(references.order(&cached.scores, excluded))
+            },
+            &mut writes,
+        )?;
+    }
+    for chunk in writes.chunks(WRITE_CHUNK) {
+        control.checkpoint()?;
+        let tx = collection.db.transaction()?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT generation FROM face_maintenance WHERE embedder_id=?",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current != generation {
+            // Neuer Auftrag: Die übrigen Zuordnungen beruhen auf einem veralteten Stand.
+            return Ok(());
+        }
+        write_proposals(&tx, chunk)?;
+        tx.commit()?;
+    }
+    control.checkpoint()?;
+    finish_rematch(collection, key, generation)
+}
+
+/// Vollständiger Abgleich ohne Zwischenspeicher, Foto für Foto mit Cursor. Rückfall, wenn der
+/// Zwischenspeicher die Speichergrenze überschritte, und Maßstab für den inkrementellen Lauf.
+pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
+    control.set_face_phase(super::jobs::FacePhase::Matching);
+    // Eine Nutzeränderung während des Laufs setzt per Trigger den Cursor auf 0 und erhöht
+    // `generation`. Der Lauf schreibt seinen Cursor und das Ende nur für die Generation, mit
+    // der er begann; sonst bleibt der Auftrag stehen und der nächste Lauf beginnt von vorn.
+    let (mut cursor, generation) = maintenance_state(collection, key)?;
+    let limits = Limits::load(collection)?;
+    let births = load_births(collection)?;
     let references = References::load(collection, key)?;
     // Höchstens so lange bleibt ein Fortschritt ohne Änderungen ungespeichert; Schritte mit
     // Änderungen werden sofort geschrieben.
@@ -620,106 +1220,25 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         for photo in &photos {
             control.checkpoint()?;
             let faces = batch.faces.get(photo).map_or(&[][..], Vec::as_slice);
-            // Wie `faces::photo_faces`: nur nicht historische Gesichter, nach ID.
-            let candidates: Vec<&MatchFace> = faces
-                .iter()
-                .filter(|f| !f.retained && !f.ignored && f.assignment.as_deref() != Some("user"))
-                .collect();
-            // Je Gesicht höchstens ein Kandidat: die beste zulässige Person, wenn sie die
-            // Schwelle erreicht und klar vor der zweitbesten liegt.
-            let mut proposals: Vec<Option<(i64, f32)>> = Vec::with_capacity(candidates.len());
-            for face in &candidates {
-                // Wie `ranked_with`: Gesichter ohne Vektor oder unter Qualität 0,5 erhalten
-                // keinen Vorschlag; abgelehnte und im Foto bestätigte Personen zählen nicht.
-                let Some(query) = face.vector.as_deref() else {
-                    proposals.push(None);
-                    continue;
-                };
-                let rejected = batch.rejections.get(&face.id);
-                let ranking = references.rank(query, face.id, |person| {
-                    rejected.is_some_and(|r| r.contains(&person))
-                        || faces.iter().any(|o| {
-                            o.id != face.id
-                                && o.person == Some(person)
-                                && o.assignment.as_deref() == Some("user")
-                        })
-                });
-                let allowed: Vec<(i64, f32)> = ranking
-                    .into_iter()
-                    .filter(|(person, _)| {
-                        !face
-                            .year
-                            .zip(births.get(person))
-                            .is_some_and(|(y, b)| y < *b)
-                    })
-                    .collect();
-                proposals.push(limits.accept(&allowed));
-            }
-            // Gemeinsame Entscheidung je Foto: Dieselbe Person kommt höchstens einmal vor;
-            // das Gesicht mit dem höheren Wert erhält sie, das andere bleibt unbenannt.
-            let people: Vec<i64> = proposals
-                .iter()
-                .flatten()
-                .map(|p| p.0)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let unknown = limits.review - 0.000001;
-            let mut matrix = vec![vec![unknown; people.len() + candidates.len()]; candidates.len()];
-            for (row, proposal) in proposals.iter().enumerate() {
-                for (col, person) in people.iter().enumerate() {
-                    matrix[row][col] = match proposal {
-                        Some((id, score)) if id == person => *score,
-                        _ => -2.0,
-                    };
-                }
-            }
-            let decisions = matching::assignment(&matrix)?;
-            let mut wanted: BTreeMap<i64, Proposal> = BTreeMap::new();
-            for (row, col) in decisions.into_iter().enumerate() {
-                if col < people.len() && matrix[row][col] >= limits.review {
-                    let score = matrix[row][col];
-                    let kind = if score >= limits.sure {
-                        "auto"
-                    } else {
-                        "suggested"
-                    };
-                    wanted.insert(candidates[row].id, (people[col], kind, score));
-                }
-            }
-            // Nur Abweichungen schreiben: Bisher wurden alle maschinellen Zuordnungen des Fotos
-            // gelöscht und neu gesetzt, was je Gesicht Trigger der Gruppen auslöste.
-            for face in faces {
-                let machine = matches!(face.assignment.as_deref(), Some("auto" | "suggested"));
-                match wanted.get(&face.id) {
-                    Some(&(person, kind, score)) => {
-                        let same = face.person == Some(person)
-                            && face.assignment.as_deref() == Some(kind)
-                            && face.confidence == Some(f64::from(score));
-                        if !same {
-                            writes.push((face.id, Some((person, kind, score))));
-                        }
-                    }
-                    None if machine => writes.push((face.id, None)),
-                    None => {}
-                }
-            }
+            photo_writes(
+                faces,
+                &batch.rejections,
+                &births,
+                &limits,
+                |face, excluded| {
+                    face.vector
+                        .as_deref()
+                        .map(|query| references.rank(query, face.id, excluded))
+                },
+                &mut writes,
+            )?;
         }
         if writes.is_empty() && saved.elapsed() < std::time::Duration::from_secs(1) {
             cursor = last;
             continue;
         }
         let tx = collection.db.transaction()?;
-        for (id, value) in &writes {
-            match value {
-                Some((person, kind, score)) => {
-                    tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=?,assigned_at=datetime('now') WHERE id=? AND assignment IS NOT 'user'",params![person,kind,score,id])?;
-                }
-                None => {
-                    tx.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE id=? AND assignment IN ('auto','suggested')",[id])?;
-                }
-            }
-        }
+        write_proposals(&tx, &writes)?;
         tx.execute(
             "UPDATE face_maintenance SET after_photo=? WHERE embedder_id=? AND generation IS ?",
             params![last, key, generation],
@@ -729,21 +1248,7 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         cursor = last;
     }
     control.checkpoint()?;
-    let tx = collection.db.transaction()?;
-    tx.execute(
-        "DELETE FROM face_maintenance WHERE embedder_id=? AND generation IS ?",
-        params![key, generation],
-    )?;
-    let open: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM face_maintenance WHERE embedder_id=?)",
-        [key],
-        |r| r.get(0),
-    )?;
-    if !open {
-        faces::save_setting(&tx, &applied_key(key), &chrono::Utc::now().to_rfc3339())?;
-    }
-    tx.commit()?;
-    Ok(())
+    finish_rematch(collection, key, generation)
 }
 
 #[cfg(test)]

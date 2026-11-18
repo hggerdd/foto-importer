@@ -7,7 +7,11 @@
 //! cargo run --release --example face_save_bench -- run tmp/bench-faces tmp/bench-faces-work [maintenance_sekunden]
 //! cargo run --release --example face_save_bench -- plans tmp/bench-faces
 //! cargo run --release --example face_save_bench -- steps tmp/bench-faces tmp/bench-steps [ohne-statistik]
+//! cargo run --release --example face_save_bench -- inkrementell tmp/bench-faces tmp/bench-inc [ohne-statistik] [runden]
 //! ```
+//! `inkrementell` misst je Bestätigung, Ablehnung und entfernter Bestätigung den Abgleich
+//! mit Zwischenspeicher gegen den vollständigen Lauf auf einer Kopie desselben Stands und
+//! vergleicht danach Person, Art und Wert aller Gesichter bitgenau.
 //! `steps` misst Einzelschritte (Referenzen, Seiten, Tabelle, Zeitreise, vollständiger
 //! Abgleich, Gruppen) auf einer Arbeitskopie; `ohne-statistik` entfernt `sqlite_stat1` wie in
 //! Sammlungen, auf denen nie `ANALYZE` lief.
@@ -641,7 +645,7 @@ fn steps(template: &Path, work: &Path, without_stats: bool) -> anyhow::Result<()
             [EMBEDDER],
         )?;
         timed(&format!("rematch vollständig #{round}"), || {
-            recognition::rematch(&mut c, EMBEDDER, &control)
+            recognition::rematch_full(&mut c, EMBEDDER, &control)
         })?;
         println!("      Vorschläge danach: {}", changed(&c)?);
     }
@@ -659,6 +663,141 @@ fn steps(template: &Path, work: &Path, without_stats: bool) -> anyhow::Result<()
         while faces::prepare_groups(&mut c, EMBEDDER, &control)? > 0 {}
         Ok(())
     })?;
+    Ok(())
+}
+
+/// Gesicht, Person, Art und Wert (Bits) einer Zuordnung.
+type Assignment = (i64, Option<i64>, Option<String>, Option<u64>);
+/// Alle Zuordnungen bitgenau (Person, Art, Wert).
+fn assignments(c: &Collection) -> anyhow::Result<Vec<Assignment>> {
+    Ok(c.db
+        .prepare("SELECT id,person_id,assignment,confidence FROM faces ORDER BY id")?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get::<_, Option<f64>>(3)?.map(f64::to_bits),
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Abgleich je Nutzerentscheidung: inkrementell (Zwischenspeicher des Prozesses) gegen den
+/// vollständigen Lauf auf einer Kopie desselben Stands, mit bitgenauem Vergleich.
+fn incremental(
+    template: &Path,
+    work: &Path,
+    without_stats: bool,
+    rounds: usize,
+) -> anyhow::Result<()> {
+    if work.exists() {
+        fs::remove_dir_all(work)?;
+    }
+    let copy = work.join("vollstaendig");
+    fs::create_dir_all(&copy)?;
+    fs::copy(template.join(".myfotomanager"), work.join(".myfotomanager"))?;
+    let mut c = Collection::open(work, true)?;
+    if without_stats {
+        c.db.execute_batch("DROP TABLE IF EXISTS sqlite_stat1")?;
+        drop(c);
+        c = Collection::open(work, true)?;
+    }
+    println!(
+        "Statistik: {} · Profil: {}",
+        if without_stats { "ohne" } else { "mit ANALYZE" },
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+    let control = Control::default();
+    timed("rematch_full (Ausgangsstand)", || {
+        recognition::rematch_full(&mut c, EMBEDDER, &control)
+    })?;
+    timed("rematch inkrementell, Zwischenspeicher aufbauen", || {
+        recognition::rematch(&mut c, EMBEDDER, &control)
+    })?;
+    timed("rematch inkrementell, ohne Änderung", || {
+        recognition::rematch(&mut c, EMBEDDER, &control)
+    })?;
+    let (mut fast, mut slow) = (Vec::new(), Vec::new());
+    for round in 0..rounds {
+        let (mode, label) = match round % 3 {
+            0 => ("unknown", "Bestätigung"),
+            1 => ("review", "Ablehnung"),
+            _ => ("confirmed", "Bestätigung entfernt"),
+        };
+        let page = faces::page(&c, mode, 0)?;
+        let Some(group) = page.groups.first() else {
+            println!("  Runde {round}: keine Gruppe unter {mode}");
+            continue;
+        };
+        let ids: Vec<i64> = group.iter().map(|f| f.id).collect();
+        let (selected, person): (BTreeSet<i64>, i64) = match round % 3 {
+            0 => (ids.iter().copied().collect(), (round % 40) as i64 + 1),
+            _ => {
+                let person = group[0].person.unwrap_or(1);
+                let keep = ids.len().saturating_sub(if round % 3 == 1 { 2 } else { 1 });
+                (ids.iter().take(keep.max(1)).copied().collect(), person)
+            }
+        };
+        faces::name_group(&mut c, &ids, &selected, Some(person), "", false)?;
+        println!(
+            "Runde {round}: {label}, Person {person}, {} von {} Gesichtern",
+            selected.len(),
+            ids.len()
+        );
+        timed("  Referenzen neu auswählen", || {
+            recognition::update_references(&mut c, EMBEDDER, &control)
+        })?;
+        let target = copy.join(".myfotomanager");
+        if target.exists() {
+            fs::remove_file(&target)?;
+        }
+        c.db.execute("VACUUM INTO ?", [target.to_string_lossy()])?;
+        let started = Instant::now();
+        recognition::rematch(&mut c, EMBEDDER, &control)?;
+        fast.push(started.elapsed().as_secs_f64() * 1000.0);
+        println!(
+            "  {:<58} {:>9.1} ms",
+            "rematch inkrementell",
+            fast[fast.len() - 1]
+        );
+        let mut full = Collection::open(&copy, true)?;
+        let started = Instant::now();
+        recognition::rematch_full(&mut full, EMBEDDER, &control)?;
+        slow.push(started.elapsed().as_secs_f64() * 1000.0);
+        println!(
+            "  {:<58} {:>9.1} ms",
+            "rematch_full (Kopie)",
+            slow[slow.len() - 1]
+        );
+        let (a, b) = (assignments(&c)?, assignments(&full)?);
+        let differences =
+            a.iter().zip(&b).filter(|(x, y)| x != y).count() + a.len().abs_diff(b.len());
+        let open: i64 =
+            c.db.query_row("SELECT count(*) FROM face_maintenance", [], |r| r.get(0))?;
+        println!(
+            "  Gesichter {} · Abweichungen {differences} · offene Aufträge {open}",
+            a.len()
+        );
+        anyhow::ensure!(
+            differences == 0,
+            "inkrementell weicht vom vollständigen Lauf ab"
+        );
+    }
+    let median = |values: &mut Vec<f64>| {
+        values.sort_by(f64::total_cmp);
+        values.get(values.len() / 2).copied().unwrap_or_default()
+    };
+    println!(
+        "Median je Entscheidung: inkrementell {:.1} ms, vollständig {:.1} ms ({} Runden, alle bitgleich)",
+        median(&mut fast),
+        median(&mut slow),
+        fast.len()
+    );
     Ok(())
 }
 
@@ -714,6 +853,15 @@ fn main() -> anyhow::Result<()> {
             Path::new(args.get(1).map_or("tmp/bench-faces", String::as_str)),
             Path::new(args.get(2).map_or("tmp/bench-faces-steps", String::as_str)),
             args.get(3).is_some_and(|v| v == "ohne-statistik"),
+        ),
+        Some("inkrementell") => incremental(
+            Path::new(args.get(1).map_or("tmp/bench-faces", String::as_str)),
+            Path::new(args.get(2).map_or("tmp/bench-faces-inc", String::as_str)),
+            args.iter().any(|v| v == "ohne-statistik"),
+            args.iter()
+                .skip(3)
+                .find_map(|v| v.parse().ok())
+                .unwrap_or(9),
         ),
         Some("probe") => probe(Path::new(
             args.get(1).map_or("tmp/bench-faces", String::as_str),
