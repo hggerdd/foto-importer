@@ -623,6 +623,81 @@ fn rematch_gives_a_person_to_one_face_per_photo_only() -> anyhow::Result<()> {
 }
 
 #[test]
+fn rematch_writes_only_changed_assignments() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 10, 10, 5.0)?; // Anna
+    polar(&c, 12, 12, 70.0)?; // Cara
+    polar(&c, 15, 15, 175.0)?; // unter der Schwelle
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 10)?, (Some(1), Some("auto".into())));
+    // Unveränderte Zuordnung: Zeitpunkt als Merkmal, ob die Zeile neu geschrieben wird.
+    // Veraltete Zuordnungen von 12 und 15 müssen dagegen ersetzt bzw. entfernt werden.
+    c.db.execute_batch(
+        "UPDATE faces SET assigned_at='unverändert' WHERE id=10;
+         UPDATE faces SET person_id=2,assignment='suggested',confidence=0.61,assigned_at='alt' WHERE id IN (12,15);
+         DELETE FROM face_group_dirty;",
+    )?;
+    let before: f64 =
+        c.db.query_row("SELECT confidence FROM faces WHERE id=10", [], |r| r.get(0))?;
+    c.db.execute(
+        "INSERT INTO face_maintenance VALUES('test',0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0",
+        [],
+    )?;
+    faces::rematch(&mut c, "test", &Control::default())?;
+    let (at, confidence): (String, f64) = c.db.query_row(
+        "SELECT assigned_at,confidence FROM faces WHERE id=10",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(at, "unverändert", "gleiche Zuordnung bleibt unangetastet");
+    assert_eq!(confidence.to_bits(), before.to_bits());
+    assert_eq!(state(&c, 12)?, (Some(3), Some("auto".into())));
+    assert_eq!(state(&c, 15)?, (None, None));
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM face_group_dirty WHERE face_id=10")?,
+        0,
+        "keine Gruppenarbeit für unveränderte Gesichter"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_change_during_the_rematch_keeps_the_restart() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 10, 10, 5.0)?;
+    polar(&c, 12, 12, 70.0)?;
+    c.db.execute(
+        "INSERT OR REPLACE INTO face_maintenance VALUES('test',0,7)",
+        [],
+    )?;
+    // Simuliert eine Bestätigung, während der Lauf schreibt: wie der Trigger
+    // `user_face_maintenance` Cursor zurücksetzen und Generation erhöhen.
+    c.db.execute_batch(
+        "CREATE TEMP TRIGGER change_during_run AFTER UPDATE OF person_id ON faces WHEN new.id=10 BEGIN
+           UPDATE face_maintenance SET after_photo=0,generation=generation+1;
+         END;",
+    )?;
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(state(&c, 10)?, (Some(1), Some("auto".into())));
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM face_maintenance WHERE after_photo=0 AND generation=8"
+        )?,
+        1,
+        "die Änderung während des Laufs löst einen neuen Lauf aus"
+    );
+    c.db.execute_batch("DROP TRIGGER change_during_run")?;
+    faces::rematch(&mut c, "test", &Control::default())?;
+    assert_eq!(count(&c, "SELECT count(*) FROM face_maintenance")?, 0);
+    Ok(())
+}
+
+#[test]
 fn the_review_threshold_is_stored_per_collection_and_restarts_the_rematch() -> anyhow::Result<()> {
     use foto_importer::core::recognition;
     let temp = tempfile::tempdir()?;
