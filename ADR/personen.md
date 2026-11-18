@@ -51,6 +51,19 @@
   Prüfung ablehnen würde, nie bereits Entschiedenes.
 - „Ja“ legt die Kante mit voller Prüfung an. „Nein“ wird in `face_settings` gespeichert
   (`family.declined_parents`, `family.declined_friends`) und kehrt nie wieder.
+- **„Möglicherweise dieselbe Person“** (`duplicates`): Paare, deren Referenzgesichter (dieselbe
+  Auswahl wie der Abgleich, `recognition::reference_vectors`) einander sehr ähnlich sind.
+  Ähnlichkeit = Median über die Referenzen beider Personen von „Mittel der drei besten
+  Kosinuswerte gegen die andere Person“; ab `config::DUPLICATE_PERSON_MIN` (0,55, Messung
+  dort), höchstens `DUPLICATE_PERSON_MAX` Fragen, ähnlichste zuerst. Nie gefragt: Paare mit
+  gemeinsam bestätigtem Foto, mit eingetragener Beziehung, abgelehnte und zusammengeführte
+  Personen. Berechnung auf einem Worker mit Revision, neu nur bei geändertem Datenstand
+  (Personen, Beziehungen, bestätigte Gesichter, Referenzen, Modell), nicht beim Wechsel der
+  Ansicht. „Zusammenführen …“ öffnet die bestehende Bestätigung in den Details der Person mit
+  weniger Gesichtern (Ziel: die andere); erst „Ja, zusammenführen“ schreibt. „Verschieden“
+  blendet sofort aus und speichert das Paar in `face_settings` (`people.declined_duplicates`);
+  es kehrt nie wieder. Diese Fragen stehen oben unter „Rückfragen“ und in den Details beider
+  Personen, zählen im Knopf „Rückfragen“ mit, nicht aber in der Tabellenspalte „Hinweise“.
 
 **Oberfläche**
 
@@ -109,7 +122,9 @@
 
 ## Grenzen
 
-Vorhandene widersprüchliche Altdaten werden nicht repariert. Ein früherer Partner muss als
+Die Schwelle für „dieselbe Person“ ist an einer Sammlung mit SFace gemessen; Duplikate mit
+nur wenigen Gesichtern erreichen sie oft nicht (drei Gesichter im Median 0,54). Vorhandene
+widersprüchliche Altdaten werden nicht repariert. Ein früherer Partner muss als
 solcher erfasst sein, sonst begründet er Stiefbeziehungen. Bei Mehrfachverwandtschaft gilt
 die nächste. Zeichnungen sind nicht mit Screenreader geprüft; Liste und Seitenfeld sind die
 Alternative.

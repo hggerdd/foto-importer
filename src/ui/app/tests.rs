@@ -2722,3 +2722,103 @@ fn photos_per_year_show_the_age_and_open_that_year() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Anna (1, drei Gesichter) und Ana (2, ein Gesicht) mit fast gleichen Gesichtsmerkmalen, Ben
+/// (3) mit anderen; Ansicht „Personen“, Rückfragen offen.
+fn duplicates_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    let c = Collection::open(root, true)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2),(3);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ana'),(3,'name','Ben');
+         INSERT INTO face_settings VALUES('rust.embedder_key','\"emb\"');",
+    )?;
+    let faces_of = [(1, 0.0), (1, 0.1), (1, 0.2), (2, 0.05), (3, 5.0), (3, 6.0)];
+    for (face, (person, wobble)) in (1_i64..).zip(faces_of) {
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,quality,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,?,'a.jpg','det',1,?,'user',0.1,0.1,0.5,0.5)",
+            rusqlite::params![face, face, person],
+        )?;
+        let vector = faces::encode(&[1.0, wobble, 0.0, 0.0]);
+        c.db.execute(
+            "INSERT INTO face_embeddings VALUES(?,'emb',4,?)",
+            rusqlite::params![face, vector],
+        )?;
+    }
+    let page = faces::page(&c, "persons", 0)?;
+    drop(c);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::People;
+    app.person_mode = PersonMode::Overview;
+    app.face_page = page;
+    app.face_page_serial += 1;
+    app.people_ui.panel = people_table::Panel::Questions;
+    drawn_texts(&context, &mut app, Vec::new());
+    assert_eq!(tasks_of(&app, "person-duplicates"), 1, "ein Leseauftrag");
+    wait_for_tasks(&mut app);
+    Ok((context, app))
+}
+
+#[test]
+fn a_likely_duplicate_is_asked_and_merging_opens_the_existing_confirmation() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = duplicates_app(root.path())?;
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("Sind Anna und Ana dieselbe Person?"),
+        "{texts}"
+    );
+    assert!(!texts.contains("Ben und"), "{texts}");
+    assert_eq!(app.all_questions(), 1);
+    assert_eq!(tasks_of(&app, "person-duplicates"), 0, "nicht je Bild neu");
+    click_labelled(
+        &context,
+        &mut app,
+        "Zusammenführen …",
+        egui::PointerButton::Primary,
+    );
+    // Ana hat weniger Gesichter und geht in Anna über; erst die Bestätigung schreibt.
+    assert_eq!(app.relation_from, Some(2));
+    assert_eq!(app.people_ui.panel, people_table::Panel::Details);
+    // Die Bestätigung scrollt (animiert) ins Sichtfeld.
+    for _ in 0..60 {
+        drawn_texts(&context, &mut app, Vec::new());
+    }
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("„Ana“ (#2) wirklich in „Anna“ (#1) zusammenführen?"),
+        "{texts}"
+    );
+    assert!(
+        app.tasks.iter().all(|t| !t.write),
+        "noch nichts geschrieben"
+    );
+    Ok(())
+}
+
+#[test]
+fn different_hides_the_question_at_once_and_stores_the_answer() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = duplicates_app(root.path())?;
+    click_labelled(
+        &context,
+        &mut app,
+        "Verschieden",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.all_questions(), 0, "sofort ausgeblendet");
+    assert_eq!(app.tasks.iter().filter(|t| t.write).count(), 1);
+    wait_for_tasks(&mut app);
+    let c = Collection::open(root.path(), false)?;
+    assert_eq!(
+        crate::core::duplicates::load_declined(&c)?
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [(1, 2)]
+    );
+    assert!(crate::core::duplicates::load(&c)?.is_empty());
+    Ok(())
+}

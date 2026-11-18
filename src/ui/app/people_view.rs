@@ -25,7 +25,8 @@ impl PhotoApp {
             .selected_person()
             .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
             .map(|p| (p.id, p.name.clone()));
-        let questions = self.open_questions();
+        self.ensure_duplicates();
+        let questions = self.all_questions();
         ui.horizontal_wrapped(|ui| {
             for (mode, label) in PERSON_MODES {
                 let label = if mode == PersonMode::Overview && questions > 0 {
