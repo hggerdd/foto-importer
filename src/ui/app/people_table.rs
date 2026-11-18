@@ -5,8 +5,10 @@
 use super::relationship_view::{square_uv, textured_circle};
 use super::*;
 use crate::core::{
+    duplicates::{self, Candidate},
     gaps::{self, Answer, Suggestion, SuggestionKind},
     people_table::{self as table, Column, PersonRow, SortKey},
+    person_insights::{self, Insights},
     relations::{Gender, Role},
 };
 use crate::ui::select::{Choice, FilterSelect, person_choices};
@@ -16,6 +18,11 @@ const ROW_HEIGHT: f32 = 40.0;
 const HEADER_HEIGHT: f32 = 36.0;
 const PORTRAIT_COLUMN: f32 = 48.0;
 const PORTRAIT_SIZE: f32 = 30.0;
+
+/// Datenstand, von dem die Rückfragen „dieselbe Person“ abhängen: Sammlung, Personen,
+/// Beziehungen, bestätigte Gesichter, Referenzen und Modell. Ein Wechsel der Ansicht allein
+/// liest nicht neu.
+type DuplicatesKey = (String, usize, usize, usize, usize, usize, String);
 
 /// Was die rechte Spalte zeigt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -65,6 +72,20 @@ pub(super) struct PeopleUi {
     merge_target: Option<i64>,
     merge_confirm: bool,
     scroll_to: Option<i64>,
+    /// Zusatzangaben der gewählten Person (Worker-Ergebnis) und der Stand, für den sie
+    /// angefragt wurden: (Person, `face_page_serial`).
+    pub(super) insights: Option<Insights>,
+    insights_key: Option<(i64, u64)>,
+    insights_revision: u64,
+    /// Rückfragen „Möglicherweise dieselbe Person“ (Worker-Ergebnis) und der Datenstand, für
+    /// den sie gelesen wurden.
+    pub(super) duplicates: Vec<Candidate>,
+    duplicates_key: Option<DuplicatesKey>,
+    duplicates_revision: u64,
+    /// In dieser Sitzung als verschieden beantwortet; bleibt ausgeblendet, bis neu gelesen ist.
+    declined_now: BTreeSet<(i64, i64)>,
+    /// Die Bestätigung des Zusammenführens kam aus einer Rückfrage: einmal ins Bild scrollen.
+    merge_reveal: bool,
     /// Nur Sichtprüfung: Suchtext, mit dem das Beziehungs-Auswahlfeld offen bleibt.
     pub(super) capture_popup: Option<String>,
     #[cfg(test)]
@@ -98,6 +119,14 @@ impl Default for PeopleUi {
             merge_target: None,
             merge_confirm: false,
             scroll_to: None,
+            insights: None,
+            insights_key: None,
+            insights_revision: 0,
+            duplicates: Vec::new(),
+            duplicates_key: None,
+            duplicates_revision: 0,
+            declined_now: BTreeSet::new(),
+            merge_reveal: false,
             capture_popup: None,
             #[cfg(test)]
             bounds: None,
@@ -116,8 +145,25 @@ impl PeopleUi {
         *self = Self {
             sort: std::mem::take(&mut self.sort),
             capture_popup: self.capture_popup.take(),
+            // Die Revision läuft weiter, damit kein Ergebnis der alten Sammlung passt.
+            insights_revision: self.insights_revision + 1,
+            duplicates_revision: self.duplicates_revision + 1,
             ..Self::default()
         };
+    }
+    /// Übernimmt die Rückfragen „dieselbe Person“ der zuletzt angefragten Revision.
+    pub(super) fn accept_duplicates(&mut self, revision: u64, duplicates: Vec<Candidate>) {
+        // `declined_now` bleibt: ein Lesen, das vor dem Speichern begann, kennt die Antwort
+        // noch nicht.
+        if revision == self.duplicates_revision {
+            self.duplicates = duplicates;
+        }
+    }
+    /// Übernimmt Zusatzangaben nur, wenn sie zur zuletzt angefragten Revision gehören.
+    pub(super) fn accept_insights(&mut self, revision: u64, insights: Insights) {
+        if revision == self.insights_revision {
+            self.insights = Some(insights);
+        }
     }
     /// Nur für Sichtprüfungen: Sortierspalte aus der Umgebung (`name`, `photos`, …).
     pub(super) fn sort_from_env(&mut self) {
@@ -418,7 +464,7 @@ impl PhotoApp {
     fn people_toolbar(&mut self, ui: &mut egui::Ui) {
         let total = self.face_page.rows.len();
         let shown = self.people_ui.view.len();
-        let questions = self.open_questions();
+        let questions = self.all_questions();
         ui.horizontal_wrapped(|ui| {
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.people_ui.query)
@@ -750,9 +796,9 @@ impl PhotoApp {
 
     fn panel_questions(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Rückfragen").size(20.0).strong());
-        if self.open_questions() == 0 {
+        if self.all_questions() == 0 {
             ui.label(muted(
-                "Keine offenen Rückfragen. Die App schlägt fehlende Eltern nur vor und ergänzt nichts ohne deine Antwort.",
+                "Keine offenen Rückfragen. Die App schlägt fehlende Eltern und doppelte Personen nur vor und ändert nichts ohne deine Antwort.",
             ));
         }
         if self.open_questions() > 0 {
@@ -760,6 +806,11 @@ impl PhotoApp {
                 &mut self.people_ui.only_hints,
                 "Tabelle auf Personen mit Rückfragen beschränken",
             );
+        }
+        self.duplicates_list(ui, None);
+        if !self.open_duplicates(None).is_empty() && self.open_questions() > 0 {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Stammbaum").strong());
         }
         self.questions_list(ui, None);
     }
@@ -799,7 +850,7 @@ impl PhotoApp {
         else {
             ui.label(RichText::new("Keine Person ausgewählt").size(20.0).strong());
             ui.label(muted("Klicke links eine Zeile an, um Eigenschaften und Beziehungen zu sehen. Mit den Pfeiltasten wechselst du die Zeile."));
-            let questions = self.open_questions();
+            let questions = self.all_questions();
             if questions > 0 {
                 ui.add_space(8.0);
                 ui.label(format!("{questions} Rückfragen warten auf deine Antwort."));
@@ -832,6 +883,13 @@ impl PhotoApp {
             .find(|r| r.id == person.id)
             .cloned();
         self.detail_header(ui, &person, row.as_ref());
+        if row.as_ref().is_some_and(|r| r.photos > 0) {
+            self.ensure_insights(person.id);
+            ui.separator();
+            self.detail_companions(ui, &person);
+            ui.separator();
+            self.detail_years(ui, &person, row.as_ref().and_then(|r| r.birth));
+        }
         ui.separator();
         self.detail_properties(ui, &person);
         ui.separator();
@@ -841,7 +899,8 @@ impl PhotoApp {
             .face_page
             .questions
             .iter()
-            .any(|s| table::question_people(s).contains(&person.id));
+            .any(|s| table::question_people(s).contains(&person.id))
+            || !self.open_duplicates(Some(person.id)).is_empty();
         if has_questions {
             ui.separator();
             ui.label(
@@ -849,6 +908,7 @@ impl PhotoApp {
                     .size(17.0)
                     .strong(),
             );
+            self.duplicates_list(ui, Some(person.id));
             self.questions_list(ui, Some(person.id));
         }
         ui.separator();
@@ -979,6 +1039,229 @@ impl PhotoApp {
         }
         if time {
             self.set_person_mode(PersonMode::Time);
+        }
+    }
+
+    /// Liest die Zusatzangaben der Person auf einem Worker, einmal je Person und Datenstand.
+    fn ensure_insights(&mut self, person: i64) {
+        let key = (person, self.face_page_serial);
+        if self.people_ui.insights_key == Some(key) || self.settings.collection.is_empty() {
+            return;
+        }
+        self.people_ui.insights_key = Some(key);
+        self.people_ui.insights_revision += 1;
+        let revision = self.people_ui.insights_revision;
+        let root = PathBuf::from(&self.settings.collection);
+        self.launch(
+            "Personendetails lesen",
+            false,
+            "person-insights",
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                Ok(Outcome::PersonInsights(
+                    revision,
+                    person_insights::load(&c, person)?,
+                ))
+            },
+        );
+    }
+
+    /// „Häufig zusammen mit“: Personen mit den meisten gemeinsamen Fotos. Der Name wählt die
+    /// Person, die Zahl öffnet die Sammlung mit genau diesen Fotos.
+    fn detail_companions(&mut self, ui: &mut egui::Ui, person: &faces::Person) {
+        ui.label(RichText::new("Häufig zusammen mit").size(17.0).strong());
+        let Some(insights) = self
+            .people_ui
+            .insights
+            .as_ref()
+            .filter(|i| i.person == person.id)
+            .cloned()
+        else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(muted("Gemeinsame Fotos werden gezählt …"));
+            });
+            return;
+        };
+        if insights.companions.is_empty() {
+            ui.label(muted(
+                "Auf keinem Foto zusammen mit einer anderen benannten Person.",
+            ));
+            return;
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        let mut select = None;
+        let mut photos = None;
+        for companion in &insights.companions {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
+                paint_portrait(
+                    ui,
+                    rect.center(),
+                    14.0,
+                    self.face_page.portraits.get(&companion.person),
+                    &companion.name,
+                    &mut self.thumbnails,
+                    &root,
+                    &exiftool,
+                );
+                if ui
+                    .link(&companion.name)
+                    .on_hover_text("Diese Person wählen")
+                    .clicked()
+                {
+                    select = Some(companion.person);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = super::plural(companion.photos, "Foto", "Fotos");
+                    if ui
+                        .button(label)
+                        .on_hover_text(format!(
+                            "Fotos mit {} und {} in der Sammlung zeigen",
+                            person.name, companion.name
+                        ))
+                        .clicked()
+                    {
+                        photos = Some(companion.person);
+                    }
+                });
+            });
+        }
+        if let Some(id) = select {
+            self.select_person(id);
+            self.people_ui.scroll_to_person(id);
+        }
+        if let Some(other) = photos {
+            self.filters = Search {
+                people_all: vec![person.id, other],
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
+        }
+    }
+
+    /// „Fotos je Jahr“: ein Balken je Jahr vom ersten bis zum letzten Foto, mit Alter bei
+    /// bekanntem Geburtsjahr. Ein Klick öffnet die Sammlung mit dieser Person in diesem Jahr.
+    fn detail_years(&mut self, ui: &mut egui::Ui, person: &faces::Person, birth: Option<i32>) {
+        ui.label(RichText::new("Fotos je Jahr").size(17.0).strong());
+        let Some(insights) = self
+            .people_ui
+            .insights
+            .as_ref()
+            .filter(|i| i.person == person.id)
+        else {
+            ui.label(muted("Wird gezählt …"));
+            return;
+        };
+        let bars = person_insights::year_bars(&insights.years, birth);
+        let undated = insights.undated;
+        if bars.is_empty() {
+            ui.label(muted("Keines der Fotos hat ein Aufnahmedatum."));
+            return;
+        }
+        let height = 64.0;
+        let width = ui.available_width();
+        let (area, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let most = bars.iter().map(|b| b.photos).max().unwrap_or(1).max(1);
+        let step = width / bars.len() as f32;
+        let gap = if step >= 5.0 { 1.5 } else { 0.0 };
+        let mut open = None;
+        for (i, bar) in bars.iter().enumerate() {
+            let column = Rect::from_min_size(
+                Pos2::new(area.left() + i as f32 * step, area.top()),
+                Vec2::new(step, height),
+            );
+            let response = ui.interact(
+                column,
+                ui.id().with(("person-year", bar.year)),
+                if bar.photos > 0 {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
+            );
+            let label = format!(
+                "{}: {}",
+                bar.year,
+                super::plural(bar.photos, "Foto", "Fotos")
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, bar.photos > 0, &label)
+            });
+            let fraction = bar.photos as f32 / most as f32;
+            let top = area.bottom() - (height - 4.0) * fraction;
+            let fill = if response.hovered() && bar.photos > 0 {
+                theme::ACCENT
+            } else {
+                theme::ACCENT.gamma_multiply(0.6)
+            };
+            if bar.photos > 0 {
+                ui.painter().rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(column.left() + gap / 2.0, top.min(area.bottom() - 2.0)),
+                        Pos2::new(column.right() - gap / 2.0, area.bottom()),
+                    ),
+                    1,
+                    fill,
+                );
+            }
+            let age = bar
+                .age
+                .map(|a| format!(" · etwa {a} Jahre alt"))
+                .unwrap_or_default();
+            let hint = if bar.photos > 0 {
+                format!("{label}{age}\nKlick: diese Fotos in der Sammlung zeigen")
+            } else {
+                format!("{label}{age}")
+            };
+            let response = response.on_hover_text(hint);
+            if bar.photos > 0 {
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() {
+                    open = Some(bar.year);
+                }
+            }
+        }
+        ui.painter().hline(
+            area.x_range(),
+            area.bottom(),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        let edge = |bar: &person_insights::YearBar| match bar.age {
+            Some(age) => format!("{} · {age} J.", bar.year),
+            None => bar.year.to_string(),
+        };
+        let (first, last) = (&bars[0], &bars[bars.len() - 1]);
+        ui.horizontal(|ui| {
+            ui.label(muted(edge(first)));
+            if bars.len() > 1 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(muted(edge(last)));
+                });
+            }
+        });
+        let peak = bars.iter().max_by_key(|b| (b.photos, -b.year));
+        let mut summary = peak
+            .map(|b| format!("Meiste Fotos {} ({})", b.year, b.photos))
+            .unwrap_or_default();
+        if undated > 0 {
+            summary.push_str(&format!(" · {undated} ohne Datum"));
+        }
+        ui.label(muted(summary));
+        if let Some(year) = open {
+            self.filters = Search {
+                people_all: vec![person.id],
+                start: format!("{year:04}-01-01"),
+                end: format!("{year:04}-12-31"),
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
         }
     }
 
@@ -1126,7 +1409,7 @@ impl PhotoApp {
             }
             return;
         }
-        ui.group(|ui| {
+        let confirm = ui.group(|ui| {
             ui.label(
                 RichText::new(format!(
                     "„{}“ (#{}) wirklich in „{target_name}“ (#{target}) zusammenführen? Das lässt sich hier nicht rückgängig machen.",
@@ -1164,9 +1447,214 @@ impl PhotoApp {
                 }
             });
         });
+        // Aus einer Rückfrage geöffnet: die Bestätigung einmal ins Bild holen.
+        if std::mem::take(&mut self.people_ui.merge_reveal) {
+            confirm.response.scroll_to_me(Some(egui::Align::Center));
+        }
     }
 
     // ---------------------------------------------------------------- Rückfragen
+
+    /// Alle offenen Rückfragen: Stammbaum und „Möglicherweise dieselbe Person“.
+    pub(super) fn all_questions(&self) -> usize {
+        self.open_questions() + self.open_duplicates(None).len()
+    }
+
+    /// Offene Rückfragen „dieselbe Person“, deren beide Personen noch bestehen; mit `only`
+    /// nur die zu dieser Person.
+    pub(super) fn open_duplicates(&self, only: Option<i64>) -> Vec<Candidate> {
+        let exists = |id: i64| self.face_page.people.iter().any(|p| p.id == id);
+        self.people_ui
+            .duplicates
+            .iter()
+            .filter(|d| !self.people_ui.declined_now.contains(&(d.a, d.b)))
+            .filter(|d| exists(d.a) && exists(d.b))
+            .filter(|d| only.is_none_or(|p| d.a == p || d.b == p))
+            .cloned()
+            .collect()
+    }
+
+    /// Sucht ähnliche Personen auf einem Worker, sobald sich Personen, Beziehungen,
+    /// bestätigte Gesichter oder Referenzen geändert haben; nie je Bild.
+    pub(super) fn ensure_duplicates(&mut self) {
+        if self.settings.collection.is_empty() || self.face_page.people.len() < 2 {
+            return;
+        }
+        let status = &self.face_page.status;
+        let key: DuplicatesKey = (
+            self.settings.collection.clone(),
+            self.face_page.people.len(),
+            self.face_page.relations.len(),
+            status.confirmed,
+            status.references,
+            status.dirty_people,
+            status.embedder.clone(),
+        );
+        if self.people_ui.duplicates_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.people_ui.duplicates_key = Some(key);
+        self.people_ui.duplicates_revision += 1;
+        let revision = self.people_ui.duplicates_revision;
+        let root = PathBuf::from(&self.settings.collection);
+        self.launch(
+            "Ähnliche Personen suchen",
+            false,
+            "person-duplicates",
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                Ok(Outcome::Duplicates(revision, duplicates::load(&c)?))
+            },
+        );
+    }
+
+    /// Rückfragen „Möglicherweise dieselbe Person“ mit beiden Porträts. „Zusammenführen …“
+    /// öffnet die bestehende Bestätigung in den Details, „Verschieden“ fragt nie wieder.
+    pub(super) fn duplicates_list(&mut self, ui: &mut egui::Ui, only: Option<i64>) {
+        let open = self.open_duplicates(only);
+        if open.is_empty() {
+            return;
+        }
+        let busy = self.busy();
+        if only.is_none() {
+            ui.label(RichText::new("Möglicherweise dieselbe Person").strong());
+            ui.label(muted(
+                "Die Gesichter dieser Personen sind einander sehr ähnlich, und sie stehen nie gemeinsam auf einem Foto. Zusammengeführt wird erst nach deiner Bestätigung.",
+            ));
+        }
+        let root = self.settings.collection.clone();
+        let exiftool = self.settings.exiftool.clone();
+        let faces_of = |id: i64| {
+            self.face_page
+                .people
+                .iter()
+                .find(|p| p.id == id)
+                .map_or(0, |p| p.count)
+        };
+        let mut merge = None;
+        let mut decline = None;
+        let mut photos = None;
+        let mut select = None;
+        for d in &open {
+            let people = [
+                (d.a, self.person_name(d.a), faces_of(d.a)),
+                (d.b, self.person_name(d.b), faces_of(d.b)),
+            ];
+            // Die Person mit weniger bestätigten Gesichtern geht in die andere über.
+            let (source, target) = if (people[1].2, d.a) > (people[0].2, d.b) {
+                (&people[0], &people[1])
+            } else {
+                (&people[1], &people[0])
+            };
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(format!(
+                    "Sind {} und {} dieselbe Person?",
+                    people[0].1, people[1].1
+                ));
+                ui.horizontal(|ui| {
+                    for (id, name, count) in &people {
+                        ui.vertical(|ui| {
+                            let (rect, response) =
+                                ui.allocate_exact_size(Vec2::splat(56.0), Sense::click());
+                            paint_portrait(
+                                ui,
+                                rect.center(),
+                                28.0,
+                                self.face_page.portraits.get(id),
+                                name,
+                                &mut self.thumbnails,
+                                &root,
+                                &exiftool,
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    true,
+                                    format!("{name} wählen"),
+                                )
+                            });
+                            if response
+                                .on_hover_text(format!("{name} (#{id}) wählen"))
+                                .clicked()
+                            {
+                                select = Some(*id);
+                            }
+                            ui.label(RichText::new(name.as_str()).strong());
+                            ui.label(muted(format!(
+                                "#{id} · {}",
+                                super::plural(*count, "Gesicht", "Gesichter")
+                            )));
+                        });
+                        ui.add_space(12.0);
+                    }
+                });
+                ui.label(muted(format!(
+                    "Ähnlichkeit {}",
+                    format!("{:.2}", d.similarity).replace('.', ",")
+                )));
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Zusammenführen …"))
+                        .on_hover_text(format!(
+                            "Öffnet die Bestätigung: „{}“ (#{}) geht in „{}“ (#{}) über",
+                            source.1, source.0, target.1, target.0
+                        ))
+                        .clicked()
+                    {
+                        merge = Some((source.0, target.0));
+                    }
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Verschieden"))
+                        .on_hover_text("Zwei verschiedene Personen; nie wieder fragen")
+                        .clicked()
+                    {
+                        decline = Some((d.a, d.b));
+                    }
+                    if ui
+                        .button("Fotos beider zeigen")
+                        .on_hover_text(
+                            "Sammlung mit Fotos, auf denen mindestens eine der beiden ist",
+                        )
+                        .clicked()
+                    {
+                        photos = Some(vec![d.a, d.b]);
+                    }
+                });
+            });
+        }
+        if let Some(id) = select {
+            self.select_person(id);
+            self.people_ui.scroll_to_person(id);
+        }
+        if let Some((source, target)) = merge {
+            // Bestehender Weg mit Bestätigung in den Details der aufgehenden Person.
+            self.select_person(source);
+            self.people_ui.scroll_to_person(source);
+            self.people_ui.merge_for = Some(source);
+            self.people_ui.merge_target = Some(target);
+            self.people_ui.merge_confirm = true;
+            self.people_ui.merge_reveal = true;
+        }
+        if let Some((a, b)) = decline {
+            self.people_ui.declined_now.insert((a, b));
+            let root = self.settings.collection.clone();
+            self.launch("Als verschieden merken", true, "mutation", move |_| {
+                let mut c = Collection::open(Path::new(&root), true)?;
+                duplicates::decline(&mut c, a, b)?;
+                Ok(Outcome::Done("Gemerkt: zwei verschiedene Personen".into()))
+            });
+        }
+        if let Some(people) = photos {
+            self.filters = Search {
+                people_any: people,
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
+        }
+    }
 
     /// Offene Rückfragen, alle oder nur die zu einer Person. Jeder Vorschlagstyp
     /// liefert seinen Text über `question_text`; Antworten sind für alle gleich.
@@ -1301,6 +1789,55 @@ impl PhotoApp {
     }
 }
 
+/// Rundes Porträt aus dem Vorschau-Cache; Initialen, solange es fehlt oder lädt.
+#[allow(clippy::too_many_arguments)]
+fn paint_portrait(
+    ui: &egui::Ui,
+    centre: Pos2,
+    radius: f32,
+    portrait: Option<&Face>,
+    name: &str,
+    thumbnails: &mut Thumbnails,
+    root: &str,
+    exiftool: &str,
+) {
+    let texture = portrait.and_then(|face| {
+        thumbnails.texture(
+            ui.ctx(),
+            PreviewRequest {
+                root: Some(PathBuf::from(root)),
+                path: Path::new(root).join(&face.source),
+                orientation: 1,
+                crop: Some(face.bbox),
+                edge: 96,
+                generation: 0,
+            },
+            exiftool,
+        )
+    });
+    match texture {
+        Some((id, size)) => textured_circle(
+            ui.painter(),
+            centre,
+            radius,
+            id,
+            square_uv(size),
+            Color32::WHITE,
+        ),
+        None => {
+            ui.painter()
+                .circle_filled(centre, radius, ui.visuals().faint_bg_color);
+            ui.painter().text(
+                centre,
+                Align2::CENTER_CENTER,
+                super::tree_view::initials(name),
+                FontId::proportional((radius * 0.8).max(10.0)),
+                theme::MUTED,
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     ui: &mut egui::Ui,
@@ -1351,41 +1888,16 @@ fn paint_row(
         rect.left() + 8.0 + PORTRAIT_SIZE / 2.0 + 2.0,
         rect.center().y,
     );
-    let texture = portrait.and_then(|face| {
-        thumbnails.texture(
-            ui.ctx(),
-            PreviewRequest {
-                root: Some(PathBuf::from(root)),
-                path: Path::new(root).join(&face.source),
-                orientation: 1,
-                crop: Some(face.bbox),
-                edge: 96,
-                generation: 0,
-            },
-            exiftool,
-        )
-    });
-    match texture {
-        Some((id, size)) => textured_circle(
-            ui.painter(),
-            centre,
-            PORTRAIT_SIZE / 2.0,
-            id,
-            square_uv(size),
-            Color32::WHITE,
-        ),
-        None => {
-            ui.painter()
-                .circle_filled(centre, PORTRAIT_SIZE / 2.0, visuals.faint_bg_color);
-            ui.painter().text(
-                centre,
-                Align2::CENTER_CENTER,
-                super::tree_view::initials(&row.name),
-                FontId::proportional(12.0),
-                theme::MUTED,
-            );
-        }
-    }
+    paint_portrait(
+        ui,
+        centre,
+        PORTRAIT_SIZE / 2.0,
+        portrait,
+        &row.name,
+        thumbnails,
+        root,
+        exiftool,
+    );
     for &(column, x, w) in layout {
         let cell = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(w, rect.height()));
         let text = cell_text(row, column);

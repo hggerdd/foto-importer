@@ -68,6 +68,23 @@ pub const GRAPH_NEUTRAL: f32 = 1.0;
 /// Faktor für „Bekannter von“ und frühere Partner: rücken unabhängig von der Fotozahl
 /// weiter auseinander.
 pub const GRAPH_DISTANT: f32 = 0.35;
+/// Personendetails: so viele Personen nennt „Häufig zusammen mit“ (meiste gemeinsame Fotos).
+/// Höchstens `relationship_graph::NEIGHBOR_LIMIT`.
+pub const PERSON_COMPANIONS: usize = 8;
+/// Personendetails, „Fotos je Jahr“: plausible Aufnahmejahre. Andere Werte (z. B. 0000 aus
+/// nicht gestellten Kamerauhren) zählen als „ohne Datum“, damit das Diagramm keine
+/// Jahrhunderte überspannt.
+pub const PERSON_YEARS: std::ops::RangeInclusive<i32> = 1826..=2200;
+/// Rückfrage „Möglicherweise dieselbe Person“ (`duplicates`): Mindestähnlichkeit zweier
+/// Personen, gemessen als Median der Mittel der drei besten Kosinuswerte je Referenzgesicht
+/// gegen die andere Person (beide Richtungen). Gemessen am 2026-11-18 (SFace, eine Sammlung,
+/// 42 Personen mit 1916 Referenzen, nur lesend): verschiedene Personen ohne gemeinsames Foto
+/// höchstens 0,53; dieselbe Person, Referenzen in zwei Hälften geteilt, im Median 0,72 und zu
+/// 90 % ab 0,60; drei Gesichter gegen den Rest derselben Person im Median 0,54. Zwei Paare über
+/// 0,55 (0,69 und 0,58) standen gemeinsam auf Fotos und sind deshalb ausgeschlossen.
+pub const DUPLICATE_PERSON_MIN: f32 = 0.55;
+/// Höchstzahl gleichzeitig gezeigter Rückfragen „Möglicherweise dieselbe Person“.
+pub const DUPLICATE_PERSON_MAX: usize = 20;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",

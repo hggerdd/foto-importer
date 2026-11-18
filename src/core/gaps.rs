@@ -40,7 +40,7 @@ impl Decisions {
     }
 }
 
-fn decode_pairs(text: &str) -> BTreeSet<(i64, i64)> {
+pub(crate) fn decode_pairs(text: &str) -> BTreeSet<(i64, i64)> {
     text.split(';')
         .filter_map(|pair| {
             let (first, second) = pair.split_once(':')?;
@@ -49,7 +49,7 @@ fn decode_pairs(text: &str) -> BTreeSet<(i64, i64)> {
         .collect()
 }
 
-fn encode_pairs(pairs: &BTreeSet<(i64, i64)>) -> String {
+pub(crate) fn encode_pairs(pairs: &BTreeSet<(i64, i64)>) -> String {
     pairs
         .iter()
         .map(|(first, second)| format!("{first}:{second}"))

@@ -152,6 +152,10 @@ enum Outcome {
     Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
     RelationshipGraph(u64, crate::core::relationship_graph::Network),
+    /// Zusätzliche Angaben der Personendetails (Revision der Personenseite).
+    PersonInsights(u64, crate::core::person_insights::Insights),
+    /// Rückfragen „Möglicherweise dieselbe Person“ (Revision der Personenseite).
+    Duplicates(u64, Vec<crate::core::duplicates::Candidate>),
     PersonAdded(i64),
     RuntimeDownloaded(PathBuf),
     ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
@@ -1293,6 +1297,19 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Time(outcome)) => self.accept_time(outcome),
+                // Fehlende Zusatzangaben der Personendetails sind kein Fehler für den Nutzer;
+                // die Abschnitte bleiben dann leer und werden mit dem nächsten Stand neu gelesen.
+                Err(_) if matches!(running.kind, "person-insights" | "person-duplicates") => {}
+                Ok(Outcome::Duplicates(revision, duplicates))
+                    if running.collection == self.settings.collection =>
+                {
+                    self.people_ui.accept_duplicates(revision, duplicates);
+                }
+                Ok(Outcome::PersonInsights(revision, insights))
+                    if running.collection == self.settings.collection =>
+                {
+                    self.people_ui.accept_insights(revision, insights);
+                }
                 Err(_) if running.kind == "folders" => {
                     // Der Worker liefert Fehler als `Outcome::Folders`; hier landet nur ein
                     // unerwartetes Ende. Nur das erwartete Lesen der aktuellen Sammlung zählt.

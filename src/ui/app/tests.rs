@@ -2617,3 +2617,208 @@ fn connect_mode_cancels_without_writing() -> anyhow::Result<()> {
     assert_eq!(app.relationship_graph.selected, Some(anna));
     Ok(())
 }
+
+/// Temporäre Sammlung mit drei Fotos: Anna (1) auf allen, Ben (2) auf zweien, Carla (3) auf
+/// einem; Ansicht „Personen“ mit gelesener Personenseite.
+fn insights_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::write(root.join(name), b"photo")?;
+    }
+    let mut c = Collection::open(root, true)?;
+    c.quick_scan(false, &crate::core::jobs::Control::default())?;
+    let photos: Vec<i64> = metadata::search(&c, &Search::default(), "")?
+        .photos
+        .iter()
+        .map(|p| p.id)
+        .collect();
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2),(3);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben'),(3,'name','Carla'),
+             (1,'birth_year','2000');",
+    )?;
+    for (photo, person) in [
+        (photos[0], 1),
+        (photos[1], 1),
+        (photos[2], 1),
+        (photos[0], 2),
+        (photos[1], 2),
+        (photos[2], 3),
+    ] {
+        c.db.execute(
+            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,'a.jpg','det',?,'user',0.1,0.1,0.5,0.5)",
+            rusqlite::params![photo, person],
+        )?;
+    }
+    for (photo, date) in [
+        (photos[0], "2015:05:01 10:00:00"),
+        (photos[1], "2015:08:01 10:00:00"),
+        (photos[2], "2017:01:01 10:00:00"),
+    ] {
+        c.db.execute(
+            "UPDATE metadata_photos SET dt_original=? WHERE photo_id=?",
+            rusqlite::params![date, photo],
+        )?;
+    }
+    let page = faces::page(&c, "persons", 0)?;
+    drop(c);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::People;
+    app.person_mode = PersonMode::Overview;
+    app.face_page = page;
+    app.face_page_serial += 1;
+    Ok((context, app))
+}
+
+#[test]
+fn companions_list_the_most_shared_photos_and_open_exactly_those() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = insights_app(root.path())?;
+    app.select_person(1);
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Häufig zusammen mit"), "{texts}");
+    assert_eq!(tasks_of(&app, "person-insights"), 1, "ein Leseauftrag");
+    wait_for_tasks(&mut app);
+    drawn_texts(&context, &mut app, Vec::new());
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert_eq!(tasks_of(&app, "person-insights"), 0, "nicht je Bild neu");
+    let ben = texts.find("Ben").expect("Ben genannt");
+    let carla = texts.find("Carla").expect("Carla genannt");
+    assert!(ben < carla, "meiste gemeinsame Fotos zuerst: {texts}");
+    click_labelled(&context, &mut app, "2 Fotos", egui::PointerButton::Primary);
+    assert_eq!(app.view, View::Collection);
+    assert_eq!(app.filters.people_all, vec![1, 2]);
+    assert!(app.tasks.iter().all(|t| !t.write), "nur gelesen");
+    Ok(())
+}
+
+#[test]
+fn photos_per_year_show_the_age_and_open_that_year() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = insights_app(root.path())?;
+    app.select_person(1);
+    drawn_texts(&context, &mut app, Vec::new());
+    wait_for_tasks(&mut app);
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Fotos je Jahr"), "{texts}");
+    // Anna ist 2000 geboren: Alter an den Rändern, Lückenjahr 2016 ohne Klick.
+    assert!(texts.contains("2015 · 15 J."), "{texts}");
+    assert!(texts.contains("2017 · 17 J."), "{texts}");
+    assert!(texts.contains("Meiste Fotos 2015 (2)"), "{texts}");
+    click_labelled(
+        &context,
+        &mut app,
+        "2015: 2 Fotos",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.view, View::Collection);
+    assert_eq!(app.filters.people_all, vec![1]);
+    assert_eq!(
+        (app.filters.start.as_str(), app.filters.end.as_str()),
+        ("2015-01-01", "2015-12-31")
+    );
+    Ok(())
+}
+
+/// Anna (1, drei Gesichter) und Ana (2, ein Gesicht) mit fast gleichen Gesichtsmerkmalen, Ben
+/// (3) mit anderen; Ansicht „Personen“, Rückfragen offen.
+fn duplicates_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    let c = Collection::open(root, true)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2),(3);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ana'),(3,'name','Ben');
+         INSERT INTO face_settings VALUES('rust.embedder_key','\"emb\"');",
+    )?;
+    let faces_of = [(1, 0.0), (1, 0.1), (1, 0.2), (2, 0.05), (3, 5.0), (3, 6.0)];
+    for (face, (person, wobble)) in (1_i64..).zip(faces_of) {
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,quality,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,?,'a.jpg','det',1,?,'user',0.1,0.1,0.5,0.5)",
+            rusqlite::params![face, face, person],
+        )?;
+        let vector = faces::encode(&[1.0, wobble, 0.0, 0.0]);
+        c.db.execute(
+            "INSERT INTO face_embeddings VALUES(?,'emb',4,?)",
+            rusqlite::params![face, vector],
+        )?;
+    }
+    let page = faces::page(&c, "persons", 0)?;
+    drop(c);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::People;
+    app.person_mode = PersonMode::Overview;
+    app.face_page = page;
+    app.face_page_serial += 1;
+    app.people_ui.panel = people_table::Panel::Questions;
+    drawn_texts(&context, &mut app, Vec::new());
+    assert_eq!(tasks_of(&app, "person-duplicates"), 1, "ein Leseauftrag");
+    wait_for_tasks(&mut app);
+    Ok((context, app))
+}
+
+#[test]
+fn a_likely_duplicate_is_asked_and_merging_opens_the_existing_confirmation() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = duplicates_app(root.path())?;
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("Sind Anna und Ana dieselbe Person?"),
+        "{texts}"
+    );
+    assert!(!texts.contains("Ben und"), "{texts}");
+    assert_eq!(app.all_questions(), 1);
+    assert_eq!(tasks_of(&app, "person-duplicates"), 0, "nicht je Bild neu");
+    click_labelled(
+        &context,
+        &mut app,
+        "Zusammenführen …",
+        egui::PointerButton::Primary,
+    );
+    // Ana hat weniger Gesichter und geht in Anna über; erst die Bestätigung schreibt.
+    assert_eq!(app.relation_from, Some(2));
+    assert_eq!(app.people_ui.panel, people_table::Panel::Details);
+    // Die Bestätigung scrollt (animiert) ins Sichtfeld.
+    for _ in 0..60 {
+        drawn_texts(&context, &mut app, Vec::new());
+    }
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("„Ana“ (#2) wirklich in „Anna“ (#1) zusammenführen?"),
+        "{texts}"
+    );
+    assert!(
+        app.tasks.iter().all(|t| !t.write),
+        "noch nichts geschrieben"
+    );
+    Ok(())
+}
+
+#[test]
+fn different_hides_the_question_at_once_and_stores_the_answer() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = duplicates_app(root.path())?;
+    click_labelled(
+        &context,
+        &mut app,
+        "Verschieden",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.all_questions(), 0, "sofort ausgeblendet");
+    assert_eq!(app.tasks.iter().filter(|t| t.write).count(), 1);
+    wait_for_tasks(&mut app);
+    let c = Collection::open(root.path(), false)?;
+    assert_eq!(
+        crate::core::duplicates::load_declined(&c)?
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [(1, 2)]
+    );
+    assert!(crate::core::duplicates::load(&c)?.is_empty());
+    Ok(())
+}

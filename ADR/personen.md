@@ -51,6 +51,19 @@
   Prüfung ablehnen würde, nie bereits Entschiedenes.
 - „Ja“ legt die Kante mit voller Prüfung an. „Nein“ wird in `face_settings` gespeichert
   (`family.declined_parents`, `family.declined_friends`) und kehrt nie wieder.
+- **„Möglicherweise dieselbe Person“** (`duplicates`): Paare, deren Referenzgesichter (dieselbe
+  Auswahl wie der Abgleich, `recognition::reference_vectors`) einander sehr ähnlich sind.
+  Ähnlichkeit = Median über die Referenzen beider Personen von „Mittel der drei besten
+  Kosinuswerte gegen die andere Person“; ab `config::DUPLICATE_PERSON_MIN` (0,55, Messung
+  dort), höchstens `DUPLICATE_PERSON_MAX` Fragen, ähnlichste zuerst. Nie gefragt: Paare mit
+  gemeinsam bestätigtem Foto, mit eingetragener Beziehung, abgelehnte und zusammengeführte
+  Personen. Berechnung auf einem Worker mit Revision, neu nur bei geändertem Datenstand
+  (Personen, Beziehungen, bestätigte Gesichter, Referenzen, Modell), nicht beim Wechsel der
+  Ansicht. „Zusammenführen …“ öffnet die bestehende Bestätigung in den Details der Person mit
+  weniger Gesichtern (Ziel: die andere); erst „Ja, zusammenführen“ schreibt. „Verschieden“
+  blendet sofort aus und speichert das Paar in `face_settings` (`people.declined_duplicates`);
+  es kehrt nie wieder. Diese Fragen stehen oben unter „Rückfragen“ und in den Details beider
+  Personen, zählen im Knopf „Rückfragen“ mit, nicht aber in der Tabellenspalte „Hinweise“.
 
 **Oberfläche**
 
@@ -66,6 +79,18 @@
   Fotos, Gesichter, Geburt und Alter, Geschlecht, Beziehungen, Familie, erstes und letztes
   Foto, Hinweise; Spalten entfallen bei wenig Breite nach Priorität), Details der gewählten
   Person rechts. Je Spalte genau ein Scrollbereich. Rückfragen stehen hier gesammelt.
+- **Personendetails, Zusatzangaben** (`person_insights`): ein Leseauftrag je Person und
+  Datenstand (`face_page_serial`) auf einem Worker mit Revision, nie je Bild. Fehler bleiben
+  still; der Abschnitt bleibt leer. Nur für Personen mit Fotos.
+  - **Häufig zusammen mit:** bis zu acht Personen (`config::PERSON_COMPANIONS`) mit den meisten
+    gemeinsamen Fotos, gezählt wie der Graph und die Sammlungssuche
+    (`relationship_graph::for_person`). Der Name wählt die Person, die Zahl öffnet die Sammlung
+    mit „alle diese Personen“ = beide.
+  - **Fotos je Jahr:** ein Balken je Aufnahmejahr (`dt_original`, gleiche Zählung) vom ersten
+    bis zum letzten Jahr, Lückenjahre leer; mit Geburtsjahr nennt der Hinweistext das Alter
+    (Jahr minus Geburtsjahr, daher „etwa“), die Ränder zeigen Jahr und Alter. Ein Klick öffnet
+    die Sammlung mit der Person und dem Datumsfilter dieses Jahres. Jahre außerhalb
+    `config::PERSON_YEARS` und fehlende Daten zählen als „ohne Datum“.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern
@@ -97,7 +122,9 @@
 
 ## Grenzen
 
-Vorhandene widersprüchliche Altdaten werden nicht repariert. Ein früherer Partner muss als
+Die Schwelle für „dieselbe Person“ ist an einer Sammlung mit SFace gemessen; Duplikate mit
+nur wenigen Gesichtern erreichen sie oft nicht (drei Gesichter im Median 0,54). Vorhandene
+widersprüchliche Altdaten werden nicht repariert. Ein früherer Partner muss als
 solcher erfasst sein, sonst begründet er Stiefbeziehungen. Bei Mehrfachverwandtschaft gilt
 die nächste. Zeichnungen sind nicht mit Screenreader geprüft; Liste und Seitenfeld sind die
 Alternative.

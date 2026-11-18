@@ -209,6 +209,19 @@ impl References {
     }
 }
 
+/// Referenzvektoren je Person (normiert), genau die Auswahl des Abgleichs (`References`).
+pub fn reference_vectors(
+    collection: &Collection,
+    key: &str,
+) -> Result<BTreeMap<i64, Vec<Vec<f32>>>> {
+    let (entries, people) = References::load_entries(collection, key)?;
+    let mut out: BTreeMap<i64, Vec<Vec<f32>>> = BTreeMap::new();
+    for (_, slot, vector) in entries {
+        out.entry(people[slot].0).or_default().push(vector);
+    }
+    Ok(out)
+}
+
 fn ranked_with(
     collection: &Collection,
     references: &References,
