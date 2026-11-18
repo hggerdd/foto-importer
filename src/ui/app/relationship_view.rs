@@ -3,9 +3,31 @@
 //! Das Layout entsteht einmal auf dem Worker (`relationship_graph::network`);
 //! die Oberfläche zeichnet nur und bewegt Ausschnitt und Zoom.
 use super::*;
+use crate::core::relations::{self, Gender, Role};
 use crate::core::relationship_graph::{self, Edge, Network, Recorded};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::collections::HashSet;
+
+/// Offenes Auswahlmenü des Verbindungsmodus: „`first` ist … von `second`“.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ConnectMenu {
+    pub(super) first: i64,
+    pub(super) second: i64,
+    /// Bildschirmposition des zweiten Klicks.
+    pub(super) at: Pos2,
+}
+
+/// Angebotene Typen im Verbindungsmenü, in der Reihenfolge der Übersicht.
+const CONNECT_ROLES: [Role; 8] = [
+    Role::Parent,
+    Role::Child,
+    Role::Partner,
+    Role::FormerPartner,
+    Role::Friend,
+    Role::Acquaintance,
+    Role::Sibling,
+    Role::Cousin,
+];
 
 pub(super) struct RelationshipView {
     pub(super) revision: u64,
@@ -22,6 +44,14 @@ pub(super) struct RelationshipView {
     show_recorded: bool,
     show_photos: bool,
     min_photos: usize,
+    /// Verbindungsmodus: Klicks auf zwei Knoten legen eine Beziehung an, statt zu wählen.
+    pub(super) connect: bool,
+    /// Im Verbindungsmodus zuerst angeklickte Person.
+    pub(super) connect_first: Option<i64>,
+    pub(super) connect_menu: Option<ConnectMenu>,
+    /// Zuletzt gezeichneter Zeichenbereich und Ausschnitt (für Tests der Klickwege).
+    #[cfg(test)]
+    pub(super) drawn: Option<(Rect, [f32; 2], f32)>,
 }
 
 impl Default for RelationshipView {
@@ -39,6 +69,11 @@ impl Default for RelationshipView {
             show_recorded: true,
             show_photos: true,
             min_photos: 1,
+            connect: false,
+            connect_first: None,
+            connect_menu: None,
+            #[cfg(test)]
+            drawn: None,
         }
     }
 }
@@ -67,7 +102,48 @@ impl RelationshipView {
         {
             self.selected = None;
         }
+        let gone = |person: i64| network.index_of(person).is_none();
+        if self.connect_first.is_some_and(gone)
+            || self
+                .connect_menu
+                .is_some_and(|m| gone(m.first) || gone(m.second))
+        {
+            self.cancel_connect();
+        }
         self.data = Some(network);
+    }
+
+    /// Verwirft das angefangene Paar; der Verbindungsmodus bleibt an.
+    pub(super) fn cancel_connect(&mut self) {
+        self.connect_first = None;
+        self.connect_menu = None;
+    }
+
+    /// Klick im Verbindungsmodus auf eine Person oder (`None`) auf den Hintergrund.
+    /// Erster Klick merkt die Person, erneuter Klick auf sie hebt das auf, ein Klick auf eine
+    /// zweite öffnet das Menü. Klick auf den Hintergrund oder bei offenem Menü bricht ab.
+    pub(super) fn connect_click(&mut self, person: Option<i64>, at: Pos2) {
+        if self.connect_menu.is_some() {
+            self.cancel_connect();
+            return;
+        }
+        match (self.connect_first, person) {
+            (_, None) => self.connect_first = None,
+            (Some(first), Some(second)) if first == second => self.connect_first = None,
+            (Some(first), Some(second)) => {
+                self.connect_menu = Some(ConnectMenu { first, second, at });
+            }
+            (None, Some(person)) => self.connect_first = Some(person),
+        }
+    }
+
+    /// Esc: bricht zuerst das angefangene Paar ab, danach den Verbindungsmodus.
+    pub(super) fn connect_escape(&mut self) {
+        if self.connect_first.is_some() || self.connect_menu.is_some() {
+            self.cancel_connect();
+        } else {
+            self.connect = false;
+        }
     }
 }
 
@@ -231,6 +307,12 @@ impl PhotoApp {
                 exiftool: &self.settings.exiftool,
             };
             canvas(ui, &mut self.relationship_graph, &network, dark, source);
+            if self.relationship_graph.connect {
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.relationship_graph.connect_escape();
+                }
+                self.connection_menu(ui.ctx(), &network);
+            }
         }
         self.relationship_graph.data = Some(network);
         // Wer im Graph eine Person wählt, wählt sie für alle Personenansichten.
@@ -250,6 +332,93 @@ impl PhotoApp {
             self.view = View::Collection;
             self.refresh_collection();
         }
+    }
+
+    fn gender_of(&self, person: i64) -> Gender {
+        self.face_page
+            .people
+            .iter()
+            .find(|p| p.id == person)
+            .map_or(Gender::Unknown, |p| Gender::parse(&p.gender))
+    }
+
+    /// Kleines Menü an der Stelle des zweiten Klicks: Beziehungstypen in beiden Richtungen.
+    /// Was die Prüfung ablehnen würde, ist gesperrt und nennt den Grund.
+    fn connection_menu(&mut self, ctx: &egui::Context, network: &Network) {
+        let Some(menu) = self.relationship_graph.connect_menu else {
+            return;
+        };
+        let name = |person: i64| {
+            network
+                .index_of(person)
+                .map_or_else(|| format!("#{person}"), |i| network.nodes[i].name.clone())
+        };
+        let (a, b) = (name(menu.first), name(menu.second));
+        let (ga, gb) = (self.gender_of(menu.first), self.gender_of(menu.second));
+        let busy = self.busy();
+        let busy_reason = self.busy_reason();
+        let edges = &self.face_page.relations;
+        let mut chosen = None;
+        let mut cancel = false;
+        egui::Area::new(egui::Id::new("graph-connect-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(menu.at + egui::vec2(8.0, 8.0))
+            .constrain(true)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width(360.0);
+                    ui.label(RichText::new("Beziehung hinzufügen").strong());
+                    for role in CONNECT_ROLES {
+                        // „Kind von“ liest sich als Elternteil in Gegenrichtung.
+                        let mut text = if role == Role::Child {
+                            format!("{b} ist {} von {a}", Role::Parent.label(gb))
+                        } else {
+                            format!("{a} ist {} von {b}", role.label(ga))
+                        };
+                        if matches!(role, Role::Sibling | Role::Cousin) {
+                            text.push_str(" (Behelf)");
+                        }
+                        let check = relations::validate_add(
+                            edges,
+                            relations::canonical(menu.first, role, menu.second),
+                        );
+                        let reason = match check {
+                            Ok(true) if busy => Some(busy_reason.clone()),
+                            Ok(true) => None,
+                            Ok(false) => Some("Bereits eingetragen".to_owned()),
+                            Err(conflict) => Some(conflict.to_string()),
+                        };
+                        let response = ui.add_enabled(
+                            reason.is_none(),
+                            egui::Button::new(text).wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                        if let Some(reason) = reason {
+                            response.on_disabled_hover_text(reason);
+                        } else if response.clicked() {
+                            chosen = Some(role);
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Abbrechen").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if let Some(role) = chosen {
+            self.connect_choose(role);
+        } else if cancel {
+            self.relationship_graph.cancel_connect();
+        }
+    }
+
+    /// Legt die im Menü gewählte Beziehung über denselben Weg an wie die Übersicht und bleibt
+    /// für das nächste Paar im Verbindungsmodus.
+    pub(super) fn connect_choose(&mut self, role: Role) {
+        let Some(menu) = self.relationship_graph.connect_menu.take() else {
+            return;
+        };
+        self.relationship_graph.connect_first = None;
+        self.save_relation(menu.first, role, menu.second);
     }
 }
 
@@ -277,6 +446,15 @@ fn toolbar(
                 "Blendet schwächere Fotoverbindungen aus, damit der Graph lesbar bleibt",
             );
         });
+        ui.separator();
+        let before = view.connect;
+        ui.toggle_value(&mut view.connect, "Verbindung hinzufügen")
+            .on_hover_text(
+                "Zwei Personen nacheinander anklicken und den Beziehungstyp wählen. Esc bricht ab.",
+            );
+        if before != view.connect {
+            view.cancel_connect();
+        }
         ui.separator();
         if ui.button("−").on_hover_text("Verkleinern").clicked() {
             view.scale = (view.scale / 1.3).max(MIN_SCALE);
@@ -308,6 +486,29 @@ fn toolbar(
         ));
     }
     ui.label(RichText::new(info).small().color(theme::MUTED));
+    if view.connect {
+        let name = |person: i64| {
+            network
+                .index_of(person)
+                .map_or_else(|| format!("#{person}"), |i| network.nodes[i].name.clone())
+        };
+        let hint = match (view.connect_menu, view.connect_first) {
+            (Some(menu), _) => format!(
+                "{} und {}: Beziehungstyp wählen oder „Abbrechen“ (Esc).",
+                name(menu.first),
+                name(menu.second)
+            ),
+            (None, Some(first)) => format!(
+                "{} gewählt. Zweite Person wählen … (Esc bricht ab, erneuter Klick hebt die Wahl auf)",
+                name(first)
+            ),
+            (None, None) => {
+                "Verbindung hinzufügen: erste Person anklicken (Esc beendet den Modus).".to_owned()
+            }
+        };
+        let colour = palette(ui.visuals().dark_mode).ring;
+        ui.label(RichText::new(hint).strong().color(colour));
+    }
     refresh
 }
 
@@ -435,6 +636,10 @@ fn canvas(
     }
     let scale = view.scale;
     let centre = view.centre;
+    #[cfg(test)]
+    {
+        view.drawn = Some((rect, centre, scale));
+    }
     let to_screen = |p: [f32; 2]| {
         Pos2::new(
             rect.center().x + (p[0] - centre[0]) * scale,
@@ -565,6 +770,32 @@ fn canvas(
             .map(|(i, _)| i)
     });
     let node_clip = rect.expand(30.0);
+    // Verbindungsmodus: Gummiband von der ersten Person zum Mauszeiger bzw. zur zweiten.
+    let pending: Vec<usize> = match (view.connect_menu, view.connect_first) {
+        (Some(menu), _) => vec![menu.first, menu.second],
+        (None, first) => first.into_iter().collect(),
+    }
+    .into_iter()
+    .filter_map(|person| network.index_of(person))
+    .collect();
+    if view.connect
+        && let Some(&first) = pending.first()
+    {
+        let from = to_screen(positions[first]);
+        let to = match (pending.get(1), hover) {
+            (Some(&second), _) => Some(to_screen(positions[second])),
+            (None, Some(h)) => Some(to_screen(positions[h])),
+            (None, None) => response.hover_pos(),
+        };
+        if let Some(to) = to {
+            painter.extend(egui::Shape::dashed_line(
+                &[from, to],
+                Stroke::new(2.5_f32, colours.ring),
+                6.0,
+                4.0,
+            ));
+        }
+    }
     let is_dim = |i: usize| selected.is_some() && !related.contains(&i);
     let few = network.nodes.len() <= 40;
     for pass in [true, false] {
@@ -579,7 +810,9 @@ fn canvas(
             let r = radius_px[i];
             let alpha = if pass { 0.3 } else { 1.0 };
             let fill = node_fill(node.person).gamma_multiply(alpha);
-            let ring = if selected == Some(i) {
+            let ring = if view.connect && pending.contains(&i) {
+                Stroke::new(4.5_f32, colours.parent)
+            } else if selected == Some(i) {
                 Stroke::new(3.5_f32, colours.ring)
             } else if related.contains(&i) && selected.is_some() || hover == Some(i) {
                 Stroke::new(2.5_f32, colours.ring)
@@ -674,19 +907,33 @@ fn canvas(
 
     if hover.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    } else if view.connect && !response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    if response.clicked() {
-        view.selected = hover.map(|i| network.nodes[i].person);
-    }
-    if response.double_clicked()
-        && let Some(i) = hover
-    {
-        view.focus_request = Some(network.nodes[i].person);
+    if view.connect {
+        if response.clicked() {
+            let at = response.interact_pointer_pos().unwrap_or(rect.center());
+            view.connect_click(hover.map(|i| network.nodes[i].person), at);
+        }
+    } else {
+        if response.clicked() {
+            view.selected = hover.map(|i| network.nodes[i].person);
+        }
+        if response.double_clicked()
+            && let Some(i) = hover
+        {
+            view.focus_request = Some(network.nodes[i].person);
+        }
     }
     if let Some(i) = hover {
         let node = &network.nodes[i];
+        let action = if view.connect {
+            "Klick wählt die Person für die neue Verbindung"
+        } else {
+            "Klick wählt aus, Doppelklick zentriert"
+        };
         response.on_hover_text(format!(
-            "{} · #{} · {} Fotos\nKlick wählt aus, Doppelklick zentriert",
+            "{} · #{} · {} Fotos\n{action}",
             node.name, node.person, node.photos
         ));
     }

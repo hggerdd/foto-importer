@@ -77,7 +77,23 @@
   unterschieden) und gemeinsame Fotos (Linienstärke logarithmisch, Schwelle „ab Fotos“).
   Gemeinsame Fotos zählen wie die Sammlungssuche: eindeutige Fotos, bestätigte Zuordnungen,
   keine historischen Gesichter. Berechnung auf einem Worker mit Revision; Layout
-  deterministisch (`graph_layout`). Berechnete Verwandtschaft wird nie als Kante gezeigt.
+  deterministisch (`graph_layout`). Berechnete Verwandtschaft wird nie als Kante gezeigt
+  (Ausnahme wie bisher: Geschwister aus gemeinsamen Eltern).
+  - **Layout-Gewicht** (`relationship_graph::layout_weight`): gemeinsame Fotos `1 + ln(n)`,
+    eingetragene Beziehung `+1,5`, mal Nähefaktor der engsten Beziehung des Paares
+    (`config::GRAPH_*`): Eltern/Kind und Partner 2,5, Geschwister und Cousin 1,6, Freunde und
+    reine Fotokanten 1,0, Bekannte und frühere Partner 0,35. So rücken Familie unabhängig von
+    der Fotozahl zusammen und Bekannte auseinander. Nur gezeichnete Kanten zählen; sonstige
+    berechnete Verwandtschaft beeinflusst das Layout nicht.
+  - **Verbindung hinzufügen:** Umschalter in der Werkzeugleiste. Erster Klick merkt eine
+    Person, erneuter Klick hebt das auf, Klick auf eine zweite öffnet am Klickpunkt ein Menü
+    mit allen Typen in beiden Richtungen („A ist Mutter von B“, „B ist Vater von A“, Behelf
+    gekennzeichnet). Was `validate_add` auf dem geladenen Bestand ablehnt, ist gesperrt und
+    nennt den Grund. Gespeichert wird über denselben Weg wie in der Übersicht
+    (`save_relation` → `central::add_relation_synced`, Schreibauftrag auf dem Worker, Hinweis,
+    Graph neu berechnet); der Modus bleibt für das nächste Paar an. „Abbrechen“, Esc und Klick
+    auf den Hintergrund verwerfen das Paar, ein weiteres Esc beendet den Modus. Ziehen und Zoom
+    bleiben; die normale Auswahl per Klick gilt nur außerhalb des Modus.
 
 ## Grenzen
 

@@ -54,6 +54,20 @@ pub const TIMELINE_MIN_PX: (u32, u32, u32) = (96, 160, 320);
 pub const TIMELINE_MIN_QUALITY: f32 = 0.5;
 pub const TIMELINE_MIN_DETECTION: f32 = 0.8;
 pub const TIMELINE_MIN_FRONTAL: f32 = 0.5;
+/// Personengraph: Anziehung einer Kante für das Layout (`relationship_graph::layout_weight`).
+/// Gemeinsame Fotos zählen `1 + ln(Fotos)`; jede eingetragene Beziehung gibt diesen Zuschlag.
+pub const GRAPH_RECORDED_BONUS: f32 = 1.5;
+/// Faktor für Eltern/Kind und Partner: rücken unabhängig von der Fotozahl deutlich näher
+/// zusammen. Der Sollabstand wächst etwa mit Faktor^(-1/3) (Fruchterman-Reingold).
+pub const GRAPH_CLOSE_FAMILY: f32 = 2.5;
+/// Faktor für Geschwister (eingetragen oder aus gemeinsamen Eltern) und Cousins (Behelf):
+/// mäßig näher.
+pub const GRAPH_RELATIVES: f32 = 1.6;
+/// Faktor für Freunde und Kanten nur aus gemeinsamen Fotos: neutral.
+pub const GRAPH_NEUTRAL: f32 = 1.0;
+/// Faktor für „Bekannter von“ und frühere Partner: rücken unabhängig von der Fotozahl
+/// weiter auseinander.
+pub const GRAPH_DISTANT: f32 = 0.35;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
