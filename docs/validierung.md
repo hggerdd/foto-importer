@@ -427,3 +427,39 @@ Die neue Abfrage liefert dieselben 1.916 Zeilen in 19 ms warm, 1,2 s kalt. Kalt 
 auf der USB-Festplatte die Statistik der Personentabelle (2,2 s, warm 40 ms) und das Laden der
 Gruppen in `merge_small_groups` (2,9 s, warm 115 ms). Nicht gemessen: der neue Abgleich auf
 `E:\Bilder` (er schreibt), die laufende App.
+
+## Inkrementeller Abgleich bei 100.000 Gesichtern (2026-11-18)
+
+Synthetisch wie oben (Release, SSD, 45.000 Fotos, 100.000 Gesichter, 40 Personen, 128
+Dimensionen, 4 Rechenthreads). Je Runde eine Entscheidung über `name_group` (Gruppe
+bestätigt, Ablehnung von zwei Gesichtern, eine Bestätigung entfernt), Referenzauswahl,
+dann der inkrementelle Abgleich; der vollständige Lauf (`rematch_full`) läuft auf einer
+Kopie desselben Stands (`VACUUM INTO`), danach werden Person, Art und Wert aller Gesichter
+bitgenau verglichen:
+
+```text
+cargo run --release --example face_save_bench -- gen tmp/bench100k 45000
+cargo run --release --example face_save_bench -- inkrementell tmp/bench100k tmp/inc ohne-statistik 9
+cargo run --release --example face_save_bench -- inkrementell tmp/bench100k tmp/inc 6
+```
+
+| Schritt | vorher (vollständig) | nachher (inkrementell) |
+|---|---|---|
+| Abgleich je Entscheidung, ohne Statistik, 9 Runden | 5,7 bis 7,3 s, Median 6,45 s | 266 bis 569 ms, Median 489 ms |
+| Abgleich je Entscheidung, mit `ANALYZE`, 6 Runden | Median 6,9 s | Median 505 ms |
+| Lauf ohne Änderung | 6,6 s | 336 ms |
+| Erster Lauf nach Programmstart (Zwischenspeicher aufbauen) | – | 2,7 s |
+
+Ergebnisgleichheit: alle 15 Runden ohne Abweichung (100.000 Gesichter je Vergleich). Ein
+inkrementeller Lauf nach einer Bestätigung teilt sich grob auf in Lesen von Referenzen und
+Gesichtern (rund 140 ms), eine neu gerechnete Personenspalte (rund 100 ms), Entscheidungen
+je Foto (rund 110 ms) und Schreiben von 700 bis 950 geänderten Vorschlägen samt
+Gruppentriggern (rund 150 ms). Der Zwischenspeicher belegt hier rund 70 MB. Regressionen:
+`tests/faces.rs` `incremental_rematch_equals_the_full_rematch` (60 zufällige Änderungen
+nach Bestätigung, Ablehnung, entfernter Bestätigung, Referenzausschluss, Referenzauswahl mit
+Validierungsteil und Ausreißer, neuem und ersetztem Vektor, Geburtsjahr, Umbenennung mit
+Namensgleichstand, Ignorieren, Qualität und historischen Gesichtern; nach jeder Änderung
+gegen den vollständigen Lauf auf einer Kopie), `incremental_rematch_notices_a_replaced_vector`,
+`block_ranking_is_bit_identical_to_the_single_comparison` (auch die besten zwei ohne
+Sortieren). Nicht gemessen: der erste Lauf auf der USB-Festplatte von `E:\Bilder` und der
+Abgleich in der laufenden App.

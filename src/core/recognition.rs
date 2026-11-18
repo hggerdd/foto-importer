@@ -164,12 +164,39 @@ impl References {
             .filter(|(slot, score)| !score.is_nan() && !excluded(self.people[*slot].0))
             .map(|(slot, score)| (slot, *score))
             .collect();
-        result.sort_by(|a, b| {
-            let (x, y) = (&self.people[a.0], &self.people[b.0]);
-            b.1.total_cmp(&a.1).then(x.1.cmp(&y.1)).then(x.0.cmp(&y.0))
-        });
+        result.sort_by(|a, b| self.precedence(*a, *b));
         result
             .into_iter()
+            .map(|(slot, score)| (self.people[slot].0, score))
+            .collect()
+    }
+    /// Reihenfolge zweier Personen (Index, Score): höherer Score zuerst, dann Name, dann ID.
+    /// Die IDs sind eindeutig, die Ordnung also streng.
+    fn precedence(&self, a: (usize, f32), b: (usize, f32)) -> std::cmp::Ordering {
+        let (x, y) = (&self.people[a.0], &self.people[b.0]);
+        b.1.total_cmp(&a.1).then(x.1.cmp(&y.1)).then(x.0.cmp(&y.0))
+    }
+    /// Die ersten zwei Einträge von `order` ohne vollständiges Sortieren (mehr braucht
+    /// `Limits::accept` nicht). Bei strenger Ordnung sind sie dieselben.
+    fn best_two(&self, scores: &[f32], excluded: impl Fn(i64) -> bool) -> Vec<(i64, f32)> {
+        let mut best: [Option<(usize, f32)>; 2] = [None, None];
+        for (slot, score) in scores.iter().enumerate() {
+            if score.is_nan() || excluded(self.people[slot].0) {
+                continue;
+            }
+            let entry = (slot, *score);
+            let before = |other: Option<(usize, f32)>| {
+                other.is_none_or(|o| self.precedence(entry, o).is_lt())
+            };
+            if before(best[0]) {
+                best[1] = best[0];
+                best[0] = Some(entry);
+            } else if before(best[1]) {
+                best[1] = Some(entry);
+            }
+        }
+        best.into_iter()
+            .flatten()
             .map(|(slot, score)| (self.people[slot].0, score))
             .collect()
     }
@@ -632,7 +659,8 @@ fn load_births(collection: &Collection) -> Result<BTreeMap<i64, i32>> {
 
 /// Entscheidet die Gesichter eines Fotos (alle, auch historische, nach ID) und hängt
 /// abweichende maschinelle Zuordnungen an `writes`. `rank` liefert die Rangfolge eines
-/// Gesichts ohne die übergebenen Ausschlüsse, `None` ohne vergleichbaren Vektor.
+/// Gesichts ohne die übergebenen Ausschlüsse (mindestens die ersten zwei Einträge), `None`
+/// ohne vergleichbaren Vektor.
 fn photo_writes(
     faces: &[MatchFace],
     rejections: &BTreeMap<i64, BTreeSet<i64>>,
@@ -649,32 +677,32 @@ fn photo_writes(
     // Je Gesicht höchstens ein Kandidat: die beste zulässige Person, wenn sie die Schwelle
     // erreicht und klar vor der zweitbesten liegt.
     let mut proposals: Vec<Option<(i64, f32)>> = Vec::with_capacity(candidates.len());
+    // Im Foto bestätigte Personen (auch historischer Gesichter). Kandidaten sind nie
+    // bestätigt, ihr eigenes Gesicht ist also nie darunter.
+    let occupied: Vec<i64> = faces
+        .iter()
+        .filter(|o| o.assignment.as_deref() == Some("user"))
+        .filter_map(|o| o.person)
+        .collect();
     for face in &candidates {
         // Wie `ranked_with`: Gesichter ohne Vektor oder unter Qualität 0,5 erhalten keinen
-        // Vorschlag; abgelehnte und im Foto bestätigte Personen zählen nicht.
+        // Vorschlag; abgelehnte und im Foto bestätigte Personen zählen nicht, ebenso wenig
+        // Personen, die bei der Aufnahme noch nicht geboren waren. Ausschließen vor oder nach
+        // dem Sortieren ergibt dieselbe Reihenfolge.
         let rejected = rejections.get(&face.id);
         let excluded = |person: i64| {
             rejected.is_some_and(|r| r.contains(&person))
-                || faces.iter().any(|o| {
-                    o.id != face.id
-                        && o.person == Some(person)
-                        && o.assignment.as_deref() == Some("user")
-                })
+                || occupied.contains(&person)
+                || face
+                    .year
+                    .zip(births.get(&person))
+                    .is_some_and(|(y, b)| y < *b)
         };
         let Some(ranking) = rank(face, &excluded) else {
             proposals.push(None);
             continue;
         };
-        let allowed: Vec<(i64, f32)> = ranking
-            .into_iter()
-            .filter(|(person, _)| {
-                !face
-                    .year
-                    .zip(births.get(person))
-                    .is_some_and(|(y, b)| y < *b)
-            })
-            .collect();
-        proposals.push(limits.accept(&allowed));
+        proposals.push(limits.accept(&ranking));
     }
     // Gemeinsame Entscheidung je Foto: Dieselbe Person kommt höchstens einmal vor; das
     // Gesicht mit dem höheren Wert erhält sie, das andere bleibt unbenannt.
@@ -1166,7 +1194,7 @@ pub fn rematch_with(
             |face, excluded| {
                 let cached = cache.faces.get(&face.id)?;
                 cached.vector.as_ref()?;
-                Some(references.order(&cached.scores, excluded))
+                Some(references.best_two(&cached.scores, excluded))
             },
             &mut writes,
         )?;
@@ -1348,6 +1376,13 @@ mod tests {
             };
             let fast = references.rank(&query, own, |p| excluded.contains(&p));
             let slow = naive_rank(&entries, &names, &query, own, &excluded);
+            let two =
+                references.best_two(&references.scores(&query, own), |p| excluded.contains(&p));
+            assert_eq!(two.len(), slow.len().min(2), "Runde {round}");
+            for (a, b) in two.iter().zip(&slow) {
+                assert_eq!(a.0, b.0, "Runde {round}");
+                assert_eq!(a.1.to_bits(), b.1.to_bits(), "Runde {round}");
+            }
             assert_eq!(fast.len(), slow.len(), "Runde {round}");
             for (a, b) in fast.iter().zip(&slow) {
                 assert_eq!(a.0, b.0, "Runde {round}");
