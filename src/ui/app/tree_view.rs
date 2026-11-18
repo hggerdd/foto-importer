@@ -562,19 +562,25 @@ impl PhotoApp {
             .clicked()
             && let Some(object) = other
         {
-            let root = self.settings.collection.clone();
-            self.undo.clear();
-            let config = self.settings.central();
-            self.launch("Beziehung speichern", true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                let (_, note) =
-                    central::add_relation_synced(&mut c, &config, person, role, object)?;
-                Ok(Outcome::Synced(
-                    Box::new(Outcome::Done("Beziehung gespeichert".into())),
-                    note,
-                ))
-            });
+            self.save_relation(person, role, object);
         }
+    }
+
+    /// Einziger Schreibweg für neue Beziehungen aus der Oberfläche (Übersicht und Graph):
+    /// „`person` ist `role` von `object`“ mit voller Prüfung im Core, zentral abgeglichen.
+    /// Das Ergebnis meldet sich als Hinweis und markiert Graph und Personen als veraltet.
+    pub(super) fn save_relation(&mut self, person: i64, role: Role, object: i64) {
+        let root = self.settings.collection.clone();
+        self.undo.clear();
+        let config = self.settings.central();
+        self.launch("Beziehung speichern", true, "mutation", move |_| {
+            let mut c = Collection::open(Path::new(&root), true)?;
+            let (_, note) = central::add_relation_synced(&mut c, &config, person, role, object)?;
+            Ok(Outcome::Synced(
+                Box::new(Outcome::Done("Beziehung gespeichert".into())),
+                note,
+            ))
+        });
     }
 
     /// Übersicht für Person A: gespeicherte Beziehungen (bearbeitbar) und die aus dem

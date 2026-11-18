@@ -2409,3 +2409,211 @@ fn files_copied_earlier_in_the_session_are_skipped_before_the_index_knows_them()
     );
     Ok(())
 }
+
+/// Synthetische Sammlung mit Anna und Bernd, Graph geladen, Verbindungsmodus an.
+fn connect_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp, i64, i64)> {
+    let mut collection = Collection::open(root, true)?;
+    let mut person = |name: &str, gender: &str| {
+        faces::add_person(
+            &mut collection,
+            &faces::NewPerson {
+                name: name.into(),
+                gender: gender.into(),
+                birth_year: None,
+                note: String::new(),
+            },
+        )
+    };
+    let anna = person("Anna", "weiblich")?;
+    let bernd = person("Bernd", "männlich")?;
+    let network = crate::core::relationship_graph::network(&collection)?;
+    drop(collection);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::People;
+    app.person_mode = PersonMode::Graph;
+    app.relationship_graph.accept(network);
+    app.relationship_graph.connect = true;
+    // Geschlecht und Bestand für die Vorprüfung kommen wie beim Öffnen der Sammlung vom Worker.
+    app.refresh_faces();
+    wait_for_tasks(&mut app);
+    graph_frame(&context, &mut app, Vec::new());
+    wait_for_tasks(&mut app);
+    graph_frame(&context, &mut app, Vec::new());
+    Ok((context, app, anna, bernd))
+}
+
+fn graph_frame(
+    context: &egui::Context,
+    app: &mut PhotoApp,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 800.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    context.run(input, |ctx| {
+        app.update(ctx, &mut eframe::Frame::_new_kittest())
+    })
+}
+
+fn click_at(context: &egui::Context, app: &mut PhotoApp, at: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    graph_frame(context, app, vec![egui::Event::PointerMoved(at)]);
+    graph_frame(context, app, vec![button(true)]);
+    graph_frame(context, app, vec![button(false)]);
+}
+
+/// Bildschirmposition eines Knotens im zuletzt gezeichneten Graph.
+fn node_on_screen(app: &PhotoApp, person: i64) -> egui::Pos2 {
+    let view = &app.relationship_graph;
+    let network = view.data.as_ref().expect("Graph geladen");
+    let (rect, centre, scale) = view.drawn.expect("Graph gezeichnet");
+    let p = network.positions[network.index_of(person).expect("Person im Graph")];
+    egui::pos2(
+        rect.center().x + (p[0] - centre[0]) * scale,
+        rect.center().y + (p[1] - centre[1]) * scale,
+    )
+}
+
+/// Mitte des ersten gezeichneten Textes, der genau `needle` lautet.
+fn text_centre(output: &egui::FullOutput, needle: &str) -> Option<egui::Pos2> {
+    fn find(shape: &egui::Shape, needle: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == needle => {
+                Some(text.pos + text.galley.rect.center().to_vec2())
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, needle)),
+            _ => None,
+        }
+    }
+    output.shapes.iter().find_map(|c| find(&c.shape, needle))
+}
+
+fn open_connect_menu(
+    context: &egui::Context,
+    app: &mut PhotoApp,
+    first: i64,
+    second: i64,
+) -> egui::FullOutput {
+    let at = node_on_screen(app, first);
+    click_at(context, app, at);
+    assert_eq!(app.relationship_graph.connect_first, Some(first));
+    assert!(app.relationship_graph.connect_menu.is_none());
+    let at = node_on_screen(app, second);
+    click_at(context, app, at);
+    let menu = app.relationship_graph.connect_menu.expect("Menü offen");
+    assert_eq!((menu.first, menu.second), (first, second));
+    // Ein neues Menü misst sich im ersten Bild nur aus.
+    graph_frame(context, app, Vec::new());
+    graph_frame(context, app, Vec::new())
+}
+
+#[test]
+fn connect_mode_adds_the_chosen_relation_through_the_normal_path() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app, anna, bernd) = connect_app(root.path())?;
+    let output = open_connect_menu(&context, &mut app, anna, bernd);
+    // Beide Richtungen, nach Geschlecht beschriftet, dazu „Abbrechen“.
+    assert!(text_centre(&output, "Bernd ist Vater von Anna").is_some());
+    assert!(text_centre(&output, "Anna ist Partnerin von Bernd").is_some());
+    assert!(text_centre(&output, "Abbrechen").is_some());
+    let button = text_centre(&output, "Anna ist Mutter von Bernd").expect("Eintrag im Menü");
+    click_at(&context, &mut app, button);
+    assert!(
+        app.tasks.iter().any(|t| t.kind == "mutation" && t.write),
+        "dieselbe Schreibaufgabe wie in der Übersicht"
+    );
+    wait_for_tasks(&mut app);
+    let edges = crate::core::relations::load_edges(&Collection::open(root.path(), false)?)?;
+    assert_eq!(
+        edges,
+        vec![crate::core::relations::canonical(
+            anna,
+            crate::core::relations::Role::Parent,
+            bernd
+        )]
+    );
+    assert_eq!(
+        app.notice.as_ref().map(|n| n.text.as_str()),
+        Some("Beziehung gespeichert")
+    );
+    // Der Modus bleibt für das nächste Paar an; der Graph wird neu berechnet.
+    let view = &app.relationship_graph;
+    assert!(view.connect && view.connect_first.is_none() && view.connect_menu.is_none());
+    assert!(view.stale);
+    // Was die Prüfung ablehnt (Partner zwischen Eltern und Kind), ist gesperrt.
+    graph_frame(&context, &mut app, Vec::new());
+    wait_for_tasks(&mut app);
+    graph_frame(&context, &mut app, Vec::new());
+    let output = open_connect_menu(&context, &mut app, anna, bernd);
+    let partner = text_centre(&output, "Anna ist Partnerin von Bernd").expect("Eintrag im Menü");
+    click_at(&context, &mut app, partner);
+    assert!(
+        app.relationship_graph.connect_menu.is_some(),
+        "Menü bleibt offen"
+    );
+    assert!(!app.tasks.iter().any(|t| t.write), "nichts geschrieben");
+    Ok(())
+}
+
+#[test]
+fn connect_mode_cancels_without_writing() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app, anna, bernd) = connect_app(root.path())?;
+    let escape = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // „Abbrechen“ im Menü.
+    let output = open_connect_menu(&context, &mut app, anna, bernd);
+    let cancel = text_centre(&output, "Abbrechen").expect("Abbrechen im Menü");
+    click_at(&context, &mut app, cancel);
+    assert!(app.relationship_graph.connect_menu.is_none());
+    assert!(app.relationship_graph.connect_first.is_none());
+    // Esc bricht das offene Menü ab, ein zweites Esc beendet den Modus.
+    open_connect_menu(&context, &mut app, bernd, anna);
+    graph_frame(&context, &mut app, vec![escape.clone()]);
+    assert!(app.relationship_graph.connect_menu.is_none());
+    assert!(app.relationship_graph.connect);
+    // Erneuter Klick auf dieselbe Person hebt die Wahl auf.
+    let at = node_on_screen(&app, anna);
+    click_at(&context, &mut app, at);
+    assert_eq!(app.relationship_graph.connect_first, Some(anna));
+    click_at(&context, &mut app, at);
+    assert_eq!(app.relationship_graph.connect_first, None);
+    // Klick auf den Hintergrund bricht ab; im Modus ändert ein Klick die Auswahl nicht.
+    click_at(&context, &mut app, at);
+    let view = &app.relationship_graph;
+    let (rect, _, _) = view.drawn.expect("gezeichnet");
+    click_at(
+        &context,
+        &mut app,
+        rect.left_bottom() + egui::vec2(6.0, -6.0),
+    );
+    assert_eq!(app.relationship_graph.connect_first, None);
+    assert_eq!(app.relationship_graph.selected, None);
+    graph_frame(&context, &mut app, vec![escape]);
+    assert!(!app.relationship_graph.connect);
+    assert!(!app.tasks.iter().any(|t| t.write), "nichts geschrieben");
+    let edges = crate::core::relations::load_edges(&Collection::open(root.path(), false)?)?;
+    assert!(edges.is_empty());
+    // Ohne Verbindungsmodus wählt ein Klick die Person wie bisher.
+    click_at(&context, &mut app, at);
+    assert_eq!(app.relationship_graph.selected, Some(anna));
+    Ok(())
+}

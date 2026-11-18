@@ -1,4 +1,5 @@
 use foto_importer::core::graph_layout::{LayoutEdge, MIN_DISTANCE, layout};
+use foto_importer::core::relationship_graph::{Recorded, layout_weight};
 use std::time::{Duration, Instant};
 
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -71,6 +72,69 @@ fn layout_is_deterministic_and_has_no_overlaps_for_500_people() {
         closest >= MIN_DISTANCE * 0.98,
         "kleinster Abstand {closest}"
     );
+}
+
+fn acquaintance() -> Recorded {
+    Recorded::Other("bekannter_von".into(), "bekannter_von".into())
+}
+
+#[test]
+fn closeness_of_the_relation_counts_regardless_of_shared_photos() {
+    // Eltern ohne gemeinsames Foto ziehen stärker als Bekannte mit vielen Fotos.
+    let parent = layout_weight(0, &[Recorded::Parent]);
+    let known = layout_weight(50, &[acquaintance()]);
+    assert!(parent > known, "Eltern {parent}, Bekannte {known}");
+    let friend = layout_weight(
+        3,
+        &[Recorded::Other("freund_von".into(), "freund_von".into())],
+    );
+    let sibling = layout_weight(3, &[Recorded::DerivedSibling { half: false }]);
+    let partner = layout_weight(3, &[Recorded::Partner]);
+    let former = layout_weight(
+        3,
+        &[Recorded::Other(
+            "ehemaliger_partner_von".into(),
+            "ehemaliger_partner_von".into(),
+        )],
+    );
+    assert!(partner > sibling && sibling > friend && friend > former);
+    // Bei mehreren Typen eines Paares zählt der engste (Partner und Cousin).
+    let both = layout_weight(
+        3,
+        &[
+            Recorded::Partner,
+            Recorded::Other("cousin_von".into(), "cousin_von".into()),
+        ],
+    );
+    assert_eq!(both, partner);
+    assert_eq!(layout_weight(0, &[]), 0.0);
+}
+
+#[test]
+fn parent_and_child_end_closer_than_acquaintances_with_equal_photos() {
+    // Kette 0–1 (Eltern-Kind), 1–2 (nur Fotos), 2–3 (Bekannte): gleiche Fotozahl, gleiche Grade.
+    let edges = [
+        LayoutEdge {
+            a: 0,
+            b: 1,
+            weight: layout_weight(4, &[Recorded::Parent]),
+        },
+        LayoutEdge {
+            a: 1,
+            b: 2,
+            weight: layout_weight(4, &[]),
+        },
+        LayoutEdge {
+            a: 2,
+            b: 3,
+            weight: layout_weight(4, &[acquaintance()]),
+        },
+    ];
+    let pos = layout(4, &edges);
+    assert_eq!(pos, layout(4, &edges), "deterministisch");
+    let (close, far) = (distance(pos[0], pos[1]), distance(pos[2], pos[3]));
+    assert!(close * 1.2 < far, "Eltern-Kind {close}, Bekannte {far}");
+    assert!(close >= MIN_DISTANCE * 0.98);
 }
 
 #[test]

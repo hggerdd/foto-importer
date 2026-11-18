@@ -223,6 +223,38 @@ fn derived_siblings(collection: &Collection, people: &[(i64, String)]) -> Vec<(i
         .collect()
 }
 
+/// Nähe einer eingetragenen Beziehung als Faktor der Anziehung (Grenzen in `config`).
+/// Berechnete Verwandtschaft zählt nur über die abgeleiteten Geschwister, die ohnehin Kante sind.
+pub fn closeness(kind: &Recorded) -> f32 {
+    use crate::config::{GRAPH_CLOSE_FAMILY, GRAPH_DISTANT, GRAPH_NEUTRAL, GRAPH_RELATIVES};
+    match kind {
+        Recorded::Parent | Recorded::Child | Recorded::Partner => GRAPH_CLOSE_FAMILY,
+        Recorded::Sibling | Recorded::DerivedSibling { .. } => GRAPH_RELATIVES,
+        Recorded::Other(name, _) => match name.as_str() {
+            "cousin_von" => GRAPH_RELATIVES,
+            "bekannter_von" | "ehemaliger_partner_von" => GRAPH_DISTANT,
+            _ => GRAPH_NEUTRAL,
+        },
+    }
+}
+
+/// Anziehung einer Kante im Layout: gemeinsame Fotos plus Zuschlag für eingetragene
+/// Beziehungen, multipliziert mit der Nähe der engsten Beziehung des Paares. So rücken Eltern,
+/// Kinder und Partner unabhängig von der Fotozahl zusammen, Bekannte und frühere Partner
+/// auseinander.
+pub fn layout_weight(photos: usize, recorded: &[Recorded]) -> f32 {
+    let shared = if photos > 0 {
+        1.0 + (photos as f32).ln()
+    } else {
+        0.0
+    };
+    if recorded.is_empty() {
+        return shared * crate::config::GRAPH_NEUTRAL;
+    }
+    let factor = recorded.iter().map(closeness).fold(0.0_f32, f32::max);
+    (shared + crate::config::GRAPH_RECORDED_BONUS) * factor
+}
+
 pub fn network(collection: &Collection) -> Result<Network> {
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     let people: Vec<(i64, String)> = collection
@@ -360,11 +392,7 @@ pub fn network(collection: &Collection) -> Result<Network> {
         .map(|e| super::graph_layout::LayoutEdge {
             a: e.a,
             b: e.b,
-            weight: if e.photos > 0 {
-                1.0 + (e.photos as f32).ln()
-            } else {
-                0.0
-            } + if e.recorded.is_empty() { 0.0 } else { 1.5 },
+            weight: layout_weight(e.photos, &e.recorded),
         })
         .collect();
     let positions = super::graph_layout::layout(nodes.len(), &layout_edges);
