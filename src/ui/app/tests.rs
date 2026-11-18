@@ -2650,6 +2650,16 @@ fn insights_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
             rusqlite::params![photo, person],
         )?;
     }
+    for (photo, date) in [
+        (photos[0], "2015:05:01 10:00:00"),
+        (photos[1], "2015:08:01 10:00:00"),
+        (photos[2], "2017:01:01 10:00:00"),
+    ] {
+        c.db.execute(
+            "UPDATE metadata_photos SET dt_original=? WHERE photo_id=?",
+            rusqlite::params![date, photo],
+        )?;
+    }
     let page = faces::page(&c, "persons", 0)?;
     drop(c);
     let context = egui::Context::default();
@@ -2682,5 +2692,33 @@ fn companions_list_the_most_shared_photos_and_open_exactly_those() -> anyhow::Re
     assert_eq!(app.view, View::Collection);
     assert_eq!(app.filters.people_all, vec![1, 2]);
     assert!(app.tasks.iter().all(|t| !t.write), "nur gelesen");
+    Ok(())
+}
+
+#[test]
+fn photos_per_year_show_the_age_and_open_that_year() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = insights_app(root.path())?;
+    app.select_person(1);
+    drawn_texts(&context, &mut app, Vec::new());
+    wait_for_tasks(&mut app);
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Fotos je Jahr"), "{texts}");
+    // Anna ist 2000 geboren: Alter an den Rändern, Lückenjahr 2016 ohne Klick.
+    assert!(texts.contains("2015 · 15 J."), "{texts}");
+    assert!(texts.contains("2017 · 17 J."), "{texts}");
+    assert!(texts.contains("Meiste Fotos 2015 (2)"), "{texts}");
+    click_labelled(
+        &context,
+        &mut app,
+        "2015: 2 Fotos",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.view, View::Collection);
+    assert_eq!(app.filters.people_all, vec![1]);
+    assert_eq!(
+        (app.filters.start.as_str(), app.filters.end.as_str()),
+        ("2015-01-01", "2015-12-31")
+    );
     Ok(())
 }

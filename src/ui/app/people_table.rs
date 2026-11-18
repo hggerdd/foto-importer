@@ -853,6 +853,8 @@ impl PhotoApp {
             self.ensure_insights(person.id);
             ui.separator();
             self.detail_companions(ui, &person);
+            ui.separator();
+            self.detail_years(ui, &person, row.as_ref().and_then(|r| r.birth));
         }
         ui.separator();
         self.detail_properties(ui, &person);
@@ -1098,6 +1100,128 @@ impl PhotoApp {
         if let Some(other) = photos {
             self.filters = Search {
                 people_all: vec![person.id, other],
+                ..Default::default()
+            };
+            self.view = View::Collection;
+            self.refresh_collection();
+        }
+    }
+
+    /// „Fotos je Jahr“: ein Balken je Jahr vom ersten bis zum letzten Foto, mit Alter bei
+    /// bekanntem Geburtsjahr. Ein Klick öffnet die Sammlung mit dieser Person in diesem Jahr.
+    fn detail_years(&mut self, ui: &mut egui::Ui, person: &faces::Person, birth: Option<i32>) {
+        ui.label(RichText::new("Fotos je Jahr").size(17.0).strong());
+        let Some(insights) = self
+            .people_ui
+            .insights
+            .as_ref()
+            .filter(|i| i.person == person.id)
+        else {
+            ui.label(muted("Wird gezählt …"));
+            return;
+        };
+        let bars = person_insights::year_bars(&insights.years, birth);
+        let undated = insights.undated;
+        if bars.is_empty() {
+            ui.label(muted("Keines der Fotos hat ein Aufnahmedatum."));
+            return;
+        }
+        let height = 64.0;
+        let width = ui.available_width();
+        let (area, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let most = bars.iter().map(|b| b.photos).max().unwrap_or(1).max(1);
+        let step = width / bars.len() as f32;
+        let gap = if step >= 5.0 { 1.5 } else { 0.0 };
+        let mut open = None;
+        for (i, bar) in bars.iter().enumerate() {
+            let column = Rect::from_min_size(
+                Pos2::new(area.left() + i as f32 * step, area.top()),
+                Vec2::new(step, height),
+            );
+            let response = ui.interact(
+                column,
+                ui.id().with(("person-year", bar.year)),
+                if bar.photos > 0 {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
+            );
+            let label = format!(
+                "{}: {}",
+                bar.year,
+                super::plural(bar.photos, "Foto", "Fotos")
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, bar.photos > 0, &label)
+            });
+            let fraction = bar.photos as f32 / most as f32;
+            let top = area.bottom() - (height - 4.0) * fraction;
+            let fill = if response.hovered() && bar.photos > 0 {
+                theme::ACCENT
+            } else {
+                theme::ACCENT.gamma_multiply(0.6)
+            };
+            if bar.photos > 0 {
+                ui.painter().rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(column.left() + gap / 2.0, top.min(area.bottom() - 2.0)),
+                        Pos2::new(column.right() - gap / 2.0, area.bottom()),
+                    ),
+                    1,
+                    fill,
+                );
+            }
+            let age = bar
+                .age
+                .map(|a| format!(" · etwa {a} Jahre alt"))
+                .unwrap_or_default();
+            let hint = if bar.photos > 0 {
+                format!("{label}{age}\nKlick: diese Fotos in der Sammlung zeigen")
+            } else {
+                format!("{label}{age}")
+            };
+            let response = response.on_hover_text(hint);
+            if bar.photos > 0 {
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() {
+                    open = Some(bar.year);
+                }
+            }
+        }
+        ui.painter().hline(
+            area.x_range(),
+            area.bottom(),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        let edge = |bar: &person_insights::YearBar| match bar.age {
+            Some(age) => format!("{} · {age} J.", bar.year),
+            None => bar.year.to_string(),
+        };
+        let (first, last) = (&bars[0], &bars[bars.len() - 1]);
+        ui.horizontal(|ui| {
+            ui.label(muted(edge(first)));
+            if bars.len() > 1 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(muted(edge(last)));
+                });
+            }
+        });
+        let peak = bars.iter().max_by_key(|b| (b.photos, -b.year));
+        let mut summary = peak
+            .map(|b| format!("Meiste Fotos {} ({})", b.year, b.photos))
+            .unwrap_or_default();
+        if undated > 0 {
+            summary.push_str(&format!(" · {undated} ohne Datum"));
+        }
+        ui.label(muted(summary));
+        if let Some(year) = open {
+            self.filters = Search {
+                people_all: vec![person.id],
+                start: format!("{year:04}-01-01"),
+                end: format!("{year:04}-12-31"),
                 ..Default::default()
             };
             self.view = View::Collection;

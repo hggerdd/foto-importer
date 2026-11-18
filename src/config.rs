@@ -71,6 +71,10 @@ pub const GRAPH_DISTANT: f32 = 0.35;
 /// Personendetails: so viele Personen nennt „Häufig zusammen mit“ (meiste gemeinsame Fotos).
 /// Höchstens `relationship_graph::NEIGHBOR_LIMIT`.
 pub const PERSON_COMPANIONS: usize = 8;
+/// Personendetails, „Fotos je Jahr“: plausible Aufnahmejahre. Andere Werte (z. B. 0000 aus
+/// nicht gestellten Kamerauhren) zählen als „ohne Datum“, damit das Diagramm keine
+/// Jahrhunderte überspannt.
+pub const PERSON_YEARS: std::ops::RangeInclusive<i32> = 1826..=2200;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",

@@ -73,6 +73,11 @@
     gemeinsamen Fotos, gezählt wie der Graph und die Sammlungssuche
     (`relationship_graph::for_person`). Der Name wählt die Person, die Zahl öffnet die Sammlung
     mit „alle diese Personen“ = beide.
+  - **Fotos je Jahr:** ein Balken je Aufnahmejahr (`dt_original`, gleiche Zählung) vom ersten
+    bis zum letzten Jahr, Lückenjahre leer; mit Geburtsjahr nennt der Hinweistext das Alter
+    (Jahr minus Geburtsjahr, daher „etwa“), die Ränder zeigen Jahr und Alter. Ein Klick öffnet
+    die Sammlung mit der Person und dem Datumsfilter dieses Jahres. Jahre außerhalb
+    `config::PERSON_YEARS` und fehlende Daten zählen als „ohne Datum“.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern

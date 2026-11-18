@@ -71,3 +71,29 @@ fn companions_count_like_the_joint_photo_search() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn photos_per_year_match_the_date_filter_of_the_search() -> anyhow::Result<()> {
+    let (_root, collection, photos) = sample()?;
+    for (photo, date) in [
+        (photos[0], Some("2015:06:01 10:00:00")),
+        (photos[1], Some("2015:12:31 23:59:59")),
+        (photos[2], None),
+    ] {
+        collection.db.execute(
+            "UPDATE metadata_photos SET dt_original=? WHERE photo_id=?",
+            rusqlite::params![date, photo],
+        )?;
+    }
+    let insights = person_insights::load(&collection, 1)?;
+    assert_eq!(insights.years.into_iter().collect::<Vec<_>>(), [(2015, 2)]);
+    assert_eq!(insights.undated, 1);
+    let search = Search {
+        people_all: vec![1],
+        start: "2015-01-01".into(),
+        end: "2015-12-31".into(),
+        ..Search::default()
+    };
+    assert_eq!(metadata::search(&collection, &search, "")?.total, 2);
+    Ok(())
+}
