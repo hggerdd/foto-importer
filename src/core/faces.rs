@@ -343,13 +343,15 @@ pub fn person_portraits(
     let wanted: BTreeSet<i64> = persons.iter().copied().collect();
     let mut chosen: BTreeMap<i64, i64> = BTreeMap::new();
     if !embedder.is_empty() {
+        // `CROSS JOIN`: bestätigte Gesichter außen, sonst liest SQLite ohne Statistik alle
+        // Vektoren des Modells.
         let rows: Vec<(i64, i64, Vec<u8>)> = collection
             .db
             .prepare(
                 "SELECT person_id,id,vec FROM (
                    SELECT f.person_id,f.id,e.vec,
                           row_number() OVER (PARTITION BY f.person_id ORDER BY f.quality DESC,f.id) rn
-                   FROM faces f JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?
+                   FROM faces f CROSS JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?
                    WHERE f.assignment='user' AND f.ignored=0 AND f.retained=0
                      AND f.quality>=0.5 AND f.person_id IS NOT NULL AND f.bbox_x1 IS NOT NULL
                  ) WHERE rn<=40 ORDER BY person_id,rn",

@@ -52,12 +52,19 @@
 - **Projektion für Abfragen:** `metadata_photos` enthält je Foto die bevorzugte Variante und
   wird von Triggern in derselben Transaktion gepflegt; die Originaltabellen bleiben maßgeblich.
   Zählungen im Gesichterbereich nutzen Teilindizes, deren Bedingung wörtlich im SQL steht.
+- **Abfragepläne ohne Statistik:** Die App führt kein `ANALYZE` aus; echte Sammlungen haben
+  keine `sqlite_stat1`. Heiße Abfragen werden so geschrieben, dass der Plan auch ohne
+  Statistik passt: nicht korrelierte `IN`-Unterabfragen statt korrelierter `EXISTS`, deren
+  Index der Planer falsch wählen kann, und `CROSS JOIN`, wo die äußere Tabelle feststehen muss.
 
 ## Grenzen
 
 Kein Mehrschreiberbetrieb, Netzlaufwerke nur mit Vorsicht. Eine nach Absturz verbliebene
 Sperrdatei muss von Hand entfernt werden. Schwache Paarung und ungehashte Datenträgerwechsel
 können Nacharbeit brauchen. Beliebig beschädigte Datenbanken werden nicht repariert.
+Auf der USB-Festplatte bleiben kalte Lesevorgänge über viele verstreute Gesichtszeilen
+teuer (Statistik der Personentabelle, Gruppenladen für das Zusammenführen; Werte in
+[Validierung](../docs/validierung.md)).
 
 ## Beim Ändern beachten
 
@@ -66,5 +73,6 @@ Neue Varianten- oder Metadatenfelder ändern Projektion und Trigger gemeinsam. W
 Ordnerformel ändert, passt die `folder_counts`-Trigger an (Test vergleicht Tabelle und
 Zählung über `files.dir` nach jeder Änderungsart). Trigger auf
 `files` feuern bei jedem `UPDATE` einer gelisteten Spalte; unveränderte Zeilen nur über nicht
-gelistete Spalten anfassen. Migrationstests bilden vorhandene Zwischenstände ab. Neue Module
+gelistete Spalten anfassen. Pläne neuer Gesichtsabfragen ohne `sqlite_stat1` prüfen
+(`face_save_bench steps … ohne-statistik`, `EXPLAIN QUERY PLAN`). Migrationstests bilden vorhandene Zwischenstände ab. Neue Module
 binden an Foto-IDs und beachten Weiterleitungen.

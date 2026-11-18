@@ -55,9 +55,19 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
   Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
   `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
-- Jede Änderung an Bestätigungen setzt den Foto-Cursor zurück; der Lauf ist fortsetzbar,
-  arbeitet 32 Fotos je Schritt und weicht jeder Nutzeraktion. Ein abgebrochener Lauf
-  protokolliert keinen Abschluss.
+- Jede Änderung an Bestätigungen setzt den Foto-Cursor zurück und erhöht `generation`; der
+  Lauf ist fortsetzbar, arbeitet 32 Fotos je Schritt und weicht jeder Nutzeraktion. Ein
+  laufender Lauf schreibt Cursor und Abschluss nur für die Generation, mit der er begann;
+  eine Änderung währenddessen lässt den Auftrag für einen neuen Lauf von vorn stehen. Ein
+  abgebrochener Lauf protokolliert keinen Abschluss.
+- **Rechenweg:** Ein Schritt liest Gesichter, Vektoren und Ablehnungen seiner Fotos mit zwei
+  Abfragen, rechnet ohne offene Transaktion und schreibt danach nur geänderte Zuordnungen in
+  einer Transaktion (unveränderte Vorschläge lösen keine Gruppentrigger aus). Referenzen
+  liegen in Blöcken zu acht (`recognition::References`); jedes Skalarprodukt summiert in
+  derselben Reihenfolge wie `inference::cosine` und ist bitgleich (Messung in
+  [Validierung](../docs/validierung.md)).
+- Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte
+  Unterabfragen auf `training_set`, bestätigte Gesichter außen per `CROSS JOIN`).
 
 **Gruppen unbenannter Gesichter** (`faces::prepare_groups`, `grouping`)
 
@@ -86,12 +96,17 @@ Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet
 
 Kein Nachweis gleicher Ergebnisse wie die Python-/OpenCV-Referenz. Die Schwellen für das
 Zusammenführen kleiner Gruppen sind nicht gemessen. Der Abgleich startet nach jeder
-Bestätigung von vorn und holt während einer Benennsitzung nicht auf.
+Bestätigung von vorn (kein inkrementeller Abgleich nur betroffener Personen: jede geänderte
+Referenz kann Rang eins oder zwei jedes Gesichts ändern); bestätigt jemand schneller, als ein
+Lauf dauert, holt er während der Benennsitzung nicht auf.
 
 ## Beim Ändern beachten
 
 Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Namenszuordnung
 getrennt halten. Nie automatische Zuordnungen als Referenz oder Trainingsdaten verwenden, nie
 das abgefragte Gesicht als eigene Referenz zählen. Schwellen nur mit Messung ändern.
+Änderungen an Rangfolge oder Abgleich gegen den Einzelvergleich prüfen
+(`block_ranking_is_bit_identical_to_the_single_comparison`) und mit
+`face_save_bench steps … ohne-statistik` messen.
 „Biometrie entfernen“ muss alle Gesichtstabellen, bekannte Sicherungen, den Export und den
 Kachelordner erfassen.

@@ -384,3 +384,46 @@ Trigger), `src/ui/app/tests.rs` (Bestandsänderung bricht laufendes Lesen nicht 
 Nachlesen). Nicht gemessen: kalter Lesestart von `folder_counts` auf `E:\Bilder` (die Sammlung
 wurde nicht schreibend geöffnet), Dauer der Erstbefüllung auf der USB-Festplatte (erwartet in
 der Größenordnung des kalten Scans über `metadata_photos`, einmalig).
+
+## Gesichter bei 100.000 Gesichtern (2026-11-18)
+
+Synthetisch (Release, SSD, 45.000 Fotos, 100.000 Gesichter, 40 Personen, 7.500 bestätigt,
+5.589 Trainingszeilen, 6.002 Gruppen):
+
+```text
+cargo run --release --example face_save_bench -- gen tmp/bench100k 45000
+cargo run --release --example face_save_bench -- steps tmp/bench100k tmp/steps ohne-statistik
+cargo run --release --example face_save_bench -- run tmp/bench100k tmp/bench100k-work 900
+```
+
+| Schritt | vorher | nachher |
+|---|---|---|
+| Vollständiger Abgleich (`rematch`), Ruhestand | 131 bis 139 s | 6,6 s |
+| Vollständiger Abgleich, erster Lauf mit vielen Änderungen | 139 s | 16 s |
+| `References::load` (ohne Statistik) | 75 ms | 53 ms |
+| `page(unknown)` / `page(persons)` | 160 bis 240 / 76 bis 142 ms | 184 / 119 ms |
+| Speichern einer Gruppe (`name_group`) | 12 bis 17 ms | unverändert |
+| Wartung nach vier Bestätigungen (`run`): Abgleich / gesamt ohne Altlast | 137 s / 139 s | 16,8 s / 19,3 s |
+| `merge_small_groups` | 0,86 bis 1,5 s | unverändert |
+| `prepare_groups`, 2.000 Gesichter | 2,8 bis 6,6 s | unverändert |
+| Personentabelle, Zeitreise (größte Person), Porträts | 15 / 11 / 90 ms | unverändert |
+
+Die erste `run`-Messung vorher brauchte zusätzlich 163 s für `prepare_groups`, weil der
+Generator 80.000 veraltete `face_group_dirty`-Zeilen hinterließ (jetzt behoben); das
+entspricht dem Gruppieren nach einer großen Analyse (rund 2 ms je Gesicht), nicht dem Alltag.
+
+Ergebnisgleichheit: Nach zwei vollständigen Läufen stimmen Person, Art und Ähnlichkeit aller
+100.000 Gesichter mit dem bisherigen Code überein (bitgleich, `tmp/assign_old.txt` gegen die
+neue Arbeitskopie). Regressionen: `recognition::tests::block_ranking_is_bit_identical_to_the_single_comparison`
+(Blockrechnung gegen den Einzelvergleich, mit Ausschlüssen, eigenem Gesicht, Gleichständen und
+abweichender Länge), `tests/faces.rs` (`rematch_writes_only_changed_assignments`,
+`a_change_during_the_rematch_keeps_the_restart`).
+
+Echte Sammlung `E:\Bilder` (USB-Festplatte, 36.590 Gesichter, 8.594 bestätigt, 2.399
+Trainingszeilen, keine `sqlite_stat1`), nur lesend mit Python geprüft: Die bisherige
+Referenzabfrage lief über `ix_training_model` und prüfte je bestätigtem Gesicht alle
+Referenzzeilen: 1,8 s warm, 4,7 s kalt, bei jedem Laden von „Benennen“ und jedem Abgleich.
+Die neue Abfrage liefert dieselben 1.916 Zeilen in 19 ms warm, 1,2 s kalt. Kalt teuer bleiben
+auf der USB-Festplatte die Statistik der Personentabelle (2,2 s, warm 40 ms) und das Laden der
+Gruppen in `merge_small_groups` (2,9 s, warm 115 ms). Nicht gemessen: der neue Abgleich auf
+`E:\Bilder` (er schreibt), die laufende App.

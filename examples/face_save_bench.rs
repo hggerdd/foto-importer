@@ -6,7 +6,11 @@
 //! cargo run --release --example face_save_bench -- gen tmp/bench-faces [fotos]
 //! cargo run --release --example face_save_bench -- run tmp/bench-faces tmp/bench-faces-work [maintenance_sekunden]
 //! cargo run --release --example face_save_bench -- plans tmp/bench-faces
+//! cargo run --release --example face_save_bench -- steps tmp/bench-faces tmp/bench-steps [ohne-statistik]
 //! ```
+//! `steps` misst Einzelschritte (Referenzen, Seiten, Tabelle, Zeitreise, vollständiger
+//! Abgleich, Gruppen) auf einer Arbeitskopie; `ohne-statistik` entfernt `sqlite_stat1` wie in
+//! Sammlungen, auf denen nie `ANALYZE` lief.
 //! `gen` erzeugt eine Sammlung (Standard 90.000 Fotos, 200.000 Gesichter, 40 Personen,
 //! 15.000 bestätigte Gesichter, Vorschläge, Gruppen, Referenzen).
 //! `run` kopiert sie nach `work` und misst die Kette Speichern, Nachladen und Wartung.
@@ -304,6 +308,9 @@ fn generate(root: &Path, photos: usize) -> anyhow::Result<()> {
             }
         }
     }
+    // Ruhestand wie in einer gepflegten Sammlung: Die Trigger beim Einfügen der Vektoren
+    // haben alle offenen Gesichter als ungruppiert markiert, die Gruppen stehen aber schon.
+    tx.execute("DELETE FROM face_group_dirty", [])?;
     tx.commit()?;
     println!("Daten eingefügt: {:.1?}", started.elapsed());
     c.db.execute_batch("ANALYZE; PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -577,6 +584,84 @@ fn plans(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Einzelschritte der Gesichtsarbeit auf einer Arbeitskopie. `ohne-statistik` entfernt
+/// `sqlite_stat1` wie in Sammlungen, auf denen nie `ANALYZE` lief.
+fn steps(template: &Path, work: &Path, without_stats: bool) -> anyhow::Result<()> {
+    if work.exists() {
+        fs::remove_dir_all(work)?;
+    }
+    fs::create_dir_all(work)?;
+    fs::copy(template.join(".myfotomanager"), work.join(".myfotomanager"))?;
+    let mut c = Collection::open(work, true)?;
+    if without_stats {
+        c.db.execute_batch("DROP TABLE IF EXISTS sqlite_stat1")?;
+        drop(c);
+        c = Collection::open(work, true)?;
+    }
+    println!(
+        "Statistik: {}",
+        if without_stats { "ohne" } else { "mit ANALYZE" }
+    );
+    let control = Control::default();
+    let refs = timed("References::load", || {
+        recognition::References::load(&c, EMBEDDER)
+    })?;
+    drop(refs);
+    timed("page(unknown)", || {
+        faces::page(&c, "unknown", 0).map(|_| ())
+    })?;
+    timed("page(persons)", || {
+        faces::page(&c, "persons", 0).map(|_| ())
+    })?;
+    timed("people_table::load_stats", || {
+        foto_importer::core::people_table::load_stats(&c).map(|_| ())
+    })?;
+    let biggest: i64 = c.db.query_row(
+        "SELECT person_id FROM faces WHERE assignment='user' GROUP BY person_id ORDER BY count(*) DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    timed("timeline::load (größte Person)", || {
+        foto_importer::core::timeline::load(&c, biggest).map(|_| ())
+    })?;
+    timed("person_portraits (alle, mit Merkmalen)", || {
+        let ids: Vec<i64> = faces::people(&c)?.iter().map(|p| p.id).collect();
+        faces::person_portraits(&c, EMBEDDER, &ids).map(|_| ())
+    })?;
+    let changed = |c: &Collection| -> anyhow::Result<i64> {
+        Ok(c.db.query_row(
+            "SELECT count(*) FROM faces WHERE assignment IN ('auto','suggested')",
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    for round in 0..2 {
+        c.db.execute(
+            "INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0",
+            [EMBEDDER],
+        )?;
+        timed(&format!("rematch vollständig #{round}"), || {
+            recognition::rematch(&mut c, EMBEDDER, &control)
+        })?;
+        println!("      Vorschläge danach: {}", changed(&c)?);
+    }
+    timed("merge_small_groups", || {
+        foto_importer::core::grouping::merge_small_groups(&mut c, EMBEDDER, &control).map(|_| ())
+    })?;
+    // Neu analysierte Gesichter gruppieren: 2.000 offene Gesichter erneut als ungruppiert markieren.
+    c.db.execute_batch(
+        "CREATE TEMP TABLE bench_regroup AS SELECT face_id FROM face_group_members ORDER BY face_id LIMIT 2000;
+         INSERT OR IGNORE INTO face_group_dirty SELECT 'bench-emb',face_id FROM bench_regroup;
+         DELETE FROM face_group_members WHERE face_id IN (SELECT face_id FROM bench_regroup);
+         UPDATE face_group_catalog SET members=(SELECT count(*) FROM face_group_members g WHERE g.group_id=face_group_catalog.group_id);",
+    )?;
+    timed("prepare_groups (2.000 markierte Gesichter)", || {
+        while faces::prepare_groups(&mut c, EMBEDDER, &control)? > 0 {}
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// Zeitmessung einzelner SQL-Varianten (Entwicklungswerkzeug).
 fn probe(root: &Path) -> anyhow::Result<()> {
     let c = Collection::open(root, false)?;
@@ -624,6 +709,11 @@ fn main() -> anyhow::Result<()> {
             Path::new(args.get(1).map_or("tmp/bench-faces", String::as_str)),
             Path::new(args.get(2).map_or("tmp/bench-faces-work", String::as_str)),
             args.get(3).and_then(|v| v.parse().ok()).unwrap_or(5),
+        ),
+        Some("steps") => steps(
+            Path::new(args.get(1).map_or("tmp/bench-faces", String::as_str)),
+            Path::new(args.get(2).map_or("tmp/bench-faces-steps", String::as_str)),
+            args.get(3).is_some_and(|v| v == "ohne-statistik"),
         ),
         Some("probe") => probe(Path::new(
             args.get(1).map_or("tmp/bench-faces", String::as_str),
