@@ -55,17 +55,34 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
   Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
   `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
-- Jede Änderung an Bestätigungen setzt den Foto-Cursor zurück und erhöht `generation`; der
-  Lauf ist fortsetzbar, arbeitet 32 Fotos je Schritt und weicht jeder Nutzeraktion. Ein
-  laufender Lauf schreibt Cursor und Abschluss nur für die Generation, mit der er begann;
-  eine Änderung währenddessen lässt den Auftrag für einen neuen Lauf von vorn stehen. Ein
-  abgebrochener Lauf protokolliert keinen Abschluss.
-- **Rechenweg:** Ein Schritt liest Gesichter, Vektoren und Ablehnungen seiner Fotos mit zwei
-  Abfragen, rechnet ohne offene Transaktion und schreibt danach nur geänderte Zuordnungen in
-  einer Transaktion (unveränderte Vorschläge lösen keine Gruppentrigger aus). Referenzen
-  liegen in Blöcken zu acht (`recognition::References`); jedes Skalarprodukt summiert in
-  derselben Reihenfolge wie `inference::cosine` und ist bitgleich (Messung in
-  [Validierung](../docs/validierung.md)).
+- Jede Änderung an Bestätigungen erhöht `generation` (und setzt den Foto-Cursor des
+  vollständigen Laufs zurück). Ein Lauf schreibt nur, solange die Generation die vom Beginn
+  ist, und schließt nur dann ab; eine Änderung währenddessen lässt den Auftrag für einen
+  neuen Lauf nach der Referenzauswahl stehen. Ein abgebrochener Lauf protokolliert keinen
+  Abschluss.
+- **Inkrementell** (`recognition::rematch`, `MatchCache`): Der Personenscore hängt nur von
+  den Referenzen dieser Person ab; Ausschlüsse filtern erst danach. Ein Zwischenspeicher im
+  Arbeitsspeicher des Programms (eine Sammlung und ein Modell zugleich, nicht in SQLite)
+  hält je verglichenem Gesicht den Vektor und den Score gegen jede Person mit Referenzen,
+  dazu den Referenzstand, gegen den gerechnet wurde. Jeder Lauf liest Referenzen,
+  Gesichter (ohne Vektoren), Ablehnungen und Geburtsjahre neu; nur die Spalten von Personen
+  mit geänderten Referenzen werden für alle Gesichter neu gerechnet, neue Gesichter und
+  ersetzte Vektoren (erkannt an der neuen `rowid` der Merkmalszeile, die
+  `INSERT OR REPLACE` vergibt) einzeln geladen. Rangfolge, Ausschlüsse, Schwellen und die
+  Entscheidung je Foto entstehen in jedem Lauf aus dem aktuellen Stand; das Ergebnis ist
+  bitgleich zum vollständigen Lauf. Ein leerer oder fremder Zwischenspeicher (Programmstart,
+  andere Sammlung, anderes Modell) wird zuerst aufgebaut: alle Vektoren lesen, alle Spalten
+  rechnen; ein Abbruch behält die schon gerechneten Gesichter. Würde er
+  `config::MATCH_CACHE_MAX_BYTES` überschreiten, läuft stattdessen der vollständige Lauf.
+  Rechnen verteilt sich auf bis zu `config::MATCH_THREADS` Threads des Wartungs-Workers;
+  geschrieben werden nur geänderte Zuordnungen in kurzen Transaktionen.
+- **Vollständiger Lauf** (`recognition::rematch_full`, Rückfall und Maßstab): fortsetzbar
+  über den Foto-Cursor, 32 Fotos je Schritt, Gesichter, Vektoren und Ablehnungen mit zwei
+  Abfragen je Schritt, Schreiben nur geänderter Zuordnungen je Schritt.
+- **Rechenweg:** Referenzen liegen in Blöcken zu acht (`recognition::References`); jedes
+  Skalarprodukt summiert in derselben Reihenfolge wie `inference::cosine` und ist bitgleich.
+  Die besten zwei Personen werden ohne vollständiges Sortieren mit derselben strengen
+  Ordnung bestimmt (Score, Name, ID). Messungen in [Validierung](../docs/validierung.md).
 - Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte
   Unterabfragen auf `training_set`, bestätigte Gesichter außen per `CROSS JOIN`).
 
@@ -95,10 +112,10 @@ Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet
 ## Grenzen
 
 Kein Nachweis gleicher Ergebnisse wie die Python-/OpenCV-Referenz. Die Schwellen für das
-Zusammenführen kleiner Gruppen sind nicht gemessen. Der Abgleich startet nach jeder
-Bestätigung von vorn (kein inkrementeller Abgleich nur betroffener Personen: jede geänderte
-Referenz kann Rang eins oder zwei jedes Gesichts ändern); bestätigt jemand schneller, als ein
-Lauf dauert, holt er während der Benennsitzung nicht auf.
+Zusammenführen kleiner Gruppen sind nicht gemessen. Der Zwischenspeicher des Abgleichs
+verfällt mit dem Programm; der erste Lauf nach dem Start liest alle Vektoren (auf einer
+USB-Festplatte nicht gemessen). Wird die Datenbankdatei bei laufendem Programm durch eine
+andere ersetzt, erkennt er geänderte Vektoren nur an Gesichts-ID und `rowid`.
 
 ## Beim Ändern beachten
 
@@ -106,7 +123,10 @@ Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Name
 getrennt halten. Nie automatische Zuordnungen als Referenz oder Trainingsdaten verwenden, nie
 das abgefragte Gesicht als eigene Referenz zählen. Schwellen nur mit Messung ändern.
 Änderungen an Rangfolge oder Abgleich gegen den Einzelvergleich prüfen
-(`block_ranking_is_bit_identical_to_the_single_comparison`) und mit
-`face_save_bench steps … ohne-statistik` messen.
+(`block_ranking_is_bit_identical_to_the_single_comparison`), den inkrementellen gegen den
+vollständigen Lauf (`incremental_rematch_equals_the_full_rematch`,
+`face_save_bench inkrementell … ohne-statistik`) und mit
+`face_save_bench steps … ohne-statistik` messen. Was den Score einer Person von anderen
+Personen abhängig machte, bräche den inkrementellen Abgleich.
 „Biometrie entfernen“ muss alle Gesichtstabellen, bekannte Sicherungen, den Export und den
 Kachelordner erfassen.

@@ -755,3 +755,287 @@ fn a_group_suggestion_uses_more_than_the_first_three_faces() -> anyhow::Result<(
     assert_eq!(found.items[1].0, 1);
     Ok(())
 }
+
+/// Kleiner Zufallsgenerator für reproduzierbare synthetische Vektoren.
+struct Xorshift(u64);
+impl Xorshift {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+    fn signed(&mut self) -> f32 {
+        (self.next() >> 40) as f32 / (1u64 << 24) as f32 - 0.5
+    }
+}
+fn unit(v: Vec<f32>) -> Vec<f32> {
+    inference::normalize(&v).expect("Vektor")
+}
+/// Gesicht, Person, Art und Wert (Bits) einer Zuordnung.
+type Assignment = (i64, Option<i64>, Option<String>, Option<u64>);
+/// Alle Zuordnungen bitgenau (Person, Art, Wert).
+fn assignments(c: &Collection) -> anyhow::Result<Vec<Assignment>> {
+    Ok(c.db
+        .prepare("SELECT id,person_id,assignment,confidence FROM faces ORDER BY id")?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get::<_, Option<f64>>(3)?.map(f64::to_bits),
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Der inkrementelle Abgleich (Zwischenspeicher über viele Änderungen hinweg) ergibt nach
+/// jeder Änderung bitgenau dasselbe wie ein vollständiger Lauf auf einer Kopie desselben
+/// Stands: Bestätigungen, Ablehnungen, entfernte Bestätigungen, Ausschlüsse, Referenzauswahl,
+/// neue und ersetzte Vektoren, Geburtsjahre, Umbenennungen (Gleichstand nach Name und ID),
+/// Ignorieren, historische Gesichter und Qualität.
+#[test]
+fn incremental_rematch_equals_the_full_rematch() -> anyhow::Result<()> {
+    use foto_importer::core::recognition;
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
+    const DIM: usize = 8;
+    let centers: Vec<Vec<f32>> = (0..6)
+        .map(|_| unit((0..DIM).map(|_| rng.signed()).collect()))
+        .collect();
+    c.db.execute_batch(
+        "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key','\"test\"');
+         INSERT OR REPLACE INTO face_settings VALUES('rust.thresholds.test.review','0.55');",
+    )?;
+    // Personen 5 und 6 heißen gleich und teilen sich Referenzvektoren: exakter Gleichstand.
+    for (id, name) in [
+        (1, "Anna"),
+        (2, "Ben"),
+        (3, "Cara"),
+        (4, "Dora"),
+        (5, "Zoe"),
+        (6, "Zoe"),
+    ] {
+        c.db.execute("INSERT INTO persons(id) VALUES(?)", [id])?;
+        c.db.execute(
+            "INSERT INTO person_attrs VALUES(?,'name',?)",
+            params![id, name],
+        )?;
+    }
+    let mut next_face = 1i64;
+    let mut add_face = |c: &Collection,
+                        rng: &mut Xorshift,
+                        photo: i64,
+                        vector: &[f32]|
+     -> anyhow::Result<i64> {
+        let id = next_face;
+        next_face += 1;
+        c.db.execute(
+            "INSERT OR IGNORE INTO photos(id,status) VALUES(?,'present')",
+            [photo],
+        )?;
+        let quality = if rng.below(10) == 0 { 0.3 } else { 0.9 };
+        let year = 1990 + rng.below(30) as i64;
+        c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,captured_at) VALUES(?,?,?,'det',0,0,1,1,?,?)", params![id, photo, format!("{photo}.jpg"), quality, format!("{year}-05-01")])?;
+        c.db.execute(
+            "INSERT INTO face_embeddings VALUES(?,'test',?,?)",
+            params![id, vector.len() as i64, faces::encode(vector)],
+        )?;
+        Ok(id)
+    };
+    let near = |rng: &mut Xorshift, person: usize, spread: f32| -> Vec<f32> {
+        unit(
+            centers[person]
+                .iter()
+                .map(|v| v + spread * rng.signed())
+                .collect(),
+        )
+    };
+    let shared = near(&mut rng, 4, 0.2);
+    let mut photo = 1i64;
+    let mut all = Vec::new();
+    // Referenzen: je Person drei bis fünf bestätigte Gesichter.
+    for person in 0..6usize {
+        for k in 0..(3 + person % 3) {
+            let vector = if person >= 4 && k == 0 {
+                shared.clone()
+            } else {
+                near(&mut rng, person.min(4), 0.25)
+            };
+            let id = add_face(&c, &mut rng, photo, &vector)?;
+            c.db.execute(
+                "UPDATE faces SET person_id=?,assignment='user',quality=0.9 WHERE id=?",
+                params![person as i64 + 1, id],
+            )?;
+            photo += 1;
+            all.push(id);
+        }
+    }
+    // Offene Gesichter, meist zu zweit oder dritt im Foto, darunter Kopien des geteilten Vektors.
+    for _ in 0..60 {
+        for _ in 0..1 + rng.below(3) {
+            let vector = match rng.below(8) {
+                0 => shared.clone(),
+                1 => unit((0..DIM).map(|_| rng.signed()).collect()),
+                _ => {
+                    let person = rng.below(6) as usize;
+                    near(&mut rng, person, 0.3)
+                }
+            };
+            all.push(add_face(&c, &mut rng, photo, &vector)?);
+        }
+        photo += 1;
+    }
+    c.db.execute("UPDATE faces SET retained=1 WHERE id=?", [all[40]])?;
+    c.db.execute("UPDATE faces SET ignored=1 WHERE id=?", [all[41]])?;
+    c.db.execute(
+        "UPDATE face_embeddings SET vec=NULL WHERE face_id=?",
+        [all[42]],
+    )?;
+    let control = Control::default();
+    let mut cache = recognition::MatchCache::default();
+    let copy = tempfile::tempdir()?;
+    let mut check = |c: &mut Collection, step: &str| -> anyhow::Result<usize> {
+        let target = copy.path().join(".myfotomanager");
+        if target.exists() {
+            std::fs::remove_file(&target)?;
+        }
+        c.db.execute("VACUUM INTO ?", [target.to_string_lossy()])?;
+        let mut full = Collection::open(copy.path(), true)?;
+        recognition::rematch_full(&mut full, "test", &control)?;
+        recognition::rematch_with(c, "test", &control, &mut cache)?;
+        let (incremental, expected) = (assignments(c)?, assignments(&full)?);
+        assert_eq!(incremental, expected, "Schritt {step}");
+        drop(full);
+        Ok(incremental
+            .iter()
+            .filter(|r| matches!(r.2.as_deref(), Some("auto" | "suggested")))
+            .count())
+    };
+    let first = check(&mut c, "Start")?;
+    assert!(first > 10, "genug Vorschläge zum Vergleichen: {first}");
+    let mut seen_suggestions = BTreeSet::new();
+    for step in 0..60 {
+        let face = all[rng.below(all.len() as u64) as usize];
+        let person = 1 + rng.below(6) as i64;
+        let label = match rng.below(13) {
+            0 | 1 => {
+                c.db.execute(
+                    "UPDATE faces SET person_id=?,assignment='user',confidence=1,ignored=0 WHERE id=? AND retained=0",
+                    params![person, face],
+                )?;
+                "bestätigt"
+            }
+            2 => {
+                c.db.execute(
+                    "UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE id=? AND assignment='user'",
+                    [face],
+                )?;
+                "Bestätigung entfernt"
+            }
+            3 => {
+                c.db.execute(
+                    "INSERT OR IGNORE INTO face_rejections SELECT id,coalesce(person_id,?) FROM faces WHERE id=?",
+                    params![person, face],
+                )?;
+                c.db.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE id=? AND assignment IN ('auto','suggested')", [face])?;
+                "abgelehnt"
+            }
+            4 => {
+                c.db.execute(
+                    "INSERT OR IGNORE INTO training_exclusions VALUES(?,'test')",
+                    [face],
+                )?;
+                "Referenz ausgeschlossen"
+            }
+            5 => {
+                // Referenzauswahl: nur ein Teil der Bestätigten zählt, ein Ausreißer gar nicht.
+                c.db.execute("DELETE FROM training_set WHERE person_id=?", [person])?;
+                c.db.execute("INSERT INTO training_set SELECT person_id,id,'test',CASE WHEN id%3=0 THEN 'val' ELSE 'ref' END,'',NULL,0 FROM faces WHERE person_id=? AND assignment='user'", [person])?;
+                c.db.execute("INSERT OR IGNORE INTO face_review SELECT max(id),'test','outlier' FROM faces WHERE person_id=? AND assignment='user'", [person])?;
+                "Referenzen ausgewählt"
+            }
+            6 => {
+                let vector = near(&mut rng, (person - 1).min(4) as usize, 0.3);
+                let target = if rng.below(2) == 0 {
+                    photo
+                } else {
+                    1 + rng.below(photo as u64) as i64
+                };
+                photo += 1;
+                all.push(add_face(&c, &mut rng, target, &vector)?);
+                "neues Gesicht"
+            }
+            7 => {
+                let vector = near(&mut rng, (person - 1).min(4) as usize, 0.3);
+                c.db.execute(
+                    "INSERT OR REPLACE INTO face_embeddings VALUES(?,'test',?,?)",
+                    params![face, DIM as i64, faces::encode(&vector)],
+                )?;
+                "Vektor ersetzt"
+            }
+            8 => {
+                c.db.execute(
+                    "INSERT OR REPLACE INTO person_attrs VALUES(?,'birth_year',?)",
+                    params![person, (2000 + rng.below(15)).to_string()],
+                )?;
+                "Geburtsjahr"
+            }
+            9 => {
+                let names = ["Anna", "Zoe", "Ben", "Aaron"];
+                c.db.execute(
+                    "UPDATE person_attrs SET value=? WHERE person_id=? AND key='name'",
+                    params![names[rng.below(4) as usize], person],
+                )?;
+                "umbenannt"
+            }
+            10 => {
+                c.db.execute("UPDATE faces SET ignored=1-ignored WHERE id=?", [face])?;
+                "ignoriert"
+            }
+            11 => {
+                c.db.execute("UPDATE faces SET quality=CASE WHEN quality>=0.5 THEN 0.2 ELSE 0.8 END WHERE id=?", [face])?;
+                "Qualität"
+            }
+            _ => {
+                c.db.execute("UPDATE faces SET retained=1-retained WHERE id=?", [face])?;
+                "historisch"
+            }
+        };
+        let suggestions = check(&mut c, &format!("{step} {label}"))?;
+        seen_suggestions.insert(suggestions);
+    }
+    assert!(
+        seen_suggestions.len() > 3,
+        "die Änderungen wirkten sich aus"
+    );
+    assert!(!cache.is_empty());
+    Ok(())
+}
+
+/// Ein ersetzter Vektor gleicher Gesichts-ID wird erkannt (neue `rowid`), auch wenn er die
+/// Zeile mit der höchsten `rowid` ersetzt.
+#[test]
+fn incremental_rematch_notices_a_replaced_vector() -> anyhow::Result<()> {
+    use foto_importer::core::recognition;
+    let temp = tempfile::tempdir()?;
+    let mut c = Collection::open(temp.path(), true)?;
+    three_people(&c)?;
+    polar(&c, 10, 10, 5.0)?; // Anna
+    let mut cache = recognition::MatchCache::default();
+    let control = Control::default();
+    recognition::rematch_with(&mut c, "test", &control, &mut cache)?;
+    assert_eq!(state(&c, 10)?, (Some(1), Some("auto".into())));
+    let r = 70f32.to_radians();
+    c.db.execute(
+        "INSERT OR REPLACE INTO face_embeddings VALUES(10,'test',2,?)",
+        [faces::encode(&[r.cos(), r.sin()])],
+    )?;
+    recognition::rematch_with(&mut c, "test", &control, &mut cache)?;
+    assert_eq!(state(&c, 10)?, (Some(3), Some("auto".into())), "jetzt Cara");
+    Ok(())
+}
