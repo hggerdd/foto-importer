@@ -5,7 +5,7 @@
 use super::*;
 use crate::core::central;
 use crate::core::gaps::Suggestion;
-use crate::core::kinship::{Family, Relation};
+use crate::core::kinship::{self, Entry, Family};
 use crate::core::relations::{self, Gender, Role};
 use crate::core::tree_layout::{self, LinkKind, NodeRole};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
@@ -607,36 +607,61 @@ impl PhotoApp {
         let mut select = None;
         let _ = me;
         self.quick_relation_row(ui, person);
-        ui.label(RichText::new("Gespeichert").strong());
+        // Eine Liste: je Beziehung eine Gruppe, Reihenfolge aus `kinship::overview`
+        // (Partner, Verwandte nach Nähe, Behelf, frühere Partner, Freunde, Bekannte).
+        let relatives = family.relatives_of(person);
+        let groups = kinship::overview(&direct, &relatives, &|id| info(id).0);
+        ui.add_space(4.0);
         if direct.is_empty() {
             ui.label(RichText::new("Keine Beziehungen eingetragen.").weak());
         }
-        for role in Role::ALL {
-            let items: Vec<_> = direct.iter().filter(|(r, _)| *r == role).collect();
-            if items.is_empty() {
-                continue;
-            }
-            ui.label(role.group_label());
-            for (_, other) in items {
+        if groups.iter().any(|g| {
+            g.items
+                .iter()
+                .any(|i| matches!(i.entry, Entry::Computed(_)))
+        }) {
+            ui.label(
+                RichText::new("Kursiv: aus dem Stammbaum berechnet, nicht gespeichert.").weak(),
+            );
+        }
+        for group in &groups {
+            ui.add_space(4.0);
+            ui.label(RichText::new(&group.title).strong());
+            for item in &group.items {
                 ui.horizontal_wrapped(|ui| {
-                    let (name, gender) = info(*other);
+                    let (name, gender) = info(item.person);
                     ui.add_space(12.0);
                     if ui.link(name).clicked() {
-                        select = Some(*other);
+                        select = Some(item.person);
                     }
-                    let label = if select::needs_id(&people, *other) {
-                        format!("{} · #{other}", role.label(gender))
-                    } else {
-                        role.label(gender).to_string()
+                    let text = match item.entry {
+                        Entry::Recorded(role) => role.label(gender).to_string(),
+                        Entry::Computed(relation) => relation.label(gender),
                     };
-                    ui.label(RichText::new(label).weak());
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Entfernen").small())
-                        .clicked()
-                    {
-                        action = Some((*other, role, person));
+                    let label = if select::needs_id(&people, item.person) {
+                        format!("{text} · #{}", item.person)
+                    } else {
+                        text
+                    };
+                    match item.entry {
+                        Entry::Recorded(role) => {
+                            ui.label(RichText::new(label).weak());
+                            if ui
+                                .add_enabled(!busy, egui::Button::new("Entfernen").small())
+                                .clicked()
+                            {
+                                action = Some((item.person, role, person));
+                            }
+                        }
+                        Entry::Computed(_) => {
+                            ui.label(RichText::new(label).italics().weak())
+                                .on_hover_text("Aus dem Stammbaum berechnet, nicht gespeichert");
+                        }
                     }
                 });
+            }
+            if group.more > 0 {
+                ui.label(RichText::new(format!("    … {} weitere", group.more)).weak());
             }
         }
         for (a, kind, b) in family.redundant_recorded() {
@@ -665,57 +690,6 @@ impl PhotoApp {
                     action = Some((other, role, person));
                 }
             });
-        }
-        let groups = family.relatives_of(person);
-        let shown: Vec<_> = groups
-            .iter()
-            .filter(|g| {
-                g.members.iter().any(|m| {
-                    !matches!(
-                        m.relation,
-                        Relation::Partner
-                            | Relation::FormerPartner
-                            | Relation::RecordedSibling
-                            | Relation::RecordedCousin
-                    ) && m.relation
-                        != (Relation::Blood {
-                            a_gen: 0,
-                            b_gen: 1,
-                            half: false,
-                        })
-                        && m.relation
-                            != (Relation::Blood {
-                                a_gen: 1,
-                                b_gen: 0,
-                                half: false,
-                            })
-                })
-            })
-            .collect();
-        if !shown.is_empty() {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Aus dem Stammbaum berechnet (nicht gespeichert)").strong());
-            for group in shown {
-                ui.label(&group.title);
-                for member in &group.members {
-                    ui.horizontal_wrapped(|ui| {
-                        let (name, gender) = info(member.person);
-                        ui.add_space(12.0);
-                        if ui.link(name).clicked() {
-                            select = Some(member.person);
-                        }
-                        let label = if select::needs_id(&people, member.person) {
-                            format!("{} · #{}", member.relation.label(gender), member.person)
-                        } else {
-                            member.relation.label(gender).to_string()
-                        };
-                        ui.label(RichText::new(label).italics().weak());
-                    });
-                }
-                if group.more > 0 {
-                    ui.label(RichText::new(format!("    … {} weitere", group.more)).weak());
-                }
-            }
         }
         if select.is_some() {
             self.relation_from = select;

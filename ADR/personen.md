@@ -79,6 +79,16 @@
   Fotos, Gesichter, Geburt und Alter, Geschlecht, Beziehungen, Familie, erstes und letztes
   Foto, Hinweise; Spalten entfallen bei wenig Breite nach Priorität), Details der gewählten
   Person rechts. Je Spalte genau ein Scrollbereich. Rückfragen stehen hier gesammelt.
+- **Personendetails, Beziehungen** (`kinship::overview`): gespeicherte und aus dem Stammbaum
+  berechnete Beziehungen in einer Liste, je Beziehung eine Überschrift (Mehrzahl,
+  geschlechtsneutral, z. B. „Eltern“), darunter die Personen nach Name; der Eintrag nennt
+  die genaue Bezeichnung („Mutter“). Reihenfolge der Gruppen (`kinship::overview_rank`):
+  Partner; Blutsverwandte nach Schrittzahl, bei Gleichstand Seitenlinie vor gerader Linie
+  (Eltern, Kinder, Geschwister, Halbgeschwister, Großeltern, Enkel, Onkel/Tanten,
+  Nichten/Neffen, Urgroßeltern, Cousins …); Stief- und Schwiegerverwandte; direkt erfasste
+  Behelfsverbindungen; frühere Partner (nicht mehr Teil der Familie, daher nach ihr); Freunde;
+  Bekannte. Gespeicherte Einträge haben „Entfernen“, berechnete sind kursiv und nicht
+  bearbeitbar; berechnete Partner, Eltern und Kinder wiederholen die gespeicherten nicht.
 - **Personendetails, Zusatzangaben** (`person_insights`): ein Leseauftrag je Person und
   Datenstand (`face_page_serial`) auf einem Worker mit Revision, nie je Bild. Fehler bleiben
   still; der Abschnitt bleibt leer. Nur für Personen mit Fotos.
