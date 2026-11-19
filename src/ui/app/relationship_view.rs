@@ -447,12 +447,15 @@ fn toolbar(
             );
         });
         ui.separator();
-        let before = view.connect;
-        ui.toggle_value(&mut view.connect, "Verbindung hinzufügen")
+        // Gerahmter Knopf wie „Einpassen“; im Modus hervorgehoben.
+        if ui
+            .add(egui::Button::new("Verbindung hinzufügen").selected(view.connect))
             .on_hover_text(
                 "Zwei Personen nacheinander anklicken und den Beziehungstyp wählen. Esc bricht ab.",
-            );
-        if before != view.connect {
+            )
+            .clicked()
+        {
+            view.connect = !view.connect;
             view.cancel_connect();
         }
         ui.separator();
