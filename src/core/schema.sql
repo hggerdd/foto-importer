@@ -146,6 +146,8 @@ CREATE INDEX ix_faces_user_counts ON faces(person_id) WHERE assignment='user' AN
 
 CREATE INDEX ix_faces_ignored ON faces(id) WHERE ignored=1 AND retained=0;
 
+CREATE INDEX ix_faces_not_face ON faces(id) WHERE ignored=2 AND retained=0;
+
 CREATE INDEX ix_faces_retained ON faces(id) WHERE retained=1;
 
 CREATE INDEX ix_faces_timeline ON faces(person_id,captured_at,id) WHERE ignored=0 AND retained=0 AND assignment IN ('user','auto');

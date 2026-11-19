@@ -54,6 +54,7 @@ impl PhotoApp {
         if hidden.is_empty() {
             return;
         }
+        let mode = self.page_mode().to_string();
         let page = &mut self.face_page;
         let before: usize = page.groups.iter().map(Vec::len).sum();
         for group in &mut page.groups {
@@ -63,12 +64,14 @@ impl PhotoApp {
         page.groups.retain(|g| !g.is_empty());
         let removed = before - page.groups.iter().map(Vec::len).sum::<usize>();
         page.total_groups = page.total_groups.saturating_sub(removed_groups);
-        match self.face_mode.as_str() {
+        page.faces_total = page.faces_total.saturating_sub(removed);
+        match mode.as_str() {
             "unknown" => {
                 page.status.nameable = page.status.nameable.saturating_sub(removed);
                 page.status.unknown = page.status.unknown.saturating_sub(removed);
             }
             "review" => page.status.review = page.status.review.saturating_sub(removed),
+            "unsuitable" => page.status.unknown = page.status.unknown.saturating_sub(removed),
             _ => {}
         }
     }
@@ -90,6 +93,9 @@ pub(super) fn decision_message(summary: crate::core::faces::DecisionSummary) -> 
     if summary.ignored > 0 {
         parts.push(format!("{} ignoriert", summary.ignored));
     }
+    if summary.not_face > 0 {
+        parts.push(format!("{} als „Kein Gesicht“ markiert", summary.not_face));
+    }
     if parts.is_empty() {
         "Gesichtsentscheidung gespeichert".into()
     } else {
@@ -105,9 +111,14 @@ mod message_tests {
         let text = decision_message(DecisionSummary {
             confirmed: 5,
             rejected: 2,
-            ignored: 0,
+            ..Default::default()
         });
         assert_eq!(text, "5 bestätigt · 2 abgelehnt, jetzt unter Benennen");
+        let text = decision_message(DecisionSummary {
+            not_face: 3,
+            ..Default::default()
+        });
+        assert_eq!(text, "3 als „Kein Gesicht“ markiert");
         assert_eq!(
             decision_message(DecisionSummary::default()),
             "Gesichtsentscheidung gespeichert"

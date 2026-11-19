@@ -1,8 +1,8 @@
 use super::*;
 
 impl PhotoApp {
-    /// Ansicht „Gesichter“: Statuszeile, dann die Reiter „Benennen“, „Vorschläge prüfen“ und
-    /// „Erledigt“ (dort der Umschalter „Bestätigt | Ignoriert“).
+    /// Ansicht „Gesichter“: Statuszeile, dann die Reiter „Benennen“, „Vorschläge prüfen“,
+    /// „Erledigt“ (dort der Umschalter „Bestätigt | Ignoriert“) und „Ungeeignet“.
     pub(super) fn faces_view(&mut self, ui: &mut egui::Ui) {
         self.hover_face = None;
         self.faces_header(ui);
@@ -29,6 +29,11 @@ impl PhotoApp {
                 self.face_mode == "review",
             ),
             (None, format!("Erledigt · {}", confirmed + ignored), done),
+            (
+                Some("unsuitable"),
+                format!("Ungeeignet · {}", status.unsuitable()),
+                self.face_mode == "unsuitable",
+            ),
         ];
         ui.horizontal_wrapped(|ui| {
             for (mode, label, selected) in tabs {
@@ -57,6 +62,81 @@ impl PhotoApp {
                 }
             });
         }
+        self.hover_preview_footer(ui);
+        self.face_toolbar(ui);
+        if self.face_mode == "review" {
+            self.review_filter(ui);
+        }
+        if self.face_mode == "unknown"
+            && let Some(hint) = unnamed_hint(self.face_page.status.unsuitable())
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(hint).small().weak());
+                if ui.small_button("Ungeeignete Gesichter ansehen").clicked() {
+                    self.set_face_mode("unsuitable");
+                }
+            });
+        }
+        if self.face_mode == "unsuitable" {
+            ui.label(RichText::new(UNSUITABLE_HINT).small().weak());
+        }
+        if self.face_page.groups.is_empty() {
+            if !self.face_page_loading(ui) {
+                self.empty_face_tab(ui);
+            }
+            return;
+        }
+        self.face_group_list(ui);
+    }
+    /// Leerer Reiter der Ansicht „Gesichter“: sagt, warum nichts da ist und was zu tun ist.
+    fn empty_face_tab(&self, ui: &mut egui::Ui) {
+        let (title, text) = if self.face_mode == "unsuitable" {
+            (
+                "Keine ungeeigneten Gesichter.",
+                "Alle offenen Gesichter haben Namensmerkmale und stehen unter Benennen.",
+            )
+        } else if self.analysing_current_collection() {
+            (
+                "Die Analyse läuft.",
+                "Offene Gesichtsgruppen erscheinen nach der Analyse unter Benennen.",
+            )
+        } else if self.face_page.status.embedder.is_empty() {
+            (
+                "Noch keine Gesichter.",
+                "Starte oben mit „Fotos analysieren“. Anschließend kannst du erkannte Gesichter benennen.",
+            )
+        } else if self.face_mode == "review" && self.review_person.is_some() {
+            (
+                "Für diese Person gibt es keine offenen Namensvorschläge.",
+                "Wähle eine andere Person oder zeige wieder alle Personen.",
+            )
+        } else if self.face_mode == "review" {
+            (
+                "Keine offenen Namensvorschläge.",
+                "Bestätige Gesichter, damit die App geeignete Beispiele für den nächsten Abgleich hat.",
+            )
+        } else {
+            (
+                "In diesem Reiter sind keine Gesichter.",
+                "Analysiere weitere Fotos oder wähle einen anderen Reiter.",
+            )
+        };
+        self.empty(ui, title, text);
+    }
+    /// Solange die Seite gelesen wird: Hinweis mit Spinner und `true`.
+    pub(super) fn face_page_loading(&self, ui: &mut egui::Ui) -> bool {
+        // Nach einem Wechsel der Ansicht oder des Reiters ist die Seite noch unterwegs.
+        let loading = self.tasks.iter().any(|task| task.kind == "faces");
+        if loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Gesichter werden gelesen …");
+            });
+        }
+        loading
+    }
+    /// Fußzeile mit dem Schalter für die Fotovorschau unter der Maus.
+    pub(super) fn hover_preview_footer(&mut self, ui: &mut egui::Ui) {
         egui::TopBottomPanel::bottom("people-footer").show_inside(ui, |ui| {
             if ui
                 .checkbox(
@@ -68,6 +148,10 @@ impl PhotoApp {
                 let _ = self.settings.save();
             }
         });
+    }
+    /// Seitenwahl, Rücknahme, Neulesen und Kachelgröße über den Gesichtsgruppen; hier gelten
+    /// auch die Tasten der obersten Gruppe und Strg+Z.
+    pub(super) fn face_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let loading = self.tasks.iter().any(|task| task.kind == "faces");
             let pages = self
@@ -75,9 +159,8 @@ impl PhotoApp {
                 .total_groups
                 .div_ceil(config::FACE_GROUPS_PER_PAGE);
             if let Some(target) = theme::pager(ui, self.face_index, pages, !loading) {
+                self.reset_face_page();
                 self.face_index = target;
-                self.face_advance = None;
-                self.face_row_tops.clear();
                 self.refresh_faces();
             }
             self.undo_face_button(ui);
@@ -99,49 +182,10 @@ impl PhotoApp {
                 let _ = self.settings.save();
             }
         });
-        if self.face_mode == "review" {
-            self.review_filter(ui);
-        }
-        if self.face_mode == "unknown"
-            && let Some(hint) = unnamed_hint(
-                self.face_page.status.unknown,
-                self.face_page.status.nameable,
-            )
-        {
-            ui.label(RichText::new(hint).small().weak());
-        }
-        if self.face_page.groups.is_empty() {
-            if self.tasks.iter().any(|task| task.kind == "faces") {
-                // Nach einem Wechsel der Ansicht oder des Reiters ist die Seite noch unterwegs.
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Gesichter werden gelesen …");
-                });
-            } else if self.analysing_current_collection() {
-                self.empty(
-                    ui,
-                    "Die Analyse läuft.",
-                    "Offene Gesichtsgruppen erscheinen nach der Analyse unter Benennen.",
-                );
-            } else if self.face_page.status.embedder.is_empty() {
-                self.empty(ui, "Noch keine Gesichter.", "Starte oben mit „Fotos analysieren“. Anschließend kannst du erkannte Gesichter benennen.");
-            } else if self.face_mode == "review" && self.review_person.is_some() {
-                self.empty(
-                    ui,
-                    "Für diese Person gibt es keine offenen Namensvorschläge.",
-                    "Wähle eine andere Person oder zeige wieder alle Personen.",
-                );
-            } else if self.face_mode == "review" {
-                self.empty(ui, "Keine offenen Namensvorschläge.", "Bestätige Gesichter, damit die App geeignete Beispiele für den nächsten Abgleich hat.");
-            } else {
-                self.empty(
-                    ui,
-                    "In diesem Reiter sind keine Gesichter.",
-                    "Analysiere weitere Fotos oder wähle einen anderen Reiter.",
-                );
-            }
-            return;
-        }
+    }
+    /// Die Gesichtsgruppen der Seite als Karten in einem Scrollbereich. Nach einer
+    /// Entscheidung rückt die nächste Gruppe an die Position der entschiedenen.
+    pub(super) fn face_group_list(&mut self, ui: &mut egui::Ui) {
         let advance = if self
             .face_advance
             .as_ref()
@@ -215,9 +259,7 @@ impl PhotoApp {
         });
         if changed && chosen != self.review_person {
             self.review_person = chosen;
-            self.face_index = 0;
-            self.face_advance = None;
-            self.face_row_tops.clear();
+            self.reset_face_page();
             self.refresh_faces();
         }
     }
@@ -258,7 +300,12 @@ impl PhotoApp {
             });
     }
     pub(super) fn prepare_group_advance(&mut self, undo: &Undo) {
-        if self.view != View::Faces || !matches!(self.face_mode.as_str(), "unknown" | "review") {
+        if !self.shows_face_groups()
+            || !matches!(
+                self.page_mode(),
+                "unknown" | "review" | "unsuitable" | "probable" | "person-confirmed"
+            )
+        {
             return;
         }
         let Some(slot) = self.face_page.groups.iter().position(|group| {
@@ -361,8 +408,10 @@ impl PhotoApp {
     /// `top`: oberste Gruppe der Seite; nur ihre Knöpfe nennen die Tasten.
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool, top: bool) {
         let key = draft_key(group);
-        // Im Reiter „Vorschläge prüfen“ steht die vorgeschlagene Person fest.
-        let proposed = (self.face_mode == "review")
+        let kind = card_kind(self.page_mode());
+        let naming = self.page_mode() == "unknown";
+        // In „Vorschläge prüfen“ und auf der Gesichterseite einer Person steht die Person fest.
+        let proposed = matches!(kind, CardKind::Review | CardKind::Assigned)
             .then(|| group.first().and_then(|f| f.person))
             .flatten()
             .and_then(|id| self.face_page.people.iter().find(|p| p.id == id).cloned());
@@ -380,18 +429,26 @@ impl PhotoApp {
                     .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
                     .map(|p| p.name.clone())
                     .unwrap_or_default(),
-                excluded: BTreeSet::new(),
+                // Ungeeignete Gesichter wählt man einzeln aus; alle anderen Karten beginnen
+                // mit allen Gesichtern.
+                excluded: if kind == CardKind::Unsuitable {
+                    group.iter().map(|f| f.id).collect()
+                } else {
+                    BTreeSet::new()
+                },
             }
         });
         let mut decision = None;
         // Rechtsklick „Einzeln benennen …“ auf einer Kachel: Dialog für genau dieses Gesicht.
         let mut name_one = None;
+        // Rechtsklick „Foto in der Sammlung zeigen“.
+        let mut show_photo = None;
         let proposals = group
             .first()
             .and_then(|f| self.face_page.suggestions.get(&f.id))
             .cloned();
         // „Ist das X?“ gibt es nur in „Benennen“ und nur bei einem sicheren Vorschlag.
-        let sure = (self.face_mode == "unknown")
+        let sure = naming
             .then(|| sure_suggestion(&self.face_page.status, proposals.as_ref()))
             .flatten();
         theme::card(ui).show(ui, |ui| {
@@ -451,6 +508,16 @@ impl PhotoApp {
                             ui.label(RichText::new(detail).small().weak());
                         });
                         ui.add_space(12.0);
+                        if kind == CardKind::Assigned {
+                            decision = decision.or(assigned_buttons(
+                                ui,
+                                busy,
+                                group.len() - selected,
+                                group.len(),
+                                &person.name,
+                            ));
+                            return;
+                        }
                         let confirm = ui.add_enabled(
                             !busy && selected > 0,
                             egui::Button::new(confirm_label(selected, group.len(), &person.name)),
@@ -470,6 +537,8 @@ impl PhotoApp {
                             decision = Some(Decision::Ignore);
                         }
                     });
+                } else if kind == CardKind::Unsuitable {
+                    decision = unsuitable_header(ui, draft, &self.face_page.people, group, busy);
                 } else {
                     if let Some((person, name, _)) = &sure {
                         let fill = ui.visuals().selection.bg_fill.gamma_multiply(0.25_f32);
@@ -622,11 +691,13 @@ impl PhotoApp {
                                     egui::vec2(size, size),
                                 );
                                 let response = response.on_hover_text(format!(
-                                    "Gesicht {}\n{SINGLE_NAMING_HINT}",
+                                    "Gesicht {}\n{TILE_MENU_HINT}",
                                     face.id
                                 ));
-                                if single_naming_menu(&response) {
-                                    name_one = Some(face.id);
+                                match tile_menu(&response) {
+                                    Some(TileAction::Name) => name_one = Some(face.id),
+                                    Some(TileAction::ShowPhoto) => show_photo = Some(face.clone()),
+                                    None => {}
                                 }
                                 if hover_enabled && response.hovered() {
                                     self.hover_face = Some(face.clone());
@@ -634,7 +705,20 @@ impl PhotoApp {
                                 if response.clicked() {
                                     toggle_excluded(&mut draft.excluded, face.id);
                                 }
-                                if draft.excluded.contains(&face.id) {
+                                if kind == CardKind::Unsuitable {
+                                    // Hier wird ausgewählt, nicht abgewählt: Auswahl hervorheben.
+                                    if !draft.excluded.contains(&face.id) {
+                                        ui.painter().rect_stroke(
+                                            response.rect,
+                                            2.0,
+                                            egui::Stroke::new(
+                                                3.0_f32,
+                                                ui.visuals().selection.bg_fill,
+                                            ),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                } else if draft.excluded.contains(&face.id) {
                                     let painter = ui.painter();
                                     let rect = response.rect;
                                     painter.rect_filled(
@@ -670,6 +754,35 @@ impl PhotoApp {
         if let Some(id) = name_one {
             self.open_naming(id);
         }
+        if let Some(face) = show_photo {
+            self.show_face_photo(&face);
+        }
+    }
+
+    /// Öffnet die Sammlung mit dem Foto dieses Gesichts: Suche nach Ordner und Dateiname
+    /// ohne Endung (trifft auch die RAW-Fassung), das erste Ergebnis ist gewählt.
+    pub(super) fn show_face_photo(&mut self, face: &Face) {
+        self.filters = Search {
+            text: photo_search_text(&face.source),
+            ..Default::default()
+        };
+        self.selected_photo = None;
+        self.view = View::Collection;
+        self.refresh_collection();
+    }
+
+    /// „Kein Gesicht“ für diese Gesichter: sofort ausgeblendet, gespeichert im Hintergrund,
+    /// mit Strg+Z zurückzunehmen.
+    fn mark_not_face(&mut self, ids: Vec<i64>) -> bool {
+        if ids.is_empty() {
+            return false;
+        }
+        let root = self.settings.collection.clone();
+        self.queue_hiding("Als „Kein Gesicht“ speichern", ids.clone(), move |_| {
+            let mut c = Collection::open(Path::new(&root), true)?;
+            Ok(Outcome::Named(faces::mark_not_face(&mut c, &ids)?))
+        });
+        true
     }
 
     /// Tasten für die oberste Gruppe in „Benennen“ und „Vorschläge prüfen“: `J` bestätigt
@@ -677,8 +790,8 @@ impl PhotoApp {
     /// übernehmen einen der Vorschläge in „Benennen“, `Entf` heißt „Nicht interessiert“.
     /// Nur ohne Fokus in einem Feld und solange die Knöpfe aktiv wären.
     pub(super) fn face_shortcuts(&mut self, ctx: &egui::Context) {
-        let review = match self.face_mode.as_str() {
-            "review" => true,
+        let review = match self.page_mode() {
+            "review" | "probable" => true,
             "unknown" => false,
             _ => return,
         };
@@ -749,23 +862,23 @@ impl PhotoApp {
             Some(draft) => (draft.person, draft.name.clone()),
             None => (proposed, String::new()),
         };
-        let (selected, person, name, ignore) = match decision {
-            Decision::Confirm => (kept, person, name, false),
+        let (ids, selected, person, name, ignore) = match decision {
+            Decision::Confirm => (ids, kept, person, name, false),
             Decision::Reject => {
                 // Ohne Auswahl gilt „keines davon ist diese Person“.
                 let Some(person) = proposed else {
                     return false;
                 };
-                (BTreeSet::new(), Some(person), String::new(), false)
+                (ids, BTreeSet::new(), Some(person), String::new(), false)
             }
             Decision::RejectSure => {
                 // „Nein“ auf „Ist das X?“: keines der Gesichter ist X.
                 let Some((person, _, _)) = sure_for_group(&self.face_page, group) else {
                     return false;
                 };
-                (BTreeSet::new(), Some(person), String::new(), false)
+                (ids, BTreeSet::new(), Some(person), String::new(), false)
             }
-            Decision::Ignore => (kept, person, name, true),
+            Decision::Ignore => (ids, kept, person, name, true),
             Decision::Pick(index) => {
                 let Some((person, name, _)) = self
                     .face_page
@@ -776,8 +889,25 @@ impl PhotoApp {
                 else {
                     return false;
                 };
-                (kept, Some(person), name, false)
+                (ids, kept, Some(person), name, false)
             }
+            Decision::NameSelected => {
+                // Nur die ausgewählten Gesichter; die übrigen erhalten keine Ablehnung.
+                if kept.is_empty() || person.is_none() && name.trim().is_empty() {
+                    return false;
+                }
+                (kept.iter().copied().collect(), kept, person, name, false)
+            }
+            Decision::RemoveExcluded => {
+                // Nur die abgewählten Gesichter verlieren die Person; die übrigen bleiben
+                // unberührt (samt Referenzauswahl).
+                let removed: Vec<i64> = ids.into_iter().filter(|id| !kept.contains(id)).collect();
+                let Some(person) = proposed.filter(|_| !removed.is_empty()) else {
+                    return false;
+                };
+                (removed, BTreeSet::new(), Some(person), String::new(), false)
+            }
+            Decision::NotFace => return self.mark_not_face(kept.into_iter().collect()),
         };
         let root = self.settings.collection.clone();
         let config = self.settings.central();
@@ -826,7 +956,186 @@ pub(super) enum Decision {
     Ignore,
     /// Den Vorschlag mit dieser Nummer (ab 0) übernehmen.
     Pick(usize),
+    /// Nur die ausgewählten Gesichter benennen („Ungeeignet“); die übrigen bleiben offen.
+    NameSelected,
+    /// Die ausgewählten Gesichter sind „Kein Gesicht“ („Ungeeignet“).
+    NotFace,
+    /// Abgewählte bestätigte Gesichter sind nicht die Person (Gesichterseite einer Person).
+    RemoveExcluded,
 }
+
+/// Art der Gruppenkarte, folgt aus der gelesenen Seite.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum CardKind {
+    /// Unbenannte, bestätigte oder ignorierte Gesichter: Namensfeld, Auswahl, Vorschläge.
+    Name,
+    /// Vorschläge für eine Person („Vorschläge prüfen“, „Wahrscheinlich X“).
+    Review,
+    /// Bestätigte Gesichter einer Person: falsche abwählen und entfernen.
+    Assigned,
+    /// Ungeeignete Gesichter: einzelne auswählen, benennen oder „Kein Gesicht“.
+    Unsuitable,
+}
+
+pub(super) fn card_kind(mode: &str) -> CardKind {
+    match mode {
+        "review" | "probable" => CardKind::Review,
+        "person-confirmed" => CardKind::Assigned,
+        "unsuitable" => CardKind::Unsuitable,
+        _ => CardKind::Name,
+    }
+}
+
+/// Knöpfe der Karte bestätigter Gesichter einer Person: abgewählte entfernen oder alle.
+fn assigned_buttons(
+    ui: &mut egui::Ui,
+    busy: bool,
+    excluded: usize,
+    total: usize,
+    name: &str,
+) -> Option<Decision> {
+    let mut decision = None;
+    let remove = ui
+        .add_enabled(
+            !busy && excluded > 0,
+            egui::Button::new(remove_label(excluded, name)),
+        )
+        .on_hover_text("Klicke falsch zugeordnete Gesichter an, um sie abzuwählen.");
+    if remove.clicked() {
+        decision = Some(Decision::RemoveExcluded);
+    }
+    if ui
+        .add_enabled(!busy, egui::Button::new(reject_label(total, name)))
+        .clicked()
+    {
+        decision = Some(Decision::Reject);
+    }
+    decision
+}
+
+/// „2 abgewählte sind nicht Anna“; ohne Abwahl ein Hinweis, was zu tun ist.
+fn remove_label(excluded: usize, name: &str) -> String {
+    match excluded {
+        0 => format!("Falsche abwählen, dann: nicht {name}"),
+        1 => format!("1 abgewähltes ist nicht {name}"),
+        n => format!("{n} abgewählte sind nicht {name}"),
+    }
+}
+
+/// Kopf einer Karte ungeeigneter Gesichter: Auswahl, Name oder Person für die Auswahl,
+/// „N benennen“ und „Kein Gesicht“.
+fn unsuitable_header(
+    ui: &mut egui::Ui,
+    draft: &mut Draft,
+    people: &[faces::Person],
+    group: &[Face],
+    busy: bool,
+) -> Option<Decision> {
+    let mut decision = None;
+    let selected = group
+        .iter()
+        .filter(|f| !draft.excluded.contains(&f.id))
+        .count();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(format!("{} Gesichter · {selected} ausgewählt", group.len())).strong(),
+        );
+        if ui.small_button("Alle auswählen").clicked() {
+            draft.excluded.clear();
+        }
+        if ui.small_button("Auswahl aufheben").clicked() {
+            draft.excluded = group.iter().map(|f| f.id).collect();
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut draft.name)
+                .hint_text("Name für die Auswahl")
+                .desired_width(220.0),
+        );
+        if response.changed() {
+            draft.person = None;
+        }
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            decision = Some(Decision::NameSelected);
+        }
+        let mut chosen = draft.person;
+        let items = select::person_choices(people, None);
+        if select::FilterSelect::new("unsuitable-person", &items)
+            .placeholder("Person wählen …")
+            .width(200.0)
+            .show(ui, &mut chosen)
+            && let Some(person) = chosen
+        {
+            draft.person = Some(person);
+            if let Some(found) = people.iter().find(|p| p.id == person) {
+                draft.name = found.name.clone();
+            }
+        }
+        let named = draft.person.is_some() || !draft.name.trim().is_empty();
+        if ui
+            .add_enabled(
+                !busy && selected > 0 && named,
+                egui::Button::new(format!("{selected} benennen")),
+            )
+            .clicked()
+        {
+            decision = Some(Decision::NameSelected);
+        }
+        if ui
+            .add_enabled(!busy && selected > 0, egui::Button::new("Kein Gesicht"))
+            .on_hover_text(
+                "Die ausgewählten Ausschnitte zeigen kein Gesicht (z. B. ein Muster). Sie \
+                 verschwinden aus allen Zählungen und kehren auch nach einer neuen Analyse \
+                 nicht zurück. Strg+Z nimmt es zurück.",
+            )
+            .clicked()
+        {
+            decision = Some(Decision::NotFace);
+        }
+    });
+    decision
+}
+
+/// Aktion aus dem Rechtsklickmenü einer Kachel in einer Gruppenkarte.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TileAction {
+    Name,
+    ShowPhoto,
+}
+/// Hinweis unter der Maus für Kacheln mit [`tile_menu`].
+const TILE_MENU_HINT: &str = "Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+
+/// Rechtsklickmenü einer Kachel in einer Gruppenkarte: „Einzeln benennen …“ und „Foto in
+/// der Sammlung zeigen“. Der Linksklick bleibt unberührt.
+fn tile_menu(response: &egui::Response) -> Option<TileAction> {
+    let mut chosen = None;
+    response.context_menu(|ui| {
+        if ui.button("Einzeln benennen …").clicked() {
+            chosen = Some(TileAction::Name);
+            ui.close();
+        }
+        if ui.button("Foto in der Sammlung zeigen").clicked() {
+            chosen = Some(TileAction::ShowPhoto);
+            ui.close();
+        }
+    });
+    chosen
+}
+
+/// Suchtext der Sammlung für das Foto einer Gesichtsquelle: Pfad ohne Endung, damit auch
+/// eine RAW- oder DNG-Fassung desselben Fotos gefunden wird.
+fn photo_search_text(source: &str) -> String {
+    match source.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.contains('/') => stem.to_string(),
+        _ => source.to_string(),
+    }
+}
+
+/// Erklärung über dem Reiter „Ungeeignet“.
+const UNSUITABLE_HINT: &str = "Diese Gesichter sind zu klein oder unscharf für Namensvorschläge. \
+     Wähle Gesichter durch Anklicken aus und benenne sie oder markiere sie als „Kein Gesicht“. \
+     Rechtsklick öffnet das Foto in der Sammlung.";
 
 /// Nennt die Taste im Hinweistext, aber nur an der obersten Gruppe: nur für sie gilt sie.
 /// Der sichere Vorschlag einer Gruppe nach denselben Grenzen wie der Abgleich.
@@ -941,13 +1250,11 @@ fn rejection_note(rejected: Option<&Vec<i64>>, people: &[faces::Person]) -> Opti
     (!names.is_empty()).then(|| format!("nicht {}", names.join(", ")))
 }
 
-/// Hinweis auf Gesichter, die zu schlecht für Namensvorschläge sind.
-fn unnamed_hint(unknown: usize, nameable: usize) -> Option<String> {
-    (unknown > nameable).then(|| {
-        format!(
-            "{} weitere Gesichter sind zu klein oder unscharf für Namensvorschläge. Du kannst sie am Foto in der Sammlung benennen.",
-            unknown - nameable
-        )
+/// Hinweis auf Gesichter, die zu schlecht für Namensvorschläge sind (`Status::unsuitable`);
+/// daneben steht der Weg in den Reiter „Ungeeignet“.
+fn unnamed_hint(unsuitable: usize) -> Option<String> {
+    (unsuitable > 0).then(|| {
+        format!("{unsuitable} weitere Gesichter sind zu klein oder unscharf für Namensvorschläge.")
     })
 }
 #[cfg(test)]
@@ -988,8 +1295,31 @@ mod tile_note_tests {
     }
     #[test]
     fn hint_appears_only_when_faces_lack_name_features() {
-        assert!(unnamed_hint(10, 4).is_some_and(|text| text.starts_with("6 weitere Gesichter")));
-        assert_eq!(unnamed_hint(4, 4), None);
+        let status = faces::Status {
+            unknown: 10,
+            nameable: 4,
+            ..Default::default()
+        };
+        assert!(
+            unnamed_hint(status.unsuitable())
+                .is_some_and(|text| text.starts_with("6 weitere Gesichter"))
+        );
+        assert_eq!(unnamed_hint(0), None);
+    }
+    #[test]
+    fn photo_search_drops_only_the_extension() {
+        assert_eq!(photo_search_text("2024/01/IMG_1.jpg"), "2024/01/IMG_1");
+        assert_eq!(photo_search_text("a.b/IMG_1"), "a.b/IMG_1");
+        assert_eq!(photo_search_text("IMG.1.NEF"), "IMG.1");
+    }
+    #[test]
+    fn card_kind_follows_the_page() {
+        assert_eq!(card_kind("review"), CardKind::Review);
+        assert_eq!(card_kind("probable"), CardKind::Review);
+        assert_eq!(card_kind("person-confirmed"), CardKind::Assigned);
+        assert_eq!(card_kind("unsuitable"), CardKind::Unsuitable);
+        assert_eq!(card_kind("confirmed"), CardKind::Name);
+        assert_eq!(remove_label(2, "Anna"), "2 abgewählte sind nicht Anna");
     }
 }
 

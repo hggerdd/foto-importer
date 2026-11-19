@@ -60,6 +60,23 @@ pub struct Status {
     /// Geltender Mindestabstand zur zweitbesten Person (`recognition::Limits::margin`).
     pub review_margin: f32,
 }
+impl Status {
+    /// Offene Gesichter ohne Gruppe unter „Benennen“: ohne Namensmerkmale (zu klein oder
+    /// unscharf) oder noch nicht gruppiert. Genau diese zeigt der Reiter „unsuitable“
+    /// ([`UNSUITABLE`]); Gruppenmitglieder sind stets offene Gesichter.
+    pub fn unsuitable(&self) -> usize {
+        self.unknown.saturating_sub(self.nameable)
+    }
+}
+/// Wert von `faces.ignored` für die Nutzerentscheidung „Kein Gesicht“ (0 = aktiv,
+/// 1 = „Nicht interessiert“). Alle Abfragen auf aktive Gesichter prüfen `ignored=0`, der
+/// Reiter „Ignoriert“ `ignored=1`; so fällt ein solches Gesicht aus allen Zählungen,
+/// Gruppen und Vorschlägen. Die Analyse übernimmt `ignored` beim Wiederfinden (IoU) und
+/// behält nicht wiedergefundene ignorierte Gesichter als historisch.
+pub const NOT_A_FACE: i64 = 2;
+/// Offene Gesichter ohne Gruppe des Embedders `?1` (Reiter „unsuitable“); dieselbe Menge wie
+/// [`Status::unsuitable`].
+const UNSUITABLE: &str = "f.ignored=0 AND f.retained=0 AND f.person_id IS NULL AND NOT EXISTS(SELECT 1 FROM face_group_members g WHERE g.face_id=f.id AND g.embedder_id=?1)";
 #[derive(Default)]
 pub struct FacePage {
     pub groups: Vec<Vec<Face>>,
@@ -84,6 +101,9 @@ pub struct FacePage {
     pub review_people: BTreeMap<i64, usize>,
     /// Abgelehnte Personen je Gesicht der geladenen Gruppen (Gesichts-ID → Personen-IDs).
     pub rejections: BTreeMap<i64, Vec<i64>>,
+    /// Gesichter insgesamt im Reiter über alle Seiten („unsuitable“, „probable“, „confirmed“,
+    /// „person-confirmed“, „ignored“; sonst 0).
+    pub faces_total: usize,
 }
 
 /// Tabellenzeilen und Porträts für den Reiter „persons“, sonst leer.
@@ -200,7 +220,7 @@ pub fn status(collection: &Collection) -> Result<Status> {
     // (ADR 0066); die Bedingungen entsprechen wörtlich den Indexdefinitionen.
     let mut status = Status {
         total: count(
-            "SELECT (SELECT count(*) FROM faces)-(SELECT count(*) FROM faces WHERE retained=1)",
+            "SELECT (SELECT count(*) FROM faces)-(SELECT count(*) FROM faces WHERE retained=1)-(SELECT count(*) FROM faces WHERE ignored=2 AND retained=0)",
         )?,
         confirmed: count("SELECT count(*) FROM faces WHERE assignment='user' AND retained=0")?,
         unknown: count(
@@ -416,7 +436,7 @@ pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
     Ok(collection
         .db
         .prepare(&format!(
-            "SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? AND f.retained=0 ORDER BY f.id"
+            "SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? AND f.retained=0 AND f.ignored<>2 ORDER BY f.id"
         ))?
         .query_map([photo], face_row)?
         .collect::<rusqlite::Result<_>>()?)
@@ -510,16 +530,97 @@ fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
         .collect::<rusqlite::Result<_>>()?;
     Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
 }
+/// Seite des Reiters „unsuitable“: offene Gesichter ohne Gruppe ([`UNSUITABLE`]), neueste
+/// Fotos zuerst und Gesichter eines Fotos nebeneinander, in Gruppen zu `GROUP_MAX`.
+/// Ergebnis: Gruppen der Seite und Zahl aller solcher Gesichter.
+fn unsuitable_page(
+    collection: &Collection,
+    embedder: &str,
+    page: usize,
+) -> Result<(Vec<Vec<Face>>, usize)> {
+    let total: usize = collection.db.query_row(
+        &format!("SELECT count(*) FROM faces f WHERE {UNSUITABLE}"),
+        [embedder],
+        |r| r.get(0),
+    )?;
+    let per_page = (crate::config::GROUP_MAX * crate::config::FACE_GROUPS_PER_PAGE) as i64;
+    let rows: Vec<Face> = collection
+        .db
+        .prepare_cached(&format!(
+            "SELECT {FACE_COLUMNS} FROM faces f WHERE {UNSUITABLE} ORDER BY f.photo_id DESC,f.id LIMIT ?2 OFFSET ?3"
+        ))?
+        .query_map(params![embedder, per_page, page as i64 * per_page], face_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    let groups = rows
+        .chunks(crate::config::GROUP_MAX)
+        .map(<[Face]>::to_vec)
+        .collect();
+    Ok((groups, total))
+}
+/// Seite des Reiters „probable“: unbestätigte Gesichter, die wahrscheinlich `person` zeigen
+/// (`recognition::person_candidates`), nach Personenscore absteigend in Gruppen zu
+/// `GROUP_MAX` geschnitten; die erste Gruppe ist die wahrscheinlichste. Jedes Gesicht trägt
+/// für die Seite `person` als Vorschlag und seinen Personenscore als `score`, damit die Karte
+/// wie in „Vorschläge prüfen“ bestätigt und ablehnt. Ergebnis: Gruppen der Seite, Zahl der
+/// Gruppen und der Gesichter insgesamt.
+fn probable_page(
+    collection: &Collection,
+    embedder: &str,
+    person: Option<i64>,
+    page: usize,
+    control: &Control,
+) -> Result<(Vec<Vec<Face>>, usize, usize)> {
+    let Some(person) = person.filter(|_| !embedder.is_empty()) else {
+        return Ok((Vec::new(), 0, 0));
+    };
+    let candidates = super::recognition::person_candidates(
+        collection,
+        embedder,
+        person,
+        crate::config::PERSON_CANDIDATE_MIN,
+        control,
+    )?;
+    let parts: Vec<&[(i64, f32)]> = candidates.chunks(crate::config::GROUP_MAX).collect();
+    let mut groups = Vec::new();
+    for part in parts
+        .iter()
+        .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
+        .take(crate::config::FACE_GROUPS_PER_PAGE)
+    {
+        let ids: Vec<i64> = part.iter().map(|(id, _)| *id).collect();
+        let scores: BTreeMap<i64, f32> = part.iter().copied().collect();
+        let mut rows = faces_in_order(collection, &ids)?;
+        for face in &mut rows {
+            face.person = Some(person);
+            face.score = scores[&face.id];
+        }
+        if !rows.is_empty() {
+            groups.push(rows);
+        }
+    }
+    Ok((groups, parts.len(), candidates.len()))
+}
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     page_filtered(collection, mode, page, None)
 }
 /// Wie [`page`], zusätzlich mit Personenfilter: `person` beschränkt die Reiter „review“,
-/// „confirmed“ und „ignored“ auf Gesichter dieser Person; andere Reiter beachten ihn nicht.
+/// „confirmed“ und „ignored“ auf Gesichter dieser Person und wählt die Person der Reiter
+/// „probable“ und „person-confirmed“ (ohne Person leer); andere Reiter beachten ihn nicht.
 pub fn page_filtered(
     collection: &Collection,
     mode: &str,
     page: usize,
     person: Option<i64>,
+) -> Result<FacePage> {
+    page_with(collection, mode, page, person, &Control::default())
+}
+/// Wie [`page_filtered`]; `control` bricht das Rechnen der Personenwerte in „probable“ ab.
+pub fn page_with(
+    collection: &Collection,
+    mode: &str,
+    page: usize,
+    person: Option<i64>,
+    control: &Control,
 ) -> Result<FacePage> {
     let max = crate::config::GROUP_MAX as i64;
     let over = max + 1;
@@ -527,6 +628,7 @@ pub fn page_filtered(
     let status = status(collection)?;
     let mut groups = Vec::new();
     let total_groups: usize;
+    let mut faces_total = 0;
     let mut review_people = BTreeMap::new();
     if matches!(mode, "persons" | "tree" | "graph") {
         // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
@@ -547,6 +649,7 @@ pub fn page_filtered(
             portraits,
             rejections: BTreeMap::new(),
             review_people: BTreeMap::new(),
+            faces_total: 0,
         });
     }
     if mode == "unknown" && status.embedder.is_empty() {
@@ -564,9 +667,18 @@ pub fn page_filtered(
             portraits: BTreeMap::new(),
             rejections: BTreeMap::new(),
             review_people: BTreeMap::new(),
+            faces_total: 0,
         });
     }
-    if mode == "unknown" && !status.embedder.is_empty() {
+    if mode == "unsuitable" {
+        (groups, faces_total) = unsuitable_page(collection, &status.embedder, page)?;
+        total_groups = faces_total.div_ceil(crate::config::GROUP_MAX);
+    } else if mode == "probable" {
+        (groups, total_groups, faces_total) =
+            probable_page(collection, &status.embedder, person, page, control)?;
+    } else if mode == "person-confirmed" && person.is_none() {
+        total_groups = 0;
+    } else if mode == "unknown" && !status.embedder.is_empty() {
         total_groups = collection.db.query_row(
             "SELECT count(*) FROM face_group_catalog WHERE embedder_id=? AND members>0",
             [&status.embedder],
@@ -599,11 +711,11 @@ pub fn page_filtered(
         // über alle Gesichter des Reiters (ADR 0066).
         let predicate = match mode {
             "ignored" => "f.ignored=1",
-            "confirmed" => "f.assignment='user' AND f.ignored=0",
+            "confirmed" | "person-confirmed" => "f.assignment='user' AND f.ignored=0",
             _ => "f.person_id IS NULL AND f.ignored=0",
         };
         let predicate = match person {
-            Some(id) if matches!(mode, "ignored" | "confirmed") => {
+            Some(id) if matches!(mode, "ignored" | "confirmed" | "person-confirmed") => {
                 format!("{predicate} AND f.person_id={id}")
             }
             _ => predicate.to_string(),
@@ -613,6 +725,7 @@ pub fn page_filtered(
             .prepare(&format!("SELECT f.person_id,count(*) FROM faces f WHERE f.retained=0 AND {predicate} GROUP BY f.person_id ORDER BY f.person_id"))?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
+        faces_total = counts.iter().map(|(_, count)| *count as usize).sum();
         let mut parts: Vec<(i64, Option<i64>, i64)> = Vec::new();
         for (person, count) in &counts {
             for part in 0..(count + max - 1) / max {
@@ -634,7 +747,8 @@ pub fn page_filtered(
         }
     }
     let mut suggestions = BTreeMap::new();
-    if !status.embedder.is_empty() {
+    // Ungeeignete Gesichter haben keine Namensmerkmale, also auch keine Vorschläge.
+    if !status.embedder.is_empty() && mode != "unsuitable" {
         let mut cache = super::recognition::SuggestionCache::default();
         for group in groups.iter().filter(|g| g[0].person.is_none()) {
             let ids: Vec<i64> = group.iter().map(|f| f.id).collect();
@@ -655,7 +769,7 @@ pub fn page_filtered(
     let people = people(collection)?;
     let (rows, mut portraits) =
         table_state(collection, mode, &people, &relations, &family, &questions)?;
-    if mode == "review" && !status.embedder.is_empty() {
+    if matches!(mode, "review" | "probable" | "person-confirmed") && !status.embedder.is_empty() {
         for id in groups.iter().filter_map(|group| group[0].person) {
             // Ein fehlendes Bild darf die Seite nicht verhindern.
             if !portraits.contains_key(&id)
@@ -678,6 +792,7 @@ pub fn page_filtered(
         portraits,
         rejections,
         review_people,
+        faces_total,
     })
 }
 
@@ -1153,6 +1268,19 @@ pub struct FaceSnapshot {
     pub ignored: bool,
     pub rejections: Vec<i64>,
     pub pins: Vec<(i64, String)>,
+    /// „Kein Gesicht“ ([`NOT_A_FACE`]); dann ist auch `ignored` gesetzt.
+    #[serde(default)]
+    pub not_face: bool,
+}
+impl FaceSnapshot {
+    /// Gespeicherter Wert von `faces.ignored`.
+    fn ignored_value(&self) -> i64 {
+        if self.not_face {
+            NOT_A_FACE
+        } else {
+            i64::from(self.ignored)
+        }
+    }
 }
 #[derive(Clone)]
 pub struct Undo {
@@ -1165,14 +1293,16 @@ fn snapshot(db: &rusqlite::Connection, id: i64) -> Result<FaceSnapshot> {
         "SELECT person_id,assignment,confidence,ignored FROM faces WHERE id=? AND retained=0",
         [id],
         |r| {
+            let ignored: i64 = r.get(3)?;
             Ok(FaceSnapshot {
                 id,
                 person: r.get(0)?,
                 assignment: r.get(1)?,
                 confidence: r.get(2)?,
-                ignored: r.get(3)?,
+                ignored: ignored != 0,
                 rejections: Vec::new(),
                 pins: Vec::new(),
+                not_face: ignored == NOT_A_FACE,
             })
         },
     )?;
@@ -1283,6 +1413,38 @@ pub fn name_group(
     }
     Ok(undo)
 }
+/// „Kein Gesicht“ (z. B. ein Muster auf der Tapete): eine dauerhafte Nutzerentscheidung
+/// je Gesicht ([`NOT_A_FACE`]). Das Vorkommen bleibt gespeichert, damit eine erneute Analyse
+/// es wiederfindet und die Entscheidung behält; jede Zuordnung und Referenz entfällt. Das
+/// Foto bleibt unberührt. Rücknahme über [`undo`].
+pub fn mark_not_face(collection: &mut Collection, ids: &[i64]) -> Result<Undo> {
+    collection.writable()?;
+    if ids.is_empty() {
+        bail!("Bitte mindestens ein Gesicht auswählen");
+    }
+    let tx = collection.db.transaction()?;
+    let before = ids
+        .iter()
+        .map(|id| snapshot(&tx, *id))
+        .collect::<Result<Vec<_>>>()?;
+    for id in ids {
+        tx.execute(
+            "UPDATE faces SET ignored=?,person_id=NULL,assignment=NULL,confidence=NULL,assigned_at=NULL WHERE id=?",
+            params![NOT_A_FACE, id],
+        )?;
+        tx.execute("DELETE FROM training_set WHERE face_id=?", [id])?;
+    }
+    let after = ids
+        .iter()
+        .map(|id| snapshot(&tx, *id))
+        .collect::<Result<Vec<_>>>()?;
+    tx.commit()?;
+    Ok(Undo {
+        before,
+        after,
+        created: None,
+    })
+}
 /// Gerade freigegebene Gesichter sofort gruppieren, damit sie unter „Benennen“ erscheinen.
 /// Begrenzt auf wenige Schritte; was liegen bleibt, erledigt die Hintergrundwartung.
 /// Gruppen sind abgeleitet, ein Fehler hier darf die gespeicherte Entscheidung nicht gefährden.
@@ -1318,6 +1480,8 @@ pub struct DecisionSummary {
     pub confirmed: usize,
     pub rejected: usize,
     pub ignored: usize,
+    /// Als „Kein Gesicht“ markiert (zählt nicht als ignoriert).
+    pub not_face: usize,
 }
 impl Undo {
     pub fn summary(&self) -> DecisionSummary {
@@ -1339,7 +1503,9 @@ impl Undo {
             {
                 summary.rejected += 1;
             }
-            if after.ignored && !before.ignored {
+            if after.not_face && !before.not_face {
+                summary.not_face += 1;
+            } else if after.ignored && !before.ignored {
                 summary.ignored += 1;
             }
         }
@@ -1353,7 +1519,7 @@ pub fn undo(collection: &mut Collection, undo: &Undo) -> Result<()> {
         let current = snapshot(&tx, expected.id)?;
         if current.person != expected.person
             || current.assignment != expected.assignment
-            || current.ignored != expected.ignored
+            || current.ignored_value() != expected.ignored_value()
             || current.rejections != expected.rejections
             || current.pins != expected.pins
         {
@@ -1367,7 +1533,7 @@ pub fn undo(collection: &mut Collection, undo: &Undo) -> Result<()> {
                 before.person,
                 before.assignment,
                 before.confidence,
-                before.ignored,
+                before.ignored_value(),
                 before.id
             ],
         )?;

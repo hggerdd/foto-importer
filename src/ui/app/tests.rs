@@ -178,6 +178,7 @@ fn confirming_a_group_brings_its_successor_to_the_same_viewport_position() {
             ignored: false,
             rejections: Vec::new(),
             pins: Vec::new(),
+            not_face: false,
         }],
         after: Vec::new(),
         created: None,
@@ -1453,7 +1454,10 @@ fn navigation_lists_four_main_items_and_two_at_the_bottom_without_zeitreise() {
         .iter()
         .map(|(_, label)| *label)
         .collect();
-    assert_eq!(modes, ["Übersicht", "Stammbaum", "Graph", "Zeitreise"]);
+    assert_eq!(
+        modes,
+        ["Übersicht", "Stammbaum", "Graph", "Zeitreise", "Gesichter"]
+    );
 }
 
 #[test]
@@ -2893,5 +2897,122 @@ fn different_hides_the_question_at_once_and_stores_the_answer() -> anyhow::Resul
         [(1, 2)]
     );
     assert!(crate::core::duplicates::load(&c)?.is_empty());
+    Ok(())
+}
+
+/// Reiter „Ungeeignet“: Kacheln beginnen abgewählt; nur ausgewählte Gesichter werden benannt
+/// oder als „Kein Gesicht“ gespeichert, die übrigen bleiben unberührt sichtbar.
+#[test]
+fn unsuitable_cards_act_only_on_the_selected_faces() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = review_app(root.path());
+    app.face_mode = "unsuitable".into();
+    app.face_page.groups = vec![vec![test_face(1), test_face(2), test_face(3)]];
+    app.face_page.total_groups = 1;
+    app.face_page.status.unknown = 3;
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    let group = app.face_page.groups[0].clone();
+    let draft = app.drafts.get_mut("1,2,3").expect("Karte gezeichnet");
+    assert_eq!(
+        draft.excluded,
+        BTreeSet::from([1, 2, 3]),
+        "nichts ausgewählt"
+    );
+    // Ohne Auswahl und ohne Namen geschieht nichts.
+    assert!(!app.decide_group(&group, faces_view::Decision::NotFace));
+    app.drafts.get_mut("1,2,3").expect("Entwurf").excluded = BTreeSet::from([1, 3]);
+    assert!(!app.decide_group(&group, faces_view::Decision::NameSelected));
+    assert!(app.decide_group(&group, faces_view::Decision::NotFace));
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![1, 3]]);
+    assert_eq!(app.face_page.status.unknown, 2);
+    // Die verkleinerte Karte hat einen eigenen Entwurf.
+    let group = app.face_page.groups[0].clone();
+    app.drafts.insert(
+        "1,3".into(),
+        Draft {
+            person: Some(1),
+            excluded: BTreeSet::from([3]),
+            ..Default::default()
+        },
+    );
+    assert!(app.decide_group(&group, faces_view::Decision::NameSelected));
+    assert_eq!(app.hidden_faces(), BTreeSet::from([1, 2]));
+    assert_eq!(page_ids(&app), vec![vec![3]]);
+    Ok(())
+}
+
+/// Gesichterseite einer Person: „Wahrscheinlich X“ entscheidet wie „Vorschläge prüfen“ (auch
+/// per Taste), „Bestätigt“ entfernt nur abgewählte Gesichter.
+#[test]
+fn person_faces_page_confirms_probable_and_removes_only_deselected_faces() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let (context, mut app) = review_app(root.path());
+    app.relation_from = Some(1);
+    app.set_person_mode(PersonMode::Faces);
+    assert_eq!((app.page_mode(), app.page_person()), ("probable", Some(1)));
+    assert!(
+        app.face_page.groups.is_empty(),
+        "keine Karten einer anderen Seite"
+    );
+    app.tasks.clear();
+    app.face_page.groups = vec![
+        vec![review_face(1, 0.8), review_face(2, 0.62)],
+        vec![review_face(3, 0.6)],
+    ];
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    assert_eq!(app.face_row_tops.len(), 2, "beide Karten gezeichnet");
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    assert_eq!(naming_tasks(&app), 1);
+    assert_eq!(page_ids(&app), vec![vec![3]]);
+    app.set_person_face_mode("person-confirmed");
+    assert_eq!(app.page_mode(), "person-confirmed");
+    app.tasks.retain(|t| t.kind == "naming");
+    let confirmed = |id| Face {
+        assignment: Some("user".into()),
+        ..review_face(id, 1.0)
+    };
+    app.face_page.groups = vec![vec![confirmed(8), confirmed(9)]];
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    let group = app.face_page.groups[0].clone();
+    // Ohne Abwahl gibt es nichts zu entfernen.
+    assert!(!app.decide_group(&group, faces_view::Decision::RemoveExcluded));
+    app.drafts
+        .get_mut("p1:8,9")
+        .expect("Karte gezeichnet")
+        .excluded = BTreeSet::from([9]);
+    assert!(app.decide_group(&group, faces_view::Decision::RemoveExcluded));
+    assert_eq!(page_ids(&app), vec![vec![8]]);
+    assert!(app.hidden_faces().contains(&9) && !app.hidden_faces().contains(&8));
+    // Tasten gelten auf der Seite „Bestätigt“ nicht.
+    press_face_key(&context, &mut app, egui::Key::N, false);
+    assert_eq!(naming_tasks(&app), 2);
+    Ok(())
+}
+
+#[test]
+fn person_details_open_the_faces_page_for_that_person() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = insights_app(root.path())?;
+    app.select_person(2);
+    drawn_texts(&context, &mut app, Vec::new());
+    click_labelled(
+        &context,
+        &mut app,
+        "Gesichter prüfen",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(
+        (app.view, app.person_mode),
+        (View::People, PersonMode::Faces)
+    );
+    assert_eq!((app.page_mode(), app.page_person()), ("probable", Some(2)));
+    assert_eq!(
+        tasks_of(&app, "faces"),
+        1,
+        "die Seite wird auf einem Worker gelesen"
+    );
     Ok(())
 }

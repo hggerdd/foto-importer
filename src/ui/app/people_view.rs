@@ -1,13 +1,14 @@
-//! Ansicht „Personen“: die Personentabelle als Übersicht, dazu Stammbaum, Graph und
-//! Zeitreise als Ansichten der in der Tabelle gewählten Person.
+//! Ansicht „Personen“: die Personentabelle als Übersicht, dazu Stammbaum, Graph, Zeitreise
+//! und Gesichter als Ansichten der in der Tabelle gewählten Person.
 use super::*;
 
 /// Umschalter der Ansicht in seiner Reihenfolge.
-pub(super) const PERSON_MODES: [(PersonMode, &str); 4] = [
+pub(super) const PERSON_MODES: [(PersonMode, &str); 5] = [
     (PersonMode::Overview, "Übersicht"),
     (PersonMode::Tree, "Stammbaum"),
     (PersonMode::Graph, "Graph"),
     (PersonMode::Time, "Zeitreise"),
+    (PersonMode::Faces, "Gesichter"),
 ];
 
 impl PhotoApp {
@@ -53,7 +54,9 @@ impl PhotoApp {
             }
         });
         ui.separator();
-        if self.person_mode != PersonMode::Overview && selected.is_none() {
+        if !matches!(self.person_mode, PersonMode::Overview | PersonMode::Faces)
+            && selected.is_none()
+        {
             ui.label(
                 RichText::new(
                     "Wähle in der Übersicht eine Person, dann steht sie hier im Mittelpunkt.",
@@ -66,6 +69,7 @@ impl PhotoApp {
             PersonMode::Tree => self.tree_tab(ui),
             PersonMode::Graph => self.relationship_graph_tab(ui),
             PersonMode::Time => self.time_view(ui),
+            PersonMode::Faces => self.person_faces_view(ui),
         }
     }
 }
