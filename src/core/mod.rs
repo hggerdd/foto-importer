@@ -1,6 +1,7 @@
 pub mod central;
 pub mod choice_filter;
 pub mod collection;
+pub mod diag;
 pub mod dng_updates;
 pub mod duplicates;
 pub mod evaluation;

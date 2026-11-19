@@ -1188,6 +1188,7 @@ dependencies = [
  "egui",
  "image",
  "kamadak-exif",
+ "log",
  "ndarray",
  "ort",
  "reqwest",
