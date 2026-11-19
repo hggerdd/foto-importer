@@ -19,11 +19,12 @@ mod time_view;
 mod tree_view;
 mod windows;
 
-use super::{select, theme, thumbnails::Thumbnails};
+use super::{frame_meter::FrameMeter, select, theme, thumbnails::Thumbnails};
 use crate::{
     config::{self, Settings},
     core::{
         collection::{Collection, CollectionStatus},
+        diag,
         faces::{self, Face, FacePage, Undo},
         files::{self, Scan, SourceFile},
         folders::FolderTree,
@@ -377,6 +378,8 @@ pub struct PhotoApp {
     last_night: String,
     capture_started: std::time::Instant,
     capture_requested: bool,
+    /// Frame-Zeiten fürs Diagnose-Log.
+    frame_meter: FrameMeter,
     #[cfg(test)]
     plan_bounds: Option<egui::Rect>,
     #[cfg(test)]
@@ -384,14 +387,18 @@ pub struct PhotoApp {
 }
 impl PhotoApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let _t = diag::span("start", "app_aufbau");
         let mut app = Self::with_settings(cc, Settings::load());
         app.check_dng();
         app
     }
     fn with_settings(cc: &eframe::CreationContext<'_>, settings: Settings) -> Self {
         theme::apply(&cc.egui_ctx, settings.dark);
-        let models =
-            crate::core::inference::manifests(Path::new(&settings.model_dir)).unwrap_or_default();
+        let models = crate::core::inference::manifests(Path::new(&settings.model_dir))
+            .inspect_err(|e| {
+                log::warn!(target: "start", "modellbeschreibungen fehler={:?}", format!("{e:#}"));
+            })
+            .unwrap_or_default();
         let mut app = Self {
             settings,
             view: View::Import,
@@ -493,6 +500,7 @@ impl PhotoApp {
             last_night: String::new(),
             capture_started: std::time::Instant::now(),
             capture_requested: false,
+            frame_meter: FrameMeter::default(),
             #[cfg(test)]
             plan_bounds: None,
             #[cfg(test)]
@@ -625,6 +633,11 @@ impl PhotoApp {
                 }
             }
         }
+        log::info!(
+            target: "job",
+            "start art={kind} name={label:?} schreibend={write} laufend={}",
+            self.tasks.len()
+        );
         let writer_root = self.settings.collection.clone();
         self.tasks.push(Running {
             task: Task::start_control(
@@ -679,10 +692,16 @@ impl PhotoApp {
         } else {
             (text.clone(), text)
         };
+        let view = self.notice_origin.unwrap_or(self.view);
+        if error {
+            log::warn!(target: "hinweis", "fehler ansicht={view:?} text={text:?}");
+        } else {
+            log::info!(target: "hinweis", "ansicht={view:?} text={text:?}");
+        }
         self.notice = Some(Notice {
             text: notice,
             error,
-            view: Some(self.notice_origin.unwrap_or(self.view)),
+            view: Some(view),
             set: std::time::Instant::now(),
         });
         self.history.push(format!(
@@ -1262,16 +1281,99 @@ impl PhotoApp {
             ))
         });
     }
+    /// Ergebnis eines Auftrags, dessen Revision nicht mehr gilt: es wird verworfen.
+    fn stale(&self, outcome: &Outcome, running: &Running) -> bool {
+        match outcome {
+            Outcome::Synced(inner, _) => self.stale(inner, running),
+            Outcome::Scan(revision, _) => *revision != self.scan_revision,
+            Outcome::Search(revision, ..) => *revision != self.query_revision,
+            Outcome::Folders(revision, _) => {
+                self.folder_pending != Some(*revision)
+                    || running.collection != self.settings.collection
+            }
+            Outcome::Faces(revision, ..) => *revision != self.face_revision,
+            Outcome::Detail(revision, ..) => *revision != self.detail_revision,
+            Outcome::Suggestions(revision, id, _) => {
+                *revision != self.naming_revision || self.naming != Some(*id)
+            }
+            Outcome::RelationshipGraph(revision, _) => {
+                *revision != self.relationship_graph.revision
+                    || running.collection != self.settings.collection
+            }
+            Outcome::PersonInsights(..) | Outcome::Duplicates(..) | Outcome::Named(_) => {
+                running.collection != self.settings.collection
+            }
+            _ => false,
+        }
+    }
+    /// Eine Zeile je beendetem Auftrag: Art, Dauer seit dem Start (mit Wartezeit), Ergebnis,
+    /// Fortschritt, Phasenzeiten und bei Fehlern der Text.
+    fn log_job_end(&self, running: &Running, result: &Result<Outcome>) {
+        if !diag::enabled() {
+            return;
+        }
+        let control = &running.task.control;
+        let cancelled = control.cancel.load(Ordering::Relaxed);
+        let (verdict, error) = match result {
+            Err(e) if cancelled => ("abgebrochen", Some(format!("{e:#}"))),
+            Err(e) => ("fehler", Some(format!("{e:#}"))),
+            Ok(outcome) if self.stale(outcome, running) => ("verworfen", None),
+            Ok(_) => ("ok", None),
+        };
+        let items = match result {
+            Ok(Outcome::Scan(_, scan)) => format!(" dateien={}", scan.files.len()),
+            Ok(Outcome::Search(_, _, page, _)) => format!(" fotos={}", page.photos.len()),
+            Ok(Outcome::Faces(_, _, page)) => format!(" gruppen={}", page.groups.len()),
+            Ok(Outcome::Detail(_, _, faces, _)) => format!(" gesichter={}", faces.len()),
+            Ok(Outcome::Imported(report)) => format!(
+                " kopiert={} übersprungen={} fehler_dateien={}",
+                report.copied.len(),
+                report.skipped.len(),
+                report.errors.len()
+            ),
+            _ => String::new(),
+        };
+        let progress = control.snapshot();
+        let phases: Vec<String> = control
+            .timings()
+            .into_iter()
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(name, seconds)| format!("{name}:{:.0}", seconds * 1000.0))
+            .collect();
+        let level = if verdict == "fehler" {
+            log::Level::Warn
+        } else {
+            log::Level::Info
+        };
+        log::log!(
+            target: "job",
+            level,
+            "ende art={} name={:?} dauer_ms={:.1} ergebnis={verdict} fortschritt={}/{}{items}{}{}",
+            running.kind,
+            running.task.label,
+            diag::millis(running.task.started.elapsed()),
+            progress.done,
+            progress.total,
+            if phases.is_empty() {
+                String::new()
+            } else {
+                format!(" phasen_ms={:?}", phases.join(","))
+            },
+            error.map_or_else(String::new, |e| format!(" fehler={e:?}")),
+        );
+    }
     fn poll(&mut self, ctx: &egui::Context) {
-        self.thumbnails.poll(ctx);
+        self.frame_meter.current.textures += self.thumbnails.poll(ctx);
         let mut completed = Vec::new();
         for (index, running) in self.tasks.iter().enumerate() {
             if let Some(result) = running.task.poll() {
                 completed.push((index, result));
             }
         }
+        self.frame_meter.current.jobs += completed.len();
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
+            self.log_job_end(&running, &result);
             self.notice_origin = Some(running.view);
             // Die Einrichtung geht nur nach einer erfolgreich geladenen Laufzeit weiter.
             let chained =
@@ -1997,7 +2099,9 @@ impl PhotoApp {
     }
 }
 impl eframe::App for PhotoApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let update_started = std::time::Instant::now();
+        self.measure_frame(ctx, frame, update_started);
         if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
             let size = rect.size();
             if size.x >= 980.0 && size.y >= 680.0 {
@@ -2056,12 +2160,83 @@ impl eframe::App for PhotoApp {
                 }
             }
         }
+        if diag::enabled() {
+            self.frame_meter.current.place = self.place_label();
+            self.frame_meter.current.update_ms = update_started.elapsed().as_secs_f32() * 1000.0;
+        }
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         for task in &self.tasks {
+            log::info!(target: "job", "beim_beenden_gestoppt art={} name={:?}", task.kind, task.task.label);
             task.task.control.stop();
         }
         let _ = self.settings.save();
+        log::info!(target: "start", "app_beendet laufzeit_s={}", diag::uptime().as_secs());
+        diag::flush(Duration::from_secs(2));
+    }
+}
+impl PhotoApp {
+    /// Ansicht und Reiter fürs Diagnose-Log, z. B. `faces/unknown` oder `people/Time`.
+    fn place_label(&self) -> String {
+        let view = format!("{:?}", self.view).to_lowercase();
+        match self.view {
+            View::Faces => format!("{view}/{}", self.face_mode),
+            View::People if self.person_mode == PersonMode::Faces => {
+                format!("{view}/Faces/{}", self.person_face_mode)
+            }
+            View::People => format!("{view}/{:?}", self.person_mode),
+            _ => view,
+        }
+    }
+    /// Verbucht den vorigen Frame: eframe misst Aufbau, Tessellierung und Zeichnen
+    /// (`cpu_usage`, ohne Warten auf den Bildschirm). Langsame Frames und die Zusammenfassung
+    /// gehen ins Diagnose-Log.
+    fn measure_frame(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        now: std::time::Instant,
+    ) {
+        if !diag::enabled() {
+            self.frame_meter.current = Default::default();
+            return;
+        }
+        if ctx.cumulative_frame_nr() == 1 {
+            log::info!(
+                target: "start",
+                "erster_frame_fertig seit_start_ms={:.1}",
+                diag::millis(diag::uptime())
+            );
+        }
+        let Some(seconds) = frame.info().cpu_usage else {
+            return;
+        };
+        let (slow, summary) = self.frame_meter.record(now, seconds * 1000.0);
+        if let Some(note) = slow {
+            log::info!(
+                target: "ui.frame",
+                "langsam dauer_ms={:.1} update_ms={:.1} ansicht={} texturen={} auftraege={} laufend={}",
+                seconds * 1000.0,
+                note.update_ms,
+                note.place,
+                note.textures,
+                note.jobs,
+                self.tasks.len()
+            );
+        }
+        if let Some(s) = summary {
+            log::info!(
+                target: "ui.frame",
+                "zusammenfassung frames={} avg_ms={:.1} p95_ms={:.1} max_ms={:.1} langsam={} texturen={} fenster_s={:.1}",
+                s.frames,
+                s.avg_ms,
+                s.p95_ms,
+                s.max_ms,
+                s.slow,
+                s.textures,
+                s.span.as_secs_f32()
+            );
+        }
     }
 }
 /// Branch und Commit dieses Builds für die Seitenleiste, z. B. „main · 1af9a4e“ (aus `build.rs`).

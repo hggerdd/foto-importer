@@ -91,6 +91,22 @@ pub const PERSON_YEARS: std::ops::RangeInclusive<i32> = 1826..=2200;
 pub const DUPLICATE_PERSON_MIN: f32 = 0.55;
 /// Höchstzahl gleichzeitig gezeigter Rückfragen „Möglicherweise dieselbe Person“.
 pub const DUPLICATE_PERSON_MAX: usize = 20;
+/// Diagnose-Log (`core::diag`): Größe einer Logdatei und Grenze aller Logdateien zusammen;
+/// darüber wird die älteste Datei gelöscht (10 Dateien zu 30 MB).
+pub const DIAG_FILE_BYTES: u64 = 30 * 1024 * 1024;
+pub const DIAG_TOTAL_BYTES: u64 = 300 * 1024 * 1024;
+/// Zeilen, die auf den Schreib-Thread warten dürfen; darüber gehen Zeilen verloren (gezählt),
+/// statt die Oberfläche zu blockieren.
+pub const DIAG_QUEUE: usize = 8192;
+/// Frames ab dieser Dauer (Aufbau, Tessellierung, Zeichnen) stehen einzeln im Log. 50 ms
+/// sind drei verpasste Bilder bei 60 Hz und als Ruckeln sichtbar.
+pub const DIAG_SLOW_FRAME_MS: f32 = 50.0;
+/// Abstand der Frame-Zusammenfassungen, solange die Oberfläche zeichnet.
+pub const DIAG_FRAME_SUMMARY: std::time::Duration = std::time::Duration::from_secs(10);
+/// Vorschauen, deren Dekodierung länger dauert, stehen einzeln im Log (sonst 100 bis 300 ms).
+pub const DIAG_SLOW_PREVIEW_MS: u128 = 1000;
+/// Öffnen einer Sammlungsdatenbank ab dieser Dauer steht im Log (sonst wenige Millisekunden).
+pub const DIAG_SLOW_DB_OPEN_MS: u128 = 200;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
@@ -161,6 +177,8 @@ pub struct Settings {
     /// Sammlungsordner, in die importiert wurde und deren Index die neuen Dateien noch nicht
     /// kennt. Bleibt über das Programmende hinaus erhalten (ADR Import).
     pub index_pending: Vec<String>,
+    /// Diagnose-Log mit Frame- und Auftragszeiten und Fehlern schreiben (`core::diag`).
+    pub diagnostic_log: bool,
 }
 
 impl Default for Settings {
@@ -189,6 +207,7 @@ impl Default for Settings {
             window_size: [1280.0, 800.0],
             dng_update: Default::default(),
             index_pending: Vec::new(),
+            diagnostic_log: true,
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
             model_dir: resources.join("models").to_string_lossy().into_owned(),
@@ -242,7 +261,16 @@ impl Settings {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
     }
+    /// Ordner des Diagnose-Logs neben der Einstellungsdatei, nie in einer Sammlung.
+    pub fn log_dir() -> PathBuf {
+        Self::path().with_file_name("logs")
+    }
     pub fn save(&self) -> anyhow::Result<()> {
+        self.write().inspect_err(|e| {
+            log::warn!(target: "einstellungen", "speichern fehlgeschlagen fehler={:?}", format!("{e:#}"));
+        })
+    }
+    fn write(&self) -> anyhow::Result<()> {
         let path = Self::path();
         let parent = path
             .parent()

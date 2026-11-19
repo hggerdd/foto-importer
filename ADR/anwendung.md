@@ -68,6 +68,33 @@
 - **Gebauter Stand sichtbar:** Unten links steht Git-Branch und Commit des Builds („main ·
   1af9a4e“, „+“ bei ungesicherten Änderungen), damit sich bei Fehlern ein Versionsproblem
   ausschließen lässt. `build.rs` liest beides beim Bauen; ohne Git steht dort „unbekannt“.
+- **Diagnose-Log:** Schalter „Diagnose-Log schreiben“ unter Einstellungen (Arbeitsplatz,
+  `diagnostic_log`, Standard an, wirkt sofort); Ordner `%APPDATA%\FotoImporter\logs` neben
+  der Einstellungsdatei, nie in einer Sammlung. Aufrufer nutzen die `log`-Makros mit
+  ausdrücklichem Bereich (`target: "job"`) oder `core::diag::span` für Zeiten. `log` ist
+  schon über eframe im Baum; Schreiber und Rotation sind eigener Code (`core::diag`, rund 300
+  Zeilen), weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
+  Gesamtgrenze bieten und `file-rotate` mehr Abhängigkeiten bringt als es spart.
+  Formatiert wird auf dem aufrufenden Thread, geschrieben auf einem eigenen Thread über eine
+  begrenzte Warteschlange (`DIAG_QUEUE`); ist sie voll, gehen Zeilen verloren und werden
+  gezählt, die Oberfläche wartet nie. Dateien `foto-importer-<Zeitstempel>.log` zu höchstens
+  `DIAG_FILE_BYTES` (30 MB), alle zusammen höchstens `DIAG_TOTAL_BYTES` (300 MB); beim
+  Beginn einer neuen Datei werden die ältesten gelöscht, andere Dateien im Ordner nie.
+  Format je Zeile: `2026-11-19 18:25:03.123 INFO  job ende art=faces dauer_ms=73.4 …`
+  (Ortszeit, Stufe, Bereich, Schlüssel=Wert, Texte in Anführungszeichen, Zeilenumbrüche als
+  „ | “). Fremde Crates nur ab Warnung. Inhalt: Sitzungsbeginn mit Version, Build und
+  Einstellungen; Startphasen (Einstellungen, App-Aufbau, erster Frame); jeder Frame ab
+  `DIAG_SLOW_FRAME_MS` (50 ms, gemessen von eframe: Aufbau, Tessellierung, Zeichnen) mit
+  Ansicht, hochgeladenen Texturen und übernommenen Aufträgen; alle `DIAG_FRAME_SUMMARY`
+  (10 s) eine Zusammenfassung (Frames, Mittel, p95, Maximum, langsame), nur solange gezeichnet
+  wird; Start und Ende jedes Auftrags aus `launch` mit Art, Dauer, Ergebnis (ok, verworfen
+  wegen Revision, abgebrochen, Fehler mit Text), Fortschritt, Phasenzeiten und Anzahlen;
+  Abgleich (MatchCache bereit/vollständig), langsame oder fehlerhafte Vorschauen,
+  Datenbank-Öffnen ab `DIAG_SLOW_DB_OPEN_MS` oder mit Fehler, Migrationen; jeder Hinweis
+  der Oberfläche (Fehler als Warnung), fehlgeschlagenes Speichern der Einstellungen; Panik
+  auf jedem Thread mit Ort und Backtrace, danach wird das Log geleert. Kosten (2026-11-19,
+  `examples/diag_bench.rs`, Debug-Build): ausgeschaltet 15 ns je Zeile, eingeschaltet 8 µs
+  (Formatieren und Einreihen); im Normalbetrieb wenige Zeilen je Sekunde.
 - **Oberfläche:** Ein Arbeitsbereich, Kontext rechts, sichtbare
   Aufgaben. Eine Hauptaktion je Kontext, Leerzustände mit Einstieg, konkrete Fehlermeldungen:
   Bekannte Fehler erscheinen als verständlicher Satz, der Originaltext steht im Verlauf.
@@ -85,7 +112,10 @@ läuft nur bei geöffneter App.
 
 ## Beim Ändern beachten
 
-Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden. Neuer Zustand, der nur für
+Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden; Aufträge über `launch`
+erscheinen damit auch im Diagnose-Log. Eigene Logzeilen immer mit Bereich ohne `::`
+(`target: "…"`), sonst gelten sie als fremd und erscheinen erst ab Warnung. Fehler, die
+nur geschluckt werden, mindestens als Warnung loggen. Neuer Zustand, der nur für
 eine Sammlung gilt, wird in `set_collection` zurückgesetzt. Ansichten wechseln über
 `open_view`, `set_face_mode` und `set_person_mode`, damit die passende Seite gelesen wird
 (`page_mode`). Neue Grenzwerte gehören in

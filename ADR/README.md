@@ -8,7 +8,7 @@ ist, wo die Grenzen liegen und was bei Änderungen erhalten bleiben muss. Die Hi
 | Thema | Inhalt |
 |---|---|
 | [Arbeitsweise](arbeitsweise.md) | ADR-Pflege, Prüfungen, Agentenregeln |
-| [Anwendung und Nebenläufigkeit](anwendung.md) | Rust/egui, UI und Core, Worker, Vorrang, Einstellungen, Portionen, Navigation |
+| [Anwendung und Nebenläufigkeit](anwendung.md) | Rust/egui, UI und Core, Worker, Vorrang, Einstellungen, Portionen, Navigation, Diagnose-Log |
 | [Import](import.md) | Kopieren ohne Ersetzen, Datumsquelle, DNG, Adobe-Versionsprüfung |
 | [Sammlung und Daten](sammlung-daten.md) | SQLite, Sperre, Migration, Foto-Identität, Indizierung, Indizes |
 | [Sammlungsansicht](sammlungsansicht.md) | Suche, Galerie, Bilddetails, Ordnerbaum, Vorschau-Cache |

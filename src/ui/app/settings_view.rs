@@ -544,10 +544,46 @@ impl PhotoApp {
                 theme::apply(ui.ctx(), self.settings.dark);
                 self.save();
             }
+            ui.add_space(16.0);
+            self.diagnostic_settings(ui);
         });
         if let Some(pick) = chosen {
             self.pick(pick);
         }
+    }
+    /// Schalter „Diagnose-Log schreiben“ samt Logordner (ADR Anwendung).
+    fn diagnostic_settings(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .checkbox(&mut self.settings.diagnostic_log, "Diagnose-Log schreiben")
+            .on_hover_text(
+                "Zeichnet Ruckeln, Dauer von Aufträgen und Fehler auf, höchstens 300 MB; \
+                 die ältesten Einträge werden gelöscht. Es verlässt den Rechner nicht.",
+            )
+            .changed()
+        {
+            let on = self.settings.diagnostic_log;
+            if on {
+                crate::core::diag::set_enabled(true);
+            }
+            log::info!(target: "einstellungen", "diagnose_log={on}");
+            if !on {
+                crate::core::diag::set_enabled(false);
+            }
+            self.save();
+        }
+        let dir = Settings::log_dir();
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Logordner: {}", dir.display()))
+                    .small()
+                    .weak(),
+            );
+            // Der Ordner entsteht mit der ersten Zeile; vorher meldet der Explorer ihn als fehlend.
+            ui.hyperlink_to(
+                "Öffnen",
+                format!("file:///{}", dir.display().to_string().replace('\\', "/")),
+            );
+        });
     }
     pub(super) fn tasks_view(&mut self, ui: &mut egui::Ui) {
         Self::header(ui, "Aufgaben");
