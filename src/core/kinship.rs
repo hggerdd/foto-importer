@@ -5,7 +5,7 @@
 //! Blutsverwandtschaft über den nächsten gemeinsamen Vorfahren (Schritte aufwärts,
 //! Schritte abwärts), Verschwägerung über genau einen Partnerschritt und
 //! Stiefgeschwister über Elternpartner. Reine Funktionen ohne Datenbankzugriff.
-use super::relations::{Edge, Gender, Kind};
+use super::relations::{Edge, Gender, Kind, Role};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Höchstzahl Generationen je Richtung (aufwärts zum gemeinsamen Vorfahren und abwärts).
@@ -403,6 +403,161 @@ pub struct Group {
     pub members: Vec<Member>,
     /// Weitere Treffer, die wegen [`MAX_PER_GROUP`] nicht aufgeführt sind.
     pub more: usize,
+}
+
+/// Eintrag der Beziehungsübersicht in den Personendetails: gespeichert (bearbeitbar)
+/// oder aus dem Stammbaum berechnet (nicht gespeichert).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// Rolle der anderen Person aus `relations::direct`.
+    Recorded(Role),
+    /// "andere Person ist <Relation> von der Bezugsperson".
+    Computed(Relation),
+}
+
+/// Rang einer Gruppe der Übersicht, kleiner = weiter oben. Reihenfolge: Partner,
+/// Blutsverwandte nach Nähe (Eltern, Kinder, Geschwister, Halbgeschwister, Großeltern,
+/// Enkel, Onkel/Tanten, Nichten/Neffen, Cousins …), Stief- und Schwiegerverwandte,
+/// direkt erfasste Behelfsverbindungen, frühere Partner, Freunde, Bekannte.
+pub type OverviewRank = (u8, u8, u8, u8, u8);
+
+/// Blutsverwandte: zuerst nach Schrittzahl, bei gleicher Zahl Seitenlinie (Geschwister,
+/// Onkel) vor gerader Linie (Großeltern), Ältere vor Jüngeren, volle vor halben.
+fn blood_rank(a_gen: u8, b_gen: u8, half: bool) -> OverviewRank {
+    let lineal = u8::from(a_gen == 0 || b_gen == 0);
+    (
+        1,
+        a_gen.saturating_add(b_gen),
+        lineal,
+        a_gen,
+        u8::from(half),
+    )
+}
+
+/// Rang eines Eintrags; Einträge derselben Überschrift teilen den kleinsten Rang.
+pub fn overview_rank(entry: Entry) -> OverviewRank {
+    match entry {
+        Entry::Recorded(Role::Partner) | Entry::Computed(Relation::Partner) => (0, 0, 0, 0, 0),
+        Entry::Recorded(Role::Parent) => blood_rank(0, 1, false),
+        Entry::Recorded(Role::Child) => blood_rank(1, 0, false),
+        Entry::Computed(Relation::Blood { a_gen, b_gen, half }) => blood_rank(a_gen, b_gen, half),
+        Entry::Computed(Relation::StepSibling) => (2, 0, 0, 0, 0),
+        Entry::Computed(Relation::ThroughPartnerOfB { a_gen, p_gen }) => {
+            (2, 1, a_gen.saturating_add(p_gen), a_gen, 0)
+        }
+        Entry::Computed(Relation::ThroughPartnerOfA { p_gen, b_gen }) => {
+            (2, 1, p_gen.saturating_add(b_gen), p_gen, 1)
+        }
+        Entry::Recorded(Role::Sibling) | Entry::Computed(Relation::RecordedSibling) => {
+            (3, 0, 0, 0, 0)
+        }
+        Entry::Recorded(Role::Cousin) | Entry::Computed(Relation::RecordedCousin) => {
+            (3, 1, 0, 0, 0)
+        }
+        Entry::Recorded(Role::FormerPartner) | Entry::Computed(Relation::FormerPartner) => {
+            (4, 0, 0, 0, 0)
+        }
+        Entry::Recorded(Role::Friend) => (5, 0, 0, 0, 0),
+        Entry::Recorded(Role::Acquaintance) => (6, 0, 0, 0, 0),
+    }
+}
+
+/// Überschrift der Gruppe eines Eintrags (Mehrzahl, geschlechtsneutral).
+pub fn overview_title(entry: Entry) -> String {
+    match entry {
+        Entry::Recorded(role) => role.group_label().into(),
+        Entry::Computed(relation) => relation.group_title(),
+    }
+}
+
+/// Berechnete Einträge, die eine gespeicherte Beziehung nur wiederholen (Partner,
+/// Eltern, Kinder, Behelfsverbindungen), erscheinen nur als gespeicherter Eintrag.
+fn repeats_recorded(relation: Relation) -> bool {
+    matches!(
+        relation,
+        Relation::Partner
+            | Relation::FormerPartner
+            | Relation::RecordedSibling
+            | Relation::RecordedCousin
+            | Relation::Blood {
+                a_gen: 0,
+                b_gen: 1,
+                half: false
+            }
+            | Relation::Blood {
+                a_gen: 1,
+                b_gen: 0,
+                half: false
+            }
+    )
+}
+
+/// Ein Eintrag der Übersicht.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverviewItem {
+    pub person: i64,
+    pub entry: Entry,
+}
+
+/// Eine Gruppe der Übersicht: gleiche Beziehung untereinander.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverviewGroup {
+    pub title: String,
+    pub items: Vec<OverviewItem>,
+    /// Weitere berechnete Treffer, die wegen [`MAX_PER_GROUP`] fehlen.
+    pub more: usize,
+}
+
+/// Beziehungsübersicht einer Person: gespeicherte (`direct`) und berechnete Beziehungen
+/// (`relatives`) in einer Liste, je Überschrift eine Gruppe, Gruppen nach
+/// [`overview_rank`], Einträge nach Name (ohne Groß-/Kleinschreibung), dann ID.
+pub fn overview(
+    direct: &[(Role, i64)],
+    relatives: &[Group],
+    name: &dyn Fn(i64) -> String,
+) -> Vec<OverviewGroup> {
+    let mut groups: BTreeMap<String, (OverviewRank, Vec<OverviewItem>, usize)> = BTreeMap::new();
+    let mut add = |entry: Entry, person: Option<i64>, more: usize| {
+        let rank = overview_rank(entry);
+        let group = groups
+            .entry(overview_title(entry))
+            .or_insert((rank, Vec::new(), 0));
+        group.0 = group.0.min(rank);
+        group.2 += more;
+        if let Some(person) = person {
+            group.1.push(OverviewItem { person, entry });
+        }
+    };
+    for &(role, person) in direct {
+        add(Entry::Recorded(role), Some(person), 0);
+    }
+    for group in relatives {
+        let mut shown = false;
+        for member in &group.members {
+            if !repeats_recorded(member.relation) {
+                add(Entry::Computed(member.relation), Some(member.person), 0);
+                shown = true;
+            }
+        }
+        if shown && group.more > 0 {
+            let first = group.members.iter().find(|m| !repeats_recorded(m.relation));
+            if let Some(member) = first {
+                add(Entry::Computed(member.relation), None, group.more);
+            }
+        }
+    }
+    let mut sorted: Vec<_> = groups
+        .into_iter()
+        .filter(|(_, (_, items, _))| !items.is_empty())
+        .collect();
+    sorted.sort_by(|(ta, (ra, _, _)), (tb, (rb, _, _))| ra.cmp(rb).then_with(|| ta.cmp(tb)));
+    sorted
+        .into_iter()
+        .map(|(title, (_, mut items, more))| {
+            items.sort_by_cached_key(|i| (name(i.person).to_lowercase(), i.person));
+            OverviewGroup { title, items, more }
+        })
+        .collect()
 }
 
 /// Der Stammbaum: Eltern-Kind-Kanten und Partner, dazu Geschlechter. Billig aufzubauen,

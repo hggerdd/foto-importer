@@ -574,6 +574,79 @@ fn people_table_and_detail_panel_are_not_cut_off_in_small_and_large_windows() {
     }
 }
 
+/// Alle gezeichneten Texte mit ihrer Position (auch aus verschachtelten Formen).
+fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Pos2, String)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Pos2, String)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.pos, text.galley.text().to_string())),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn person_details_group_relations_partner_first_then_family_then_friends() {
+    use crate::core::relations::{Role, canonical};
+    let (context, mut app) = people_app(10);
+    // Person 1: Partnerin 4, Eltern 2 und 3, Bruder 7 (berechnet über die Eltern),
+    // Freund 5, Bekannte 8.
+    let edges = vec![
+        canonical(4, Role::Partner, 1),
+        canonical(2, Role::Parent, 1),
+        canonical(3, Role::Parent, 1),
+        canonical(2, Role::Parent, 7),
+        canonical(3, Role::Parent, 7),
+        canonical(5, Role::Friend, 1),
+        canonical(8, Role::Acquaintance, 1),
+    ];
+    *app.face_page.family = crate::core::kinship::Family::new(&edges, &BTreeMap::new());
+    app.face_page.relations = edges;
+    app.relation_from = Some(1);
+    let size = egui::vec2(1920.0, 3000.0);
+    draw_people(&context, &mut app, size);
+    let output = context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        },
+        |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+    );
+    let panel = app.people_ui.bounds.expect("page was drawn").panel;
+    let texts: Vec<_> = painted_texts(&output.shapes)
+        .into_iter()
+        .filter(|(pos, _)| panel.contains(*pos))
+        .collect();
+    let top = texts
+        .iter()
+        .find(|(_, t)| t == "Beziehungen")
+        .map(|(pos, _)| pos.y)
+        .expect("Abschnitt Beziehungen");
+    let y = |heading: &str| {
+        texts
+            .iter()
+            .filter(|(pos, t)| t == heading && pos.y > top)
+            .map(|(pos, _)| pos.y)
+            .reduce(f32::min)
+            .unwrap_or_else(|| panic!("Überschrift {heading} fehlt"))
+    };
+    let order = ["Partner", "Eltern", "Geschwister", "Freunde", "Bekannte"].map(y);
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+    // Die Eltern stehen gemeinsam unter einer Überschrift, genau einmal.
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|(pos, t)| t == "Eltern" && pos.y > top)
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn people_filter_reduces_rows_and_the_selection_survives_a_reload() {
     let (context, mut app) = people_app(120);

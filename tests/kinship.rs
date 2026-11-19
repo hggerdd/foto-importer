@@ -545,3 +545,122 @@ fn labels_exist_for_every_blood_relation_and_gender() {
         }
     }
 }
+
+#[test]
+fn overview_groups_partner_first_then_family_by_closeness_then_friends() {
+    use foto_importer::core::kinship::{Entry, overview, overview_rank};
+    // Ben (16): gespeichert Partnerin 30, Eltern 7 und 9, Kind 29; dazu Freundin 40,
+    // Bekannter 41, frühere Partnerin 42, Behelfs-Geschwister 43.
+    let f = fixture();
+    let direct = vec![
+        (Role::Parent, 7),
+        (Role::Parent, 9),
+        (Role::Child, 29),
+        (Role::Partner, 30),
+        (Role::FormerPartner, 42),
+        (Role::Sibling, 43),
+        (Role::Friend, 40),
+        (Role::Acquaintance, 41),
+    ];
+    let names: BTreeMap<i64, &str> = [
+        (7, "Vince"),
+        (9, "anna"),
+        (17, "Dora"),
+        (20, "Hans"),
+        (22, "Mia"),
+    ]
+    .into_iter()
+    .collect();
+    let name = |id: i64| names.get(&id).map_or(format!("#{id}"), |n| n.to_string());
+    let groups = overview(&direct, &f.relatives_of(16), &name);
+    let titles: Vec<&str> = groups.iter().map(|g| g.title.as_str()).collect();
+    let position = |t: &str| {
+        titles
+            .iter()
+            .position(|x| *x == t)
+            .unwrap_or_else(|| panic!("{t} fehlt in {titles:?}"))
+    };
+    let expected = [
+        "Partner",
+        "Eltern",
+        "Kinder",
+        "Geschwister",
+        "Halbgeschwister",
+        "Großeltern",
+        "Onkel und Tanten",
+        "Urgroßeltern",
+        "Cousins und Cousinen 1. Grades",
+        "Geschwister (direkt erfasst)",
+        "Frühere Partner",
+        "Freunde",
+        "Bekannte",
+    ];
+    let positions: Vec<usize> = expected.iter().map(|t| position(t)).collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "Reihenfolge {titles:?}"
+    );
+    // Stief- und Schwiegerverwandte stehen nach den Blutsverwandten, vor dem Behelf.
+    let in_law = titles
+        .iter()
+        .position(|t| t.contains("angeheiratet") || t.starts_with("Schw"))
+        .expect("angeheiratete Verwandte");
+    assert!(in_law > position("Cousins und Cousinen 1. Grades"));
+    assert!(in_law < position("Geschwister (direkt erfasst)"));
+    // Eine Überschrift je Beziehung, keine doppelt; Einträge nach Name sortiert.
+    let mut unique = titles.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), titles.len());
+    let parents = &groups[position("Eltern")];
+    assert_eq!(
+        parents.items.iter().map(|i| i.person).collect::<Vec<_>>(),
+        [9, 7]
+    );
+    assert!(
+        parents
+            .items
+            .iter()
+            .all(|i| i.entry == Entry::Recorded(Role::Parent))
+    );
+    let half = &groups[position("Halbgeschwister")];
+    assert_eq!(
+        half.items.iter().map(|i| i.person).collect::<Vec<_>>(),
+        [20, 22]
+    );
+    // Berechnete Partner/Eltern/Kinder wiederholen die gespeicherten nicht.
+    assert_eq!(groups[position("Partner")].items.len(), 1);
+    assert_eq!(groups[position("Kinder")].items.len(), 1);
+    // Rangfolge direkt: Partner < Eltern < Kinder < Geschwister < Großeltern < Enkel
+    // < Onkel < Nichten < Cousins < Stief < Behelf < frühere Partner < Freunde < Bekannte.
+    let blood = |a_gen, b_gen| {
+        Entry::Computed(Relation::Blood {
+            a_gen,
+            b_gen,
+            half: false,
+        })
+    };
+    let ranks = [
+        Entry::Recorded(Role::Partner),
+        Entry::Recorded(Role::Parent),
+        Entry::Recorded(Role::Child),
+        blood(1, 1),
+        Entry::Computed(Relation::Blood {
+            a_gen: 1,
+            b_gen: 1,
+            half: true,
+        }),
+        blood(0, 2),
+        blood(2, 0),
+        blood(1, 2),
+        blood(2, 1),
+        blood(2, 2),
+        Entry::Computed(Relation::StepSibling),
+        Entry::Recorded(Role::Sibling),
+        Entry::Recorded(Role::Cousin),
+        Entry::Recorded(Role::FormerPartner),
+        Entry::Recorded(Role::Friend),
+        Entry::Recorded(Role::Acquaintance),
+    ]
+    .map(overview_rank);
+    assert!(ranks.windows(2).all(|w| w[0] < w[1]), "{ranks:?}");
+}
