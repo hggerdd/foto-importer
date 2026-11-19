@@ -1156,7 +1156,12 @@ pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Res
         .ok()
         .and_then(|mut slot| slot.take())
         .unwrap_or_default();
+    let mut span = super::diag::span("gesichter", "abgleich");
+    span.field("cache_bereit", cache.owner.is_some());
     let result = rematch_with(collection, key, control, &mut cache);
+    span.field("cache_gesichter", cache.len())
+        .field("ok", result.is_ok());
+    drop(span);
     if let Ok(mut slot) = MATCH_CACHE.lock() {
         *slot = Some(cache);
     }
@@ -1195,6 +1200,10 @@ pub fn rematch_with(
     let dim = state.entries.0.first().map_or(512, |e| e.2.len());
     let bytes = compared * ((dim + state.entries.1.len()) * 4 + 96);
     if bytes > crate::config::MATCH_CACHE_MAX_BYTES {
+        log::info!(
+            target: "gesichter",
+            "abgleich_vollstaendig grund=cache_zu_gross bytes={bytes} gesichter={compared}"
+        );
         *cache = MatchCache::default();
         return rematch_full(collection, key, control);
     }

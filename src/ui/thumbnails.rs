@@ -56,6 +56,29 @@ fn evict(cache: &mut HashMap<String, Entry>, bytes: &mut usize, frame: u64, max_
     }
 }
 
+/// Fehler und auffällig langsame Vorschauen ins Diagnose-Log.
+fn log_preview(
+    path: &std::path::Path,
+    elapsed: std::time::Duration,
+    result: &anyhow::Result<Preview>,
+) {
+    let millis = crate::core::diag::millis(elapsed);
+    match result {
+        Err(e) => log::warn!(
+            target: "vorschau",
+            "fehler datei={:?} dauer_ms={millis:.1} fehler={:?}",
+            path.display().to_string(),
+            format!("{e:#}")
+        ),
+        Ok(_) if elapsed.as_millis() >= config::DIAG_SLOW_PREVIEW_MS => log::info!(
+            target: "vorschau",
+            "langsam datei={:?} dauer_ms={millis:.1}",
+            path.display().to_string()
+        ),
+        Ok(_) => {}
+    }
+}
+
 pub struct Thumbnails {
     requests: mpsc::SyncSender<(String, PreviewRequest, String)>,
     results: mpsc::Receiver<(String, u64, anyhow::Result<Preview>)>,
@@ -94,7 +117,12 @@ impl Thumbnails {
                     }
                     let _foreground = crate::core::jobs::foreground();
                     let request_generation = request.generation;
+                    let started = std::time::Instant::now();
+                    let path = crate::core::diag::enabled().then(|| request.path.clone());
                     let result = previews::cached_preview(request, &exiftool, &Control::default());
+                    if let Some(path) = path {
+                        log_preview(&path, started.elapsed(), &result);
+                    }
                     if out.send((key, request_generation, result)).is_err() {
                         break;
                     }
@@ -123,7 +151,9 @@ impl Thumbnails {
             .get(&cache_key(request))
             .is_some_and(|entry| entry.texture.is_some())
     }
-    pub fn poll(&mut self, ctx: &egui::Context) {
+    /// Übernimmt fertige Vorschauen; liefert die Zahl hochgeladener Texturen.
+    pub fn poll(&mut self, ctx: &egui::Context) -> usize {
+        let mut uploaded = 0;
         while let Ok((key, generation, result)) = self.results.try_recv() {
             self.pending.remove(&key);
             if generation != self.generation.load(Ordering::Relaxed) {
@@ -132,6 +162,7 @@ impl Thumbnails {
             let (texture, bytes, error) = match result {
                 Ok(p) => {
                     let bytes = p.rgba.len();
+                    uploaded += 1;
                     let image =
                         egui::ColorImage::from_rgba_unmultiplied([p.width, p.height], &p.rgba);
                     (
@@ -162,6 +193,7 @@ impl Thumbnails {
             ctx.cumulative_frame_nr(),
             config::CACHE_BYTES,
         );
+        uploaded
     }
     /// Textur zu einer Anfrage ohne sie zu zeichnen (z. B. für runde Ausschnitte).
     /// Stößt das Laden auf dem Worker an; `None`, solange nichts vorliegt.

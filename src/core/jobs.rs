@@ -213,11 +213,15 @@ impl<T: Send + 'static> Task<T> {
         work: impl FnOnce(Control) -> Result<T> + Send + 'static,
     ) -> Self {
         let worker_control = control.clone();
+        let label: String = label.into();
+        let worker_label = label.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(worker_control)))
                     .unwrap_or_else(|_| {
+                        // Meldung, Ort und Backtrace schreibt der Panik-Haken (`diag`).
+                        log::error!(target: "job", "worker_panik name={worker_label:?}");
                         Err(anyhow::anyhow!(
                             "Interner Workerfehler; Auftrag wurde beendet"
                         ))
@@ -226,7 +230,7 @@ impl<T: Send + 'static> Task<T> {
         });
         Self {
             control,
-            label: label.into(),
+            label,
             receiver,
             started: Instant::now(),
         }

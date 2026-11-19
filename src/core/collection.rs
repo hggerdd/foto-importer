@@ -22,6 +22,26 @@ impl Drop for WriterLock {
 }
 impl Collection {
     pub fn open(root: &Path, write: bool) -> Result<Self> {
+        let started = std::time::Instant::now();
+        let opened = Self::open_inner(root, write);
+        let elapsed = started.elapsed();
+        match &opened {
+            Err(e) => log::warn!(
+                target: "db",
+                "oeffnen_fehler schreibend={write} dauer_ms={:.1} fehler={:?}",
+                super::diag::millis(elapsed),
+                format!("{e:#}")
+            ),
+            Ok(_) if elapsed.as_millis() >= crate::config::DIAG_SLOW_DB_OPEN_MS => log::info!(
+                target: "db",
+                "oeffnen_langsam schreibend={write} dauer_ms={:.1}",
+                super::diag::millis(elapsed)
+            ),
+            Ok(_) => {}
+        }
+        opened
+    }
+    fn open_inner(root: &Path, write: bool) -> Result<Self> {
         let root = root
             .canonicalize()
             .context("Sammlung ist nicht erreichbar")?;
@@ -82,6 +102,8 @@ impl Collection {
                 db.execute("INSERT INTO projection_revision VALUES(0)", [])?;
                 db.execute_batch(&format!("{} COMMIT;", super::relations::seed_sql()))?;
             } else if write && (1..=5).contains(&version) {
+                let mut span = super::diag::span("db", "migration");
+                span.field("von_schema", version);
                 super::migrations::upgrade(&db, &root, version)?;
             } else if version != 6 && !(!write && (4..=5).contains(&version)) {
                 bail!(
