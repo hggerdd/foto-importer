@@ -68,9 +68,9 @@
 **Oberfläche**
 
 - **Ansicht „Personen“:** Die Übersicht mit der Personentabelle ist der Hauptinhalt. Der
-  Umschalter „Übersicht | Stammbaum | Graph | Zeitreise“ gilt der in der Tabelle gewählten
-  Person: Stammbaum, Graph und [Zeitreise](zeitreise.md) öffnen sich für sie
-  (`set_person_mode`); neben dem Umschalter steht ihr Name. Wer in einer dieser Ansichten
+  Umschalter „Übersicht | Stammbaum | Graph | Zeitreise | Gesichter“ gilt der in der Tabelle
+  gewählten Person: Stammbaum, Graph, [Zeitreise](zeitreise.md) und Gesichter öffnen sich für
+  sie (`set_person_mode`); neben dem Umschalter steht ihr Name. Wer in einer dieser Ansichten
   eine andere Person wählt, wählt sie für alle. Ohne gewählte Person nennen die drei
   Ansichten den Weg zur Auswahl und arbeiten wie zuvor mit ihrer eigenen Vorgabe
   (Stammbaum: Person mit den meisten Familienbeziehungen; Graph: alle; Zeitreise: Person
@@ -101,6 +101,23 @@
     (Jahr minus Geburtsjahr, daher „etwa“), die Ränder zeigen Jahr und Alter. Ein Klick öffnet
     die Sammlung mit der Person und dem Datumsfilter dieses Jahres. Jahre außerhalb
     `config::PERSON_YEARS` und fehlende Daten zählen als „ohne Datum“.
+- **Gesichter einer Person** (`person_faces_view`, „Gesichter prüfen“ unter dem Namen in den
+  Personendetails oder der Umschalter): oben eine Personenauswahl (gilt wie die Tabellenwahl
+  für alle Ansichten), darunter „Wahrscheinlich X · N | Bestätigt · N“. Beide Seiten nutzen
+  die Gruppenkarten, Seiten zu acht Gruppen, Rücknahme, sofortiges Ausblenden und den Leser
+  der Ansicht „Gesichter“ (`faces::page_with`, Revision `face_revision`).
+  - **Wahrscheinlich X** (Modus `probable`): unbestätigte Gesichter nach Personenscore
+    absteigend (`recognition::person_candidates`, siehe Gesichtserkennung), in Gruppen zu 28
+    geschnitten, die erste ist die wahrscheinlichste. Karte, Knöpfe und Tasten wie „Vorschläge
+    prüfen“ für diese Person („Alle N sind X“, abgewählte werden abgelehnt; „Keines ist X“;
+    „Nicht interessiert“). Nach jeder Entscheidung liest die Seite neu; bestätigte Gesichter
+    ändern die Referenzen erst mit der Wartung.
+  - **Bestätigt** (Modus `person-confirmed`): bestätigte Gesichter der Person. Falsche
+    abwählen, dann „N abgewählte sind nicht X“: nur diese erhalten die Ablehnung und werden
+    unbenannt (unter „Benennen“); die übrigen bleiben samt Referenzauswahl unberührt.
+    „Keines ist X“ gilt für die ganze Karte.
+  - Wechsel von Person, Seite oder Ansicht verwirft die angezeigten Karten bis zum neuen
+    Lesen, damit keine Karte einer anderen Seite entschieden wird.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern

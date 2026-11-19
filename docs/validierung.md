@@ -463,3 +463,32 @@ gegen den vollständigen Lauf auf einer Kopie), `incremental_rematch_notices_a_r
 `block_ranking_is_bit_identical_to_the_single_comparison` (auch die besten zwei ohne
 Sortieren). Nicht gemessen: der erste Lauf auf der USB-Festplatte von `E:\Bilder` und der
 Abgleich in der laufenden App.
+
+## Personenseite „Gesichter“ und Reiter „Ungeeignet“ (2026-11-19)
+
+Gemessen mit einer Kopie von `E:\Bilder\.myfotomanager` (lesend per SQLite-Sicherung
+kopiert, die Sammlung selbst blieb unberührt; danach gelöscht), Release, SFace, 36.590
+Gesichter, Person mit den meisten bestätigten Gesichtern („leo“):
+
+```text
+cargo run --release --example person_faces_bench -- <Kopie>
+cargo run --release --example person_faces_bench -- <Kopie> --abgleich
+```
+
+| Schritt | Zeit |
+|---|---|
+| „Wahrscheinlich leo“ ohne Zwischenspeicher (ein Durchgang über alle Vektoren), erster Lauf | 682 ms |
+| dasselbe, Folgeläufe | 99 ms |
+| dasselbe aus dem Zwischenspeicher des Abgleichs | 70 bis 79 ms |
+| ganze Seite „probable“ (8 Gruppen, mit Zählungen, Personen, Porträt) | 130 bis 150 ms |
+| Abgleich, der den Zwischenspeicher aufbaut (nur auf der Kopie) | 496 ms |
+| Seite „Ungeeignet“ (7.417 Gesichter, Seite 1) | 100 bis 108 ms |
+
+8.132 unbestätigte Gesichter erreichen für diese Person den Mindestwert 0,40
+(`config::PERSON_CANDIDATE_MIN`); beide Rechenwege liefern dieselbe Liste. Regressionen:
+`tests/face_pages.rs` (Auswahl und Seiten der ungeeigneten Gesichter, „Kein Gesicht“ in
+Zählungen, Gruppen, Abgleich und nach erneuter Analyse, Rücknahme; Rangfolge und
+28er-Gruppen der wahrscheinlichen Gesichter mit Ausschlüssen, gleiches Ergebnis vor und
+nach dem Abgleich; Bestätigen und Entfernen auf der Personenseite) und in
+`src/ui/app/tests.rs` die Karten beider Seiten. Nicht geprüft: Sichtprüfung in der laufenden
+App, Zeiten auf der USB-Festplatte selbst.

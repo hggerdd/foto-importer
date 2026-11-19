@@ -7,9 +7,10 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Reiter der Ansicht „Gesichter“:** „Benennen“ (Gruppen unbenannter Gesichter, größte
   zuerst), „Vorschläge prüfen“ (`suggested` und `auto` je Person, sicherste Gruppen zuerst;
   Schwelle und Abstand siehe Gesichtserkennung) und „Erledigt“ mit dem Umschalter
-  „Bestätigt | Ignoriert“; „Erledigt“ öffnet die zuletzt gewählte der beiden Seiten. Die
-  Reiter nennen ihre Anzahl. Personen, Stammbaum, Graph und Zeitreise liegen unter
-  „Personen“ (siehe [Personen](personen.md)). Acht
+  „Bestätigt | Ignoriert“; „Erledigt“ öffnet die zuletzt gewählte der beiden Seiten; dazu
+  „Ungeeignet“ (siehe unten). Die Reiter nennen ihre Anzahl. Personen, Stammbaum, Graph,
+  Zeitreise und die Gesichter einer Person liegen unter „Personen“ (siehe
+  [Personen](personen.md)). Acht
   Gruppen je Seite, höchstens 28 Gesichter je Gruppe; alle Mitglieder sind sichtbar, es gibt
   keine versteckten ausgewählten Gesichter.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
@@ -30,6 +31,21 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   die Gesichter unter „Benennen“. Über den Gruppen steht ein Personenfilter mit Tippfilter;
   er nennt nur Personen mit offenen Vorschlägen samt Anzahl, „Alle Personen zeigen“ hebt ihn
   auf. Der Filter gilt für die Sitzung und endet mit dem Wechsel der Sammlung.
+- **Reiter „Ungeeignet“** (`faces::page`, Modus `unsuitable`): genau die offenen Gesichter
+  ohne Gruppe des aktiven Modells (`faces::UNSUITABLE`), also die Zahl
+  `Status::unsuitable` = offen minus gruppiert, die „Benennen“ als Hinweis nennt; der Hinweis
+  hat den Knopf „Ungeeignete Gesichter ansehen“. Neueste Fotos zuerst, Gesichter eines Fotos
+  nebeneinander, Gruppen zu 28, acht je Seite; keine Namensvorschläge. Hier beginnen alle
+  Kacheln abgewählt, ein Klick wählt aus (hervorgehoben, nicht durchgestrichen); „Alle
+  auswählen“ und „Auswahl aufheben“ gelten für die Karte. „N benennen“ (Name oder Person)
+  benennt nur die ausgewählten (`name_group` mit genau diesen IDs), die übrigen erhalten keine
+  Ablehnung. „Kein Gesicht“ speichert für die ausgewählten die Nutzerentscheidung
+  `faces::mark_not_face` (siehe Gesichtserkennung). Beides blendet sofort aus und ist mit
+  Strg+Z zurückzunehmen; nach einer Entscheidung hat die verkleinerte Karte eine neue,
+  leere Auswahl.
+- **Rechtsklickmenü der Gruppenkacheln:** „Einzeln benennen …“ und „Foto in der Sammlung
+  zeigen“; Letzteres öffnet die Sammlung mit der Suche nach Ordner und Dateiname ohne Endung
+  (trifft auch RAW/DNG desselben Fotos), das erste Ergebnis ist gewählt.
 - **„Ist das X?“ in „Benennen“:** Besteht der erste Vorschlag der Gruppe dieselbe Regel wie
   der Abgleich (`recognition::Limits::sure_suggestion` über `accept`, mit Schwelle und Abstand
   der Sammlung aus `faces::Status`), steht über den Kacheln eine hervorgehobene Zeile mit
@@ -39,15 +55,15 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Tasten** gelten für die oberste Gruppe der Seite, nur ohne Fokus in einem Feld und
   solange die Knöpfe aktiv wären: `J` bestätigt den Vorschlag und `N` lehnt ihn ab (in
   „Vorschläge prüfen“ und in „Benennen“, dort nur bei einem sicheren Vorschlag), `1` bis `3` übernehmen einen der Vorschläge in „Benennen“,
-  `Entf` heißt „Nicht interessiert“ (beide Reiter). „Bestätigt“ und „Ignoriert“ haben keine
-  Tasten. Die Hinweistexte der Knöpfe der obersten Gruppe nennen die Taste. Nach einer
+  `Entf` heißt „Nicht interessiert“ (beide Reiter; `J`, `N`, `Entf` ebenso in „Wahrscheinlich
+  X“ der Personenseite). „Bestätigt“, „Ignoriert“ und „Ungeeignet“ haben keine Tasten. Die Hinweistexte der Knöpfe der obersten Gruppe nennen die Taste. Nach einer
   Entscheidung per Taste erhält das Namensfeld der nächsten Gruppe keinen Fokus, damit die
   Tasten weiter gelten; nach einem Klick oder Enter erhält es ihn wie bisher.
 - **Einzeln benennen:** Jede Gesichtskachel (Gruppenkarten in „Benennen“, „Vorschläge
   prüfen“ und „Erledigt“, Referenzporträt der Karte und von „Ist das X?“, Porträt in den
   Personendetails, Kacheln, Abschnittsansicht und große Vorschau der Zeitreise) hat ein
   Rechtsklickmenü „Einzeln benennen …“; der Hinweistext nennt „Rechtsklick: einzeln
-  benennen“. Der Linksklick bleibt unverändert (Auswahl bzw. Fokus). Der Eintrag öffnet
+  benennen“ (Gruppenkacheln: „… oder Foto in der Sammlung zeigen“). Der Linksklick bleibt unverändert (Auswahl bzw. Fokus). Der Eintrag öffnet
   denselben Dialog wie in den Bilddetails der Sammlung; er ist ein globales Fenster, hängt an
   keiner Ansicht und liest seine Vorschläge mit eigener Revision. „Übernehmen“ setzt nur
   dieses Gesicht auf `user` (eine bestehende Ablehnung dieser Person entfällt), andere
@@ -108,8 +124,9 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 
 ## Grenzen
 
-Gesichter ohne Namensmerkmale (Qualität unter 0,5) erscheinen nicht in diesen Reitern, nur
-am Foto; „Benennen“ nennt ihre Anzahl. Die Kachelablage wächst unbegrenzt und ist löschbar. Tastatur- und
+Gesichter ohne Namensmerkmale (Qualität unter 0,5) erscheinen nur unter „Ungeeignet“ und am
+Foto; noch nicht gruppierte Gesichter stehen bis zur Gruppierung ebenfalls dort. Die
+Kachelablage wächst unbegrenzt und ist löschbar. Tastatur- und
 Screenreader-Bedienung sind nicht langfristig geprüft.
 
 ## Beim Ändern beachten
