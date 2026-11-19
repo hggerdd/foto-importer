@@ -424,7 +424,7 @@ fn rejecting_a_suggestion_releases_the_face_at_once_and_undo_restores_it() -> an
         faces::DecisionSummary {
             confirmed: 2,
             rejected: 1,
-            ignored: 0
+            ..Default::default()
         }
     );
     assert_eq!(state(&c, 1)?, (Some(1), Some("user".into())));

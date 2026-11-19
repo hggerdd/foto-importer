@@ -902,7 +902,12 @@ struct MatchState {
 }
 impl MatchState {
     fn load(collection: &Collection, key: &str) -> Result<Self> {
-        let tx = collection.db.unchecked_transaction()?;
+        // Ein Leser mit offener Transaktion (Seitenabfrage) hat seinen Lesestand schon.
+        let tx = if collection.db.is_autocommit() {
+            Some(collection.db.unchecked_transaction()?)
+        } else {
+            None
+        };
         let entries = References::load_entries(collection, key)?;
         // Ohne ORDER BY liest SQLite die Tabelle der Reihe nach statt je Zeile über den
         // Fotoindex; sortiert wird im Speicher.
@@ -952,7 +957,9 @@ impl MatchState {
         }
         drop(rows);
         drop(statement);
-        tx.commit()?;
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
         Ok(Self {
             entries,
             faces,
@@ -1231,6 +1238,163 @@ pub fn rematch_with(
     }
     control.checkpoint()?;
     finish_rematch(collection, key, generation)
+}
+
+/// Unbestätigte Gesichter, die wahrscheinlich `person` zeigen (Personenseite, „Wahrscheinlich
+/// X“): Gesichts-ID und Personenscore ab `minimum`, absteigend nach Wert, bei Gleichstand nach
+/// ID. Der Personenscore ist der des Abgleichs (Mittel der bis zu drei besten Kosinuswerte
+/// gegen die Referenzen der Person, bitgleich). Zulässig sind die Gesichter, die der Abgleich
+/// vergleicht (nicht historisch, nicht ignoriert, nicht vom Nutzer benannt, Qualität ab 0,5
+/// mit Vektor), ohne seine Ausschlüsse für diese Person: abgelehnt, im Foto schon bestätigt,
+/// vor dem Geburtsjahr aufgenommen. Schwelle und Abstand zu anderen Personen gelten nicht;
+/// Vorschläge für andere Personen stehen mit in der Liste.
+///
+/// Die Werte kommen aus dem Zwischenspeicher des Abgleichs ([`MatchCache`]), wenn er für diese
+/// Sammlung und dieses Modell bereitliegt; er wird dabei auf den aktuellen Stand gebracht.
+/// Sonst (Programmstart, Abgleich läuft gerade) wird nur die Spalte dieser Person in einem
+/// Durchgang über die Vektoren gerechnet, ohne Zwischenspeicher aufzubauen.
+pub fn person_candidates(
+    collection: &Collection,
+    key: &str,
+    person: i64,
+    minimum: f32,
+    control: &Control,
+) -> Result<Vec<(i64, f32)>> {
+    let mut state = MatchState::load(collection, key)?;
+    let birth = load_births(collection)?.get(&person).copied();
+    let ids = open_for_person(&state, person, birth);
+    let scores = match cached_person_scores(collection, key, person, &mut state, &ids, control)? {
+        Some(scores) => scores,
+        None => streamed_person_scores(collection, key, person, &ids, control)?,
+    };
+    let mut found: Vec<(i64, f32)> = ids
+        .into_iter()
+        .zip(scores)
+        .filter(|(_, score)| *score >= minimum)
+        .collect();
+    found.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(found)
+}
+
+/// Gesichter, die für `person` in Frage kommen (siehe [`person_candidates`]), nach ID.
+fn open_for_person(state: &MatchState, person: i64, birth: Option<i32>) -> Vec<i64> {
+    // Wie im Abgleich: im Foto bestätigt zählt auch für historische Gesichter.
+    let occupied: BTreeSet<i64> = state
+        .faces
+        .iter()
+        .filter(|f| f.assignment.as_deref() == Some("user") && f.person == Some(person))
+        .map(|f| f.photo)
+        .collect();
+    let mut ids: Vec<i64> = state
+        .faces
+        .iter()
+        .filter(|f| {
+            f.wanted
+                && !f.retained
+                && !f.ignored
+                && f.assignment.as_deref() != Some("user")
+                && state.embeddings.contains_key(&f.id)
+                && !occupied.contains(&f.photo)
+                && !state
+                    .rejections
+                    .get(&f.id)
+                    .is_some_and(|rejected| rejected.contains(&person))
+                && !f.year.zip(birth).is_some_and(|(year, born)| year < born)
+        })
+        .map(|f| f.id)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// Personenscores von `ids` aus dem Zwischenspeicher des Programms; `None`, wenn er fehlt (noch
+/// nicht aufgebaut oder gerade vom Abgleich belegt) oder einer anderen Sammlung gehört. Die
+/// Sperre gilt nur für diesen Leser; der Abgleich wartet ohne Rückgabepunkt auf sie, ein
+/// gegenseitiges Warten ist daher ausgeschlossen.
+fn cached_person_scores(
+    collection: &Collection,
+    key: &str,
+    person: i64,
+    state: &mut MatchState,
+    ids: &[i64],
+    control: &Control,
+) -> Result<Option<Vec<f32>>> {
+    let Ok(mut slot) = MATCH_CACHE.lock() else {
+        return Ok(None);
+    };
+    let owner = (collection.root.clone(), key.to_string());
+    let Some(cache) = slot
+        .as_mut()
+        .filter(|cache| cache.owner.as_ref() == Some(&owner))
+    else {
+        return Ok(None);
+    };
+    let references = cache.sync(collection, key, state, control)?;
+    let column = references.people.iter().position(|p| p.0 == person);
+    Ok(Some(
+        ids.iter()
+            .map(|id| match (column, cache.faces.get(id)) {
+                (Some(column), Some(face)) if face.vector.is_some() => face.scores[column],
+                _ => f32::NAN,
+            })
+            .collect(),
+    ))
+}
+
+/// Personenscores von `ids` gegen die Referenzen von `person` in einem Durchgang über die
+/// Vektoren des Modells (`NaN` ohne Vektor oder ohne Referenzen); gleicher Rechenweg wie der
+/// Zwischenspeicher.
+fn streamed_person_scores(
+    collection: &Collection,
+    key: &str,
+    person: i64,
+    ids: &[i64],
+    control: &Control,
+) -> Result<Vec<f32>> {
+    let mut scores = vec![f32::NAN; ids.len()];
+    let (entries, people) = References::load_entries(collection, key)?;
+    let Some(slot) = people.iter().position(|p| p.0 == person) else {
+        return Ok(scores);
+    };
+    let own = entries
+        .into_iter()
+        .filter(|entry| entry.1 == slot)
+        .map(|(face, _, vector)| (face, 0, vector))
+        .collect();
+    let references = References::from_entries(own, vec![people[slot].clone()]);
+    let index: std::collections::HashMap<i64, usize> =
+        ids.iter().enumerate().map(|(at, id)| (*id, at)).collect();
+    let mut statement = collection
+        .db
+        .prepare("SELECT face_id,vec FROM face_embeddings WHERE embedder_id=?")?;
+    let mut rows = statement.query([key])?;
+    let mut batch: Vec<(usize, i64, Vec<f32>)> = Vec::with_capacity(SCORE_ROUND);
+    loop {
+        let row = rows.next()?;
+        let end = row.is_none();
+        if let Some(row) = row
+            && let Some(&at) = index.get(&row.get::<_, i64>(0)?)
+            && let Some(bytes) = row.get::<_, Option<Vec<u8>>>(1)?
+        {
+            batch.push((at, row.get(0)?, decode(&bytes)?));
+        }
+        if batch.len() >= SCORE_ROUND || (end && !batch.is_empty()) {
+            control.checkpoint()?;
+            let work: Vec<(i64, Option<&[f32]>)> = batch
+                .iter()
+                .map(|(_, id, vector)| (*id, Some(vector.as_slice())))
+                .collect();
+            let computed = score_rows(&references, &work);
+            for ((at, _, _), row) in batch.iter().zip(computed) {
+                scores[*at] = row[0];
+            }
+            batch.clear();
+        }
+        if end {
+            break;
+        }
+    }
+    Ok(scores)
 }
 
 /// Vollständiger Abgleich ohne Zwischenspeicher, Foto für Foto mit Cursor. Rückfall, wenn der

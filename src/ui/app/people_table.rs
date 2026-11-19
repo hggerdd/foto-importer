@@ -925,6 +925,7 @@ impl PhotoApp {
         let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
         let portrait = self.face_page.portraits.get(&person.id).cloned();
+        let mut open_faces = false;
         ui.horizontal(|ui| {
             let size = Vec2::splat(96.0);
             match portrait {
@@ -990,8 +991,18 @@ impl PhotoApp {
                     }
                 }
                 ui.label(muted(facts.join(" · ")));
+                open_faces = ui
+                    .small_button("Gesichter prüfen")
+                    .on_hover_text(
+                        "Bestätigte Gesichter dieser Person und unbestätigte, die sie wahrscheinlich zeigen",
+                    )
+                    .clicked();
             });
         });
+        // Die Person dieser Spalte ist die gewählte; die Gesichterseite öffnet sich für sie.
+        if open_faces {
+            self.set_person_mode(PersonMode::Faces);
+        }
         if self.family_ui.just_added == Some(person.id) {
             ui.label(
                 RichText::new("Neu angelegt. Trage unten Beziehungen ein.").color(theme::ACCENT),

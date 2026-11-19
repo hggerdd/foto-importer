@@ -41,6 +41,12 @@ pub const FACE_SURE_MIN: f32 = 0.70;
 /// Gesicht, `recognition::MatchCache`). 100.000 Gesichter mit 128 Dimensionen und 40 Personen
 /// brauchen rund 70 MB; darüber hinaus fällt der Abgleich auf den vollständigen Lauf zurück.
 pub const MATCH_CACHE_MAX_BYTES: usize = 768 * 1024 * 1024;
+/// Personenseite, „Wahrscheinlich X“ (`recognition::person_candidates`): Mindest-Personenscore
+/// eines unbestätigten Gesichts, um in der Liste zu stehen. Keine Entscheidungsschwelle (die
+/// Liste ist nach Wert geordnet, der Nutzer entscheidet), nur eine Begrenzung der Länge; nicht
+/// gemessen. Zum Vergleich (Messung 2026-11-15, ADR Gesichtserkennung): 0,363 erreichen 99,7 %
+/// der richtigen Personen, 0,50 noch 98,1 %.
+pub const PERSON_CANDIDATE_MIN: f32 = 0.40;
 /// Höchstens so viele Threads rechnen im Abgleich Personenwerte (auf dem Wartungs-Worker).
 pub const MATCH_THREADS: usize = 4;
 /// Anzeigedauer eines normalen Hinweises; Fehler bleiben bis zum Schließen.

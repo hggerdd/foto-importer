@@ -26,6 +26,16 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 - **Neuanalyse** ordnet Gesichter innerhalb derselben Quelle über die Überdeckung (IoU ab
   0,5) zu. Nicht wiedergefundene bestätigte oder ignorierte Gesichter bleiben als historisch
   (`retained`) erhalten; übrige werden gelöscht. Vor einem Detektorwechsel entsteht eine Sicherung.
+- **„Kein Gesicht“** (`faces::mark_not_face`, Reiter „Ungeeignet“) ist eine Nutzerentscheidung
+  je Gesicht: `faces.ignored = 2` (`faces::NOT_A_FACE`; 0 aktiv, 1 „Nicht interessiert“), ohne
+  Schemaänderung, Zuordnung und Referenzauswahl entfallen, Vorkommen und Foto bleiben. Weil
+  alle aktiven Abfragen `ignored=0` und „Ignoriert“ `ignored=1` prüfen, fällt ein solches
+  Gesicht aus allen Zählungen, Gruppen, Vorschlägen, dem Abgleich und dem Reiter „Ignoriert“;
+  `status.total`, die Gesichter am Foto (`photo_faces`) und die Gesichtszählung der Suche
+  (`metadata::CURRENT_FACES`) schließen es aus (Teilindex `ix_faces_not_face`). Die
+  Neuanalyse behält `ignored` beim Wiederfinden und hält ein nicht wiedergefundenes als
+  historisch, die Entscheidung kehrt also nicht zurück. Rücknahme über `faces::undo`
+  (`FaceSnapshot::not_face`).
 
 **Referenzen** (`recognition::rebuild`, `matching::select_references`)
 
@@ -83,6 +93,18 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Skalarprodukt summiert in derselben Reihenfolge wie `inference::cosine` und ist bitgleich.
   Die besten zwei Personen werden ohne vollständiges Sortieren mit derselben strengen
   Ordnung bestimmt (Score, Name, ID). Messungen in [Validierung](../docs/validierung.md).
+- **Wahrscheinliche Gesichter einer Person** (`recognition::person_candidates`, Personenseite
+  „Wahrscheinlich X“): derselbe Personenscore wie im Abgleich für alle Gesichter, die der
+  Abgleich vergleicht (nicht vom Nutzer benannt, auch Vorschläge anderer Personen), ohne
+  seine Ausschlüsse für diese Person (abgelehnt, im Foto bestätigt, vor dem Geburtsjahr);
+  Schwelle und Abstand gelten nicht, nur die Untergrenze `config::PERSON_CANDIDATE_MIN`
+  (0,40, nicht gemessen, begrenzt nur die Liste). Absteigend nach Wert, dann ID. Die Werte
+  stammen aus dem Zwischenspeicher, wenn er für Sammlung und Modell bereitliegt (der Leser
+  bringt ihn per `sync` auf den Stand und hält die Sperre nur dafür; der Abgleich wartet auf
+  sie ohne Rückgabepunkt, gegenseitiges Warten ist ausgeschlossen); sonst rechnet ein
+  Durchgang über die Vektoren nur die Spalte dieser Person, ohne Zwischenspeicher aufzubauen.
+  Läuft auf dem Leser der Seite (`faces::page_with`, Modus `probable`). Messung in
+  [Validierung](../docs/validierung.md).
 - Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte
   Unterabfragen auf `training_set`, bestätigte Gesichter außen per `CROSS JOIN`).
 
@@ -120,7 +142,8 @@ andere ersetzt, erkennt er geänderte Vektoren nur an Gesichts-ID und `rowid`.
 ## Beim Ändern beachten
 
 Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Namenszuordnung
-getrennt halten. Nie automatische Zuordnungen als Referenz oder Trainingsdaten verwenden, nie
+getrennt halten. Neue Abfragen auf aktive Gesichter prüfen `ignored=0`, nicht
+`ignored<>1`, sonst kehren „Kein Gesicht“-Entscheidungen zurück. Nie automatische Zuordnungen als Referenz oder Trainingsdaten verwenden, nie
 das abgefragte Gesicht als eigene Referenz zählen. Schwellen nur mit Messung ändern.
 Änderungen an Rangfolge oder Abgleich gegen den Einzelvergleich prüfen
 (`block_ranking_is_bit_identical_to_the_single_comparison`), den inkrementellen gegen den

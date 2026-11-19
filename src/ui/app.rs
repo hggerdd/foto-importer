@@ -8,6 +8,7 @@ mod import_view;
 mod optimistic;
 mod people_table;
 mod people_view;
+mod person_faces_view;
 mod progress_view;
 mod recognition_view;
 mod relationship_view;
@@ -58,6 +59,8 @@ enum PersonMode {
     Tree,
     Graph,
     Time,
+    /// Alle Gesichter der Person: bestätigte und wahrscheinliche (`person_faces_view`).
+    Faces,
 }
 /// Hauptpunkte der Navigation in ihrer Reihenfolge: Ansicht, Titel, Hinweistext.
 const NAV_MAIN: [(View, &str, &str); 4] = [
@@ -75,7 +78,7 @@ const NAV_MAIN: [(View, &str, &str); 4] = [
     (
         View::People,
         "Personen",
-        "Personen, Beziehungen, Stammbaum, Graph und Zeitreise",
+        "Personen, Beziehungen, Stammbaum, Graph, Zeitreise und Gesichter einer Person",
     ),
 ];
 /// Punkte am unteren Rand der Navigation.
@@ -100,10 +103,12 @@ fn startup_place(
         Some("review") => Some("review"),
         Some("confirmed") => Some("confirmed"),
         Some("ignored") => Some("ignored"),
+        Some("unsuitable") => Some("unsuitable"),
         _ => None,
     };
     let person_mode = match (view, mode) {
         (Some("time"), _) | (_, Some("time")) => Some(PersonMode::Time),
+        (_, Some("person-faces")) => Some(PersonMode::Faces),
         (_, Some("persons")) => Some(PersonMode::Overview),
         (_, Some("tree")) => Some(PersonMode::Tree),
         (_, Some("graph")) => Some(PersonMode::Graph),
@@ -282,12 +287,15 @@ pub struct PhotoApp {
     status: CollectionStatus,
     face_revision: u64,
     face_page: FacePage,
-    /// Reiter der Ansicht „Gesichter“: `unknown`, `review`, `confirmed` oder `ignored`.
+    /// Reiter der Ansicht „Gesichter“: `unknown`, `review`, `confirmed`, `ignored` oder
+    /// `unsuitable`.
     face_mode: String,
     /// Zuletzt gewählte Seite im Reiter „Erledigt“ (`confirmed` oder `ignored`).
     done_mode: &'static str,
     /// Ansicht der gewählten Person unter „Personen“.
     person_mode: PersonMode,
+    /// Seite der Ansicht „Gesichter“ unter „Personen“: `probable` oder `person-confirmed`.
+    person_face_mode: &'static str,
     face_index: usize,
     /// Personenfilter im Reiter „Vorschläge prüfen“.
     review_person: Option<i64>,
@@ -420,6 +428,7 @@ impl PhotoApp {
             face_mode: "unknown".into(),
             done_mode: "confirmed",
             person_mode: PersonMode::default(),
+            person_face_mode: "probable",
             face_index: 0,
             review_person: None,
             face_keys: false,
@@ -812,13 +821,34 @@ impl PhotoApp {
             PersonMode::Graph => "graph",
             // Stammbaum und Zeitreise brauchen Personen und Familie, aber keine Tabellenzeilen.
             PersonMode::Tree | PersonMode::Time => "tree",
+            PersonMode::Faces => self.person_face_mode,
         }
+    }
+    /// Person, auf die sich die gelesene Seite beschränkt: der Filter in „Vorschläge prüfen“,
+    /// auf der Gesichterseite einer Person die gewählte Person.
+    fn page_person(&self) -> Option<i64> {
+        match self.page_mode() {
+            "review" => self.review_person,
+            "probable" | "person-confirmed" => self.relation_from,
+            _ => None,
+        }
+    }
+    /// Zeigt die Ansicht Gesichtsgruppen (Gesichtsreiter oder Gesichterseite einer Person)?
+    fn shows_face_groups(&self) -> bool {
+        self.view == View::Faces
+            || self.view == View::People && self.person_mode == PersonMode::Faces
     }
     /// Wechselt die Hauptansicht und liest, was sie zeigt, neu.
     fn open_view(&mut self, view: View) {
         if self.view == View::Settings && view != View::Settings {
             // Ein Pfad, der beim Verlassen noch im Feld steht, gilt wie bei Fokusverlust.
             self.commit_path_drafts();
+        }
+        if view != self.view {
+            // Gruppen der Gesichterseite einer Person gehören nicht in die Gesichtsreiter
+            // (und umgekehrt); bis zum neuen Lesen bleibt die Seite leer.
+            self.face_page.groups.clear();
+            self.face_advance = None;
         }
         self.view = view;
         self.recognition_tools_open = false;
@@ -834,9 +864,13 @@ impl PhotoApp {
             self.done_mode = mode;
         }
         self.face_mode = mode.into();
-        self.face_index = 0;
-        self.face_advance = None;
-        self.face_row_tops.clear();
+        self.reset_face_page();
+        self.refresh_faces();
+    }
+    /// Wählt die Seite der Gesichterseite einer Person (`probable` oder `person-confirmed`).
+    fn set_person_face_mode(&mut self, mode: &'static str) {
+        self.person_face_mode = mode;
+        self.reset_face_page();
         self.refresh_faces();
     }
     /// Reiter „Erledigt“: zeigt die zuletzt gewählte Seite, „Bestätigt“ oder „Ignoriert“.
@@ -859,9 +893,16 @@ impl PhotoApp {
                 PersonMode::Tree => self.family_ui.focus = Some(person),
                 PersonMode::Graph => self.relationship_graph.show_person(person),
                 PersonMode::Time => self.show_time_for(person),
+                PersonMode::Faces => self.clear_face_groups(),
             }
         }
         self.refresh_faces();
+    }
+    /// Beginnt die angezeigten Gesichtsgruppen auf der ersten Seite, ohne gemerkte Position.
+    fn reset_face_page(&mut self) {
+        self.face_index = 0;
+        self.face_advance = None;
+        self.face_row_tops.clear();
     }
     /// Ergebnis der Ordnerwahl für die Sammlung. Importquelle und Speicherkarte werden mit
     /// Hinweis abgelehnt; eine vorhandene Sammlung öffnet sofort, ein Ordner ohne Sammlung
@@ -983,7 +1024,7 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.collection);
         let mode = self.page_mode().to_string();
         let page = self.face_index;
-        let person = self.review_person.filter(|_| mode == "review");
+        let person = self.page_person();
         self.launch(
             "Personen und Gesichter lesen",
             false,
@@ -992,14 +1033,15 @@ impl PhotoApp {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
                 c.db.execute_batch("BEGIN")?;
+                let read = |index| faces::page_with(&c, &mode, index, person, &control);
                 let mut index = page;
-                let mut snapshot = faces::page_filtered(&c, &mode, index, person)?;
+                let mut snapshot = read(index)?;
                 if index > 0 && snapshot.groups.is_empty() {
                     index -= 1;
-                    snapshot = faces::page_filtered(&c, &mode, index, person)?;
+                    snapshot = read(index)?;
                     if index > 0 && snapshot.groups.is_empty() {
                         index = 0;
-                        snapshot = faces::page_filtered(&c, &mode, index, person)?;
+                        snapshot = read(index)?;
                     }
                 }
                 Ok(Outcome::Faces(revision, index, snapshot))
