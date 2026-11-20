@@ -346,6 +346,25 @@ fn removing_missing_entries_touches_only_missing_rows_and_keeps_decisions() -> R
         7
     );
     assert!(temp.path().join("Andere").join("0.jpg").exists());
+    // Vorher entstand automatisch eine Datensicherung mit dem Stand vor dem Entfernen.
+    let backups = foto_importer::core::backup::list(temp.path())?;
+    assert_eq!(backups.len(), 1);
+    let mut zip = zip::ZipArchive::new(fs::File::open(&backups[0].path)?)?;
+    let restored = tempfile::tempdir()?;
+    let db = restored.path().join("db");
+    std::io::copy(
+        &mut zip.by_name("sammlung/.myfotomanager")?,
+        &mut fs::File::create(&db)?,
+    )?;
+    let old = rusqlite::Connection::open(&db)?;
+    assert_eq!(
+        old.query_row(
+            "SELECT count(*) FROM files WHERE status='missing'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        6
+    );
     Ok(())
 }
 

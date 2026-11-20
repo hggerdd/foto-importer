@@ -4,7 +4,7 @@
 //! gesehen, oder Metadaten- bzw. Gesichtslauf fanden sie nicht mehr. Hier wird nur die
 //! Datenbank geändert, nie eine Datei auf der Platte.
 use super::{collection::Collection, collection::family_directory, files, jobs::Control};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::params;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -326,6 +326,12 @@ pub fn remove(collection: &mut Collection, dirs: &[String], control: &Control) -
         } else {
             gone.push(row);
         }
+    }
+    // Datensicherung vor dem Löschen; scheitert sie (oder wird abgebrochen), wird nichts entfernt.
+    if !gone.is_empty() {
+        super::backup::automatic(&collection.root, "vor Einträge entfernen", control)
+            .context("Nichts entfernt")?;
+        control.phase("Einträge entfernen", "");
     }
     let tx = collection.db.transaction()?;
     for row in &gone {

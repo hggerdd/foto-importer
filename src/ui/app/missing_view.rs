@@ -245,6 +245,14 @@ impl PhotoApp {
                 .color(theme::WARM),
             );
         }
+        ui.label(
+            RichText::new(
+                "Vorher wird automatisch eine Datensicherung erstellt (Einstellungen → \
+                 Datensicherung). Scheitert sie oder wird sie abgebrochen, wird nichts entfernt.",
+            )
+            .small()
+            .weak(),
+        );
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!self.busy(), egui::Button::new("Endgültig entfernen"))

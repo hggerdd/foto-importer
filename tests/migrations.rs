@@ -112,13 +112,19 @@ fn upgrade_versions_one_through_five_preserves_source_ids_and_labels() -> anyhow
                 vec![0u8, 0, 128, 63, 0, 0, 0, 0]
             );
         }
-        assert!(
-            std::fs::read_dir(folder.path())?
-                .filter_map(Result::ok)
-                .any(|e| e
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".myfotomanager.before-rust-"))
+        // Vor der Migration entstand eine Datensicherung mit dem alten Schemastand.
+        let backups = foto_importer::core::backup::list(folder.path())?;
+        assert_eq!(backups.len(), 1, "Schema {version}");
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&backups[0].path)?)?;
+        let restored = tempfile::tempdir()?;
+        let db = restored.path().join("db");
+        std::io::copy(
+            &mut zip.by_name("sammlung/.myfotomanager")?,
+            &mut std::fs::File::create(&db)?,
+        )?;
+        assert_eq!(
+            Connection::open(&db)?.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+            version
         );
         assert_eq!(
             std::fs::read(folder.path().join("legacy.jpg"))?,
@@ -139,22 +145,21 @@ fn repair_partial_five_and_scrub_its_migration_backup() -> anyhow::Result<()> {
         )?,
         91
     );
-    maintenance::delete_biometrics(&c)?;
-    for entry in std::fs::read_dir(folder.path())? {
-        let path = entry?.path();
-        if path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .starts_with(".myfotomanager.before-rust-")
-        {
-            let backup = Connection::open(path)?;
-            assert_eq!(
-                backup.query_row("SELECT count(*) FROM faces", [], |r| r.get::<_, i64>(0))?,
-                0
-            );
-        }
-    }
+    // Die Datensicherung vor der Migration enthält Gesichter; „Biometrie entfernen“ löscht sie.
+    assert_eq!(foto_importer::core::backup::list(folder.path())?.len(), 1);
+    // Ältere Migrationskopien früherer Versionen werden weiter bereinigt.
+    let legacy = folder
+        .path()
+        .join(".myfotomanager.before-rust-v5-legacy.bak");
+    c.db.backup("main", &legacy, None)?;
+    let message = maintenance::delete_biometrics(&c)?;
+    assert!(message.contains("1 Datensicherung "), "{message}");
+    assert!(foto_importer::core::backup::list(folder.path())?.is_empty());
+    assert_eq!(
+        Connection::open(&legacy)?
+            .query_row("SELECT count(*) FROM faces", [], |r| r.get::<_, i64>(0))?,
+        0
+    );
     Ok(())
 }
 #[test]

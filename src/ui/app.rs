@@ -1,3 +1,4 @@
+mod backup_view;
 mod central_view;
 mod collection_view;
 mod errors;
@@ -153,6 +154,13 @@ enum Outcome {
     SourceOffline(u64, String),
     /// Fehlende Dateien je Ordner (Revision der Ansicht).
     Missing(u64, Vec<crate::core::missing::MissingFolder>),
+    /// Vorhandene Datensicherungen der Sammlung (Revision des Lesens).
+    Backups(
+        u64,
+        std::result::Result<Vec<crate::core::backup::BackupFile>, String>,
+    ),
+    /// Neue Datensicherung erstellt (Hinweistext).
+    BackupCreated(String),
     Search(u64, CollectionStatus, SearchPage, Search),
     /// Ordnerübersicht eines Lesens; ein Fehler wird mitgeliefert, damit er dem Lesen zuzuordnen ist.
     Folders(u64, std::result::Result<Vec<(String, usize)>, String>),
@@ -362,6 +370,8 @@ pub struct PhotoApp {
     source_offline: Option<String>,
     /// Ansicht „Fehlende Dateien“: gelesener Stand, Revision und Auswahl.
     missing: missing_view::MissingUi,
+    /// Abschnitt „Datensicherung“ der Einstellungen.
+    backups: backup_view::BackupUi,
     closing: bool,
     maintenance_paused: bool,
     /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
@@ -496,6 +506,7 @@ impl PhotoApp {
             dng_status: "Converter-Version wird gelesen …".into(),
             source_offline: None,
             missing: Default::default(),
+            backups: Default::default(),
             closing: false,
             maintenance_paused: false,
             metadata_paused: false,
@@ -519,6 +530,7 @@ impl PhotoApp {
             #[cfg(test)]
             collection_bounds: None,
         };
+        app.configure_backup();
         if !app.settings.source.is_empty() {
             // Eine nicht eingesteckte Karte ist beim Start kein Fehler (`source_offline`).
             app.begin_scan_with(true);
@@ -746,6 +758,7 @@ impl PhotoApp {
             );
             return false;
         }
+        self.configure_backup();
         true
     }
     fn check_dng(&mut self) {
@@ -909,6 +922,8 @@ impl PhotoApp {
                 }) => {}
             View::Collection => self.requery_collection(),
             View::Faces | View::People => self.refresh_faces(),
+            // Automatische Sicherungen können inzwischen entstanden sein: beim Zeigen neu lesen.
+            View::Settings if !self.backups.loading => self.backups.files = None,
             _ => {}
         }
     }
@@ -1034,6 +1049,7 @@ impl PhotoApp {
         self.large = false;
         self.collection_dialog = None;
         self.missing = Default::default();
+        self.backups = Default::default();
         self.detail.clear();
         self.detail_rows.clear();
         self.detail_faces.clear();
@@ -1332,6 +1348,9 @@ impl PhotoApp {
             Outcome::Missing(revision, _) => {
                 *revision != self.missing.revision || running.collection != self.settings.collection
             }
+            Outcome::Backups(revision, _) => {
+                *revision != self.backups.revision || running.collection != self.settings.collection
+            }
             Outcome::Search(revision, ..) => *revision != self.query_revision,
             Outcome::Folders(revision, _) => {
                 self.folder_pending != Some(*revision)
@@ -1500,6 +1519,9 @@ impl PhotoApp {
                 {
                     self.people_ui.accept_insights(revision, insights);
                 }
+                // Ein neueres Lesen der Sicherungen hat dieses abgelöst; Fehler beim Lesen selbst
+                // kommen als `Outcome::Backups`.
+                Err(_) if running.kind == "backup-list" => {}
                 Err(_) if running.kind == "folders" => {
                     // Der Worker liefert Fehler als `Outcome::Folders`; hier landet nur ein
                     // unerwartetes Ende. Nur das erwartete Lesen der aktuellen Sammlung zählt.
@@ -1581,6 +1603,18 @@ impl PhotoApp {
                         && running.collection == self.settings.collection =>
                 {
                     self.missing.accept(folders);
+                }
+                Ok(Outcome::Backups(revision, files))
+                    if revision == self.backups.revision
+                        && running.collection == self.settings.collection =>
+                {
+                    self.backups.accept(files);
+                }
+                Ok(Outcome::BackupCreated(message)) => {
+                    self.message(message, false);
+                    if running.collection == self.settings.collection && !self.backups.loading {
+                        self.backups.files = None;
+                    }
                 }
                 Ok(Outcome::Search(revision, status, page, filters))
                     if revision == self.query_revision =>

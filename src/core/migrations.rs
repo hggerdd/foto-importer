@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 use std::{collections::BTreeSet, path::Path};
 
@@ -54,11 +54,13 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
             );
         }
     }
-    let backup = root.join(format!(
-        ".myfotomanager.before-rust-v{version}-{}.bak",
-        uuid::Uuid::new_v4()
-    ));
-    db.backup("main", backup, None)?;
+    // Datensicherung vor dem Umbau; scheitert sie, bleibt die Sammlung unverändert.
+    super::backup::automatic(
+        root,
+        &format!("vor Schema-Migration {version} → 6"),
+        &super::jobs::Control::default(),
+    )
+    .context("Schema-Migration nicht begonnen; die Sammlung bleibt unverändert")?;
     let triggers = canonical
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")?
         .query_map([], |r| r.get::<_, String>(0))?

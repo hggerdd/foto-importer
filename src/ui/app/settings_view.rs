@@ -545,6 +545,8 @@ impl PhotoApp {
                 self.save();
             }
             ui.add_space(16.0);
+            self.backup_settings(ui);
+            ui.add_space(16.0);
             self.diagnostic_settings(ui);
         });
         if let Some(pick) = chosen {

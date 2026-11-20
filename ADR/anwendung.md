@@ -37,7 +37,8 @@
   Portionen (100, 500, 2000, 10000, alle; Standard 500), optional auf einen Ordner begrenzt
   (`core::scope`). Bereits fertige Fotos zählen nicht zur Portion.
 - **Einstellungen in drei Bereichen:** Arbeitsplatz in `%APPDATA%\FotoImporter\settings.json`
-  (atomar geschrieben, `FOTO_IMPORTER_SETTINGS` überschreibt den Pfad), Sammlungsoptionen in
+  (atomar geschrieben, `FOTO_IMPORTER_SETTINGS` überschreibt den Pfad; auch „Sicherungen
+  behalten“ der Datensicherung, siehe [Sammlung und Daten](sammlung-daten.md)), Sammlungsoptionen in
   der Sammlungsdatenbank (`settings`, `face_settings`), Modellbeschreibungen als Manifeste
   unter `models/`.
 - **Einstellungen wirken sofort, ohne Speichern-Knopf:** Schalter und Auswahllisten

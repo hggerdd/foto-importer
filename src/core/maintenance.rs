@@ -258,16 +258,31 @@ pub fn delete_biometrics(collection: &Collection) -> Result<String> {
             scrub(&rusqlite::Connection::open(path)?)?;
         }
     }
+    // Datensicherungen (ZIP) enthalten Gesichter und Vektoren und lassen sich nicht bereinigen,
+    // ohne sie neu zu packen; sie werden gelöscht.
+    let mut data_backups = 0;
+    for old in super::backup::list(&collection.root)? {
+        generated_path(&collection.root, &old.path)?;
+        std::fs::remove_file(&old.path)?;
+        data_backups += 1;
+    }
+    if data_backups > 0 {
+        log::info!(target: "sicherung", "biometrie_geloescht datensicherungen_entfernt={data_backups}");
+    }
     if folder.exists() {
         std::fs::remove_dir_all(&folder)?;
     }
     if tiles.exists() {
         std::fs::remove_dir_all(&tiles)?;
     }
-    Ok(
-        "Biometrie und bekannte App-Sicherungen bereinigt. Fotos und Inventar bleiben erhalten."
-            .into(),
-    )
+    Ok(format!(
+        "Biometrie und bekannte App-Sicherungen bereinigt{}. Fotos und Inventar bleiben erhalten.",
+        match data_backups {
+            0 => String::new(),
+            1 => ", 1 Datensicherung (mit Gesichtsdaten) gelöscht".into(),
+            n => format!(", {n} Datensicherungen (mit Gesichtsdaten) gelöscht"),
+        }
+    ))
 }
 fn validate_tree(root: &Path, path: &Path) -> Result<()> {
     generated_path(root, path)?;
