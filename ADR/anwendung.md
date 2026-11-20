@@ -23,8 +23,11 @@
   und sind pausierbar. Ebenso `index-new`, die Aufnahme importierter Dateien
   (siehe [Import](import.md)); solange sie aussteht, starten `metadata-bg` und `maintenance`
   nicht. Höchstens ein Hintergrundschreiber je Sammlung. Dateien mit Fehler
-  werden nicht wiederholt; fehlt ExifTool oder scheitert der Lauf, endet er für die Sitzung
-  mit einem Hinweis. Der ausdrückliche Lauf „Metadaten lesen“ nutzt weiter Blöcke zu 128.
+  werden nicht wiederholt. Einzelne Dateien halten einen Block nie auf: fehlende werden als
+  fehlend markiert (siehe [Sammlung und Daten](sammlung-daten.md)), und scheitert ExifTool an
+  einem Block, wird er halbiert, bis die schuldige Datei allein steht und `meta_state='error'`
+  erhält (WARN im Diagnose-Log). Nur wenn ExifTool fehlt oder nicht startet (oder die Sammlung
+  nicht erreichbar ist), endet der Lauf für die Sitzung mit einem Hinweis. Der ausdrückliche Lauf „Metadaten lesen“ nutzt weiter Blöcke zu 128.
 - **Ein Schreiber je Sammlung:** Schreibaufträge der App werden je Sammlung nacheinander
   abgearbeitet; Leser nutzen eigene Verbindungen und stehen nicht in dieser Schlange.
 - **Fortschritt:** Jeder lange Auftrag meldet benannte Phasen und `progress(done, total)`.

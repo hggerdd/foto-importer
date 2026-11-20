@@ -22,15 +22,34 @@ pub struct Unseen {
     pub relpath: String,
     pub inode: Option<String>,
     pub full_hash: Option<String>,
+    pub quick_hash: Option<String>,
     pub stem: String,
     pub dir: String,
     photo: Option<i64>,
+}
+
+/// Ergebnis der Suche nach einer verschwundenen Datei über Name, Größe und Änderungszeit.
+pub enum Signature {
+    None,
+    Ambiguous,
+    Unique(Unseen),
+}
+
+/// Gefalteter Dateiname eines relativen Pfads.
+fn file_name_key(relpath: &str) -> String {
+    files::fold(relpath.rsplit('/').next().unwrap_or(relpath))
 }
 
 pub struct KnownFiles {
     unseen: Vec<Option<Unseen>>,
     by_inode: HashMap<(String, i64), Vec<usize>>,
     hashed_by_size: HashMap<i64, Vec<usize>>,
+    /// (gefalteter Dateiname, Größe, Änderungszeit) -> Plätze in `unseen`
+    by_signature: HashMap<(String, i64, i64), Vec<usize>>,
+    /// Alle Pfade des Bestands vor dem Lauf.
+    paths: HashSet<String>,
+    /// (gefalteter Dateiname, Größe) -> Zahl gefundener Dateien ohne Bestandszeile
+    new_by_name: HashMap<(String, i64), usize>,
     /// folded stem -> (file id, photo id, folded family directory), ordered by file id
     families: HashMap<String, Vec<(i64, i64, String)>>,
 }
@@ -48,10 +67,13 @@ impl KnownFiles {
             unseen: Vec::new(),
             by_inode: HashMap::new(),
             hashed_by_size: HashMap::new(),
+            by_signature: HashMap::new(),
+            paths: HashSet::new(),
+            new_by_name: HashMap::new(),
             families: HashMap::new(),
         };
         let mut statement = db.prepare(
-            "SELECT id,photo_id,size,mtime_ns,relpath,inode,full_hash,stem,dir FROM files ORDER BY id",
+            "SELECT id,photo_id,size,mtime_ns,relpath,inode,full_hash,stem,dir,quick_hash FROM files ORDER BY id",
         )?;
         let mut cursor = statement.query([])?;
         let mut count = 0;
@@ -72,6 +94,7 @@ impl KnownFiles {
                 full_hash: r.get(6)?,
                 stem: r.get(7)?,
                 dir: r.get(8)?,
+                quick_hash: r.get(9)?,
             };
             if let Some(photo) = row.photo {
                 known
@@ -84,6 +107,7 @@ impl KnownFiles {
                         files::fold(&family_directory(&row.dir, extension_folders)),
                     ));
             }
+            known.paths.insert(row.relpath.clone());
             if !walked.contains(row.relpath.as_str()) {
                 known.push_unseen(row);
             }
@@ -98,6 +122,10 @@ impl KnownFiles {
                 .or_default()
                 .push(row.slot);
         }
+        self.by_signature
+            .entry((file_name_key(&row.relpath), row.size, row.mtime))
+            .or_default()
+            .push(row.slot);
         if row.full_hash.is_some() {
             self.hashed_by_size
                 .entry(row.size)
@@ -119,6 +147,44 @@ impl KnownFiles {
         let slots = self.by_inode.get(&(inode?.to_string(), size))?;
         let mut found = self.gone(root, slots);
         (found.len() == 1).then(|| found.remove(0))
+    }
+    /// Zählt die gefundenen Dateien ohne Bestandszeile je Name und Größe. Gibt es zu einem
+    /// Paar mehr als eine, wird über die Signatur nichts zugeordnet (mehrdeutig).
+    pub fn note_walked(&mut self, walked: &[String], sizes: impl Iterator<Item = i64>) {
+        self.new_by_name.clear();
+        for (relpath, size) in walked.iter().zip(sizes) {
+            if !self.paths.contains(relpath) {
+                *self
+                    .new_by_name
+                    .entry((file_name_key(relpath), size))
+                    .or_default() += 1;
+            }
+        }
+    }
+    /// Umbenannter oder verschobener Ordner ohne passende Datei-ID (z. B. auf anderem
+    /// Datenträger oder Dateisystem ohne stabile IDs): die einzige verschwundene Datei mit
+    /// gleichem Namen, gleicher Größe und gleicher Änderungszeit. Mehrdeutig ist es, wenn
+    /// mehrere verschwundene Zeilen oder mehrere neue Dateien dieselbe Signatur tragen; dann
+    /// wird nicht geraten.
+    pub fn moved_by_signature(
+        &self,
+        root: &Path,
+        relpath: &str,
+        size: i64,
+        mtime: i64,
+    ) -> Signature {
+        let name = file_name_key(relpath);
+        let Some(slots) = self.by_signature.get(&(name.clone(), size, mtime)) else {
+            return Signature::None;
+        };
+        let mut found = self.gone(root, slots);
+        if found.is_empty() {
+            return Signature::None;
+        }
+        if found.len() > 1 || self.new_by_name.get(&(name, size)).copied().unwrap_or(0) > 1 {
+            return Signature::Ambiguous;
+        }
+        Signature::Unique(found.remove(0))
     }
     pub fn has_hashed(&self, size: i64) -> bool {
         self.hashed_by_size.contains_key(&size)

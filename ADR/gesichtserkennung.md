@@ -18,7 +18,10 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 
 - Je Foto wird die bevorzugte Quelle orientiert und auf 1600 Pixel begrenzt analysiert.
   Rahmen und Landmarks gehören zu dieser Quelle. Aufträge je Foto, Modell und
-  Quellfingerabdruck machen den Lauf fortsetzbar, auch für Fotos ohne Gesicht.
+  Quellfingerabdruck machen den Lauf fortsetzbar, auch für Fotos ohne Gesicht. Ein Fehler an
+  einem Foto bricht den Lauf nie ab; fehlt die Quelldatei, wird sie als fehlend markiert
+  (kein Analysefehler, siehe [Sammlung und Daten](sammlung-daten.md)). Die automatische
+  Analyse liest vorher Metadaten mit denselben Regeln.
 - **Präsenz:** Schwelle 0,60 (YuNet) bzw. 0,55 (SCRFD); größere Bilder erhalten zusätzlich
   vier überlappende Ausschnitte. Jeder Treffer bleibt als Vorkommen gespeichert.
 - **Namensmerkmale** entstehen nur ab Qualität 0,5. Klar erkannte, aber kleine Gesichter

@@ -122,6 +122,19 @@ impl PhotoApp {
             }
         });
         ui.add_space(12.0);
+        if self.scan.files.is_empty()
+            && let Some(offline) = self
+                .source_offline
+                .clone()
+                .filter(|path| *path == self.settings.source)
+        {
+            self.empty(
+                ui,
+                &format!("Quelle nicht verbunden: {}", display_path(&offline)),
+                "Karte oder Laufwerk einstecken und „Neu einlesen“ wählen, oder einen anderen Ordner wählen.",
+            );
+            return;
+        }
         if self.scan.files.is_empty() {
             self.empty(ui,"Deine nächste Geschichte beginnt hier.","Wähle eine Speicherkarte oder einen Ordner. Es werden keine Dateien verschoben oder gelöscht.");
             return;

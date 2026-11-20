@@ -867,6 +867,7 @@ pub fn analyze_scoped(
     let total = scope.limit.map_or(order.len(), |l| l.min(order.len()));
     let (mut position, mut done, mut worked) = (0usize, 0usize, 0usize);
     let (mut found, mut failed, mut without_vector) = (0, 0, 0);
+    let (mut missing, mut missing_example) = (0, None::<String>);
     let mut portion_full = false;
     loop {
         control.checkpoint()?;
@@ -1016,6 +1017,13 @@ pub fn analyze_scoped(
                         found += n;
                         without_vector += presence_only;
                     }
+                    Err(e) if super::collection::is_not_found(&e) => {
+                        // Datei fehlt: kein Analysefehler, sondern ein Fall für den Bestand.
+                        control.checkpoint()?;
+                        missing +=
+                            collection.mark_missing(&[(file, relative.clone())], "gesichter")?;
+                        missing_example.get_or_insert_with(|| relative.clone());
+                    }
                     Err(e) => {
                         control.checkpoint()?;
                         failed += 1;
@@ -1045,8 +1053,16 @@ pub fn analyze_scoped(
     if worked > 0 {
         collection.backup()?;
     }
+    if let Some(example) = missing_example {
+        log::warn!(target: "gesichter", "dateien_fehlen anzahl={missing} beispiel={example:?}");
+    }
     Ok(format!(
-        "{done} Fotos geprüft, {worked} davon neu analysiert · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler"
+        "{done} Fotos geprüft, {worked} davon neu analysiert · {found} Gesichter erkannt · {without_vector} ohne Namensmerkmale · {failed} Analysefehler{}",
+        if missing > 0 {
+            format!(" · {missing} Dateien nicht gefunden, als fehlend markiert")
+        } else {
+            String::new()
+        }
     ))
 }
 type AnalysisRow = (i64, i64, String, i64, i64, u32, String);

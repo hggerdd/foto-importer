@@ -5,6 +5,7 @@ mod faces_view;
 mod folder_tree;
 mod import_queue;
 mod import_view;
+mod missing_view;
 mod optimistic;
 mod people_table;
 mod people_view;
@@ -133,6 +134,8 @@ fn startup_place(
 enum CollectionDialog {
     Filters,
     Inventory,
+    /// Fehlende Dateien je Ordner (`missing_view`).
+    Missing,
 }
 #[derive(Clone, Copy)]
 enum Pick {
@@ -146,6 +149,10 @@ enum Pick {
 }
 enum Outcome {
     Scan(u64, Scan),
+    /// Die Quelle war beim Start nicht erreichbar (Revision des Einlesens, Pfad).
+    SourceOffline(u64, String),
+    /// Fehlende Dateien je Ordner (Revision der Ansicht).
+    Missing(u64, Vec<crate::core::missing::MissingFolder>),
     Search(u64, CollectionStatus, SearchPage, Search),
     /// Ordnerübersicht eines Lesens; ein Fehler wird mitgeliefert, damit er dem Lesen zuzuordnen ist.
     Folders(u64, std::result::Result<Vec<(String, usize)>, String>),
@@ -351,6 +358,10 @@ pub struct PhotoApp {
     purge_scans: u32,
     purge_confirm: bool,
     dng_status: String,
+    /// Importquelle, die beim Start nicht erreichbar war (z. B. Karte nicht eingesteckt).
+    source_offline: Option<String>,
+    /// Ansicht „Fehlende Dateien“: gelesener Stand, Revision und Auswahl.
+    missing: missing_view::MissingUi,
     closing: bool,
     maintenance_paused: bool,
     /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
@@ -483,6 +494,8 @@ impl PhotoApp {
             purge_scans: 0,
             purge_confirm: false,
             dng_status: "Converter-Version wird gelesen …".into(),
+            source_offline: None,
+            missing: Default::default(),
             closing: false,
             maintenance_paused: false,
             metadata_paused: false,
@@ -507,7 +520,8 @@ impl PhotoApp {
             collection_bounds: None,
         };
         if !app.settings.source.is_empty() {
-            app.begin_scan();
+            // Eine nicht eingesteckte Karte ist beim Start kein Fehler (`source_offline`).
+            app.begin_scan_with(true);
         }
         // Nur für Sichtprüfungen: Ansicht und Reiter vor dem ersten Laden wählen.
         let (view, face_mode, person_mode) = startup_place(
@@ -779,7 +793,14 @@ impl PhotoApp {
             Ok(Outcome::Pick(pick, path))
         });
     }
+    /// Liest die Quelle ausdrücklich (Nutzer): Ist sie nicht erreichbar, ist das ein Fehler.
     fn begin_scan(&mut self) {
+        self.begin_scan_with(false);
+    }
+    /// `quiet`: beim Start. Eine nicht erreichbare Quelle (Wechseldatenträger nicht verbunden)
+    /// ergibt dann keinen Fehlerhinweis, sondern den ruhigen Zustand „Quelle nicht verbunden“.
+    fn begin_scan_with(&mut self, quiet: bool) {
+        self.source_offline = None;
         self.scan_revision += 1;
         let revision = self.scan_revision;
         let root = PathBuf::from(&self.settings.source);
@@ -795,6 +816,12 @@ impl PhotoApp {
         self.thumbnails.clear();
         self.save();
         self.launch("Quelle einlesen", false, "scan", move |control| {
+            if quiet && !root.is_dir() {
+                return Ok(Outcome::SourceOffline(
+                    revision,
+                    root.to_string_lossy().into_owned(),
+                ));
+            }
             Ok(Outcome::Scan(
                 revision,
                 files::scan(&root, metadata, &control)?,
@@ -1006,6 +1033,7 @@ impl PhotoApp {
         self.selected_photo = None;
         self.large = false;
         self.collection_dialog = None;
+        self.missing = Default::default();
         self.detail.clear();
         self.detail_rows.clear();
         self.detail_faces.clear();
@@ -1298,7 +1326,12 @@ impl PhotoApp {
     fn stale(&self, outcome: &Outcome, running: &Running) -> bool {
         match outcome {
             Outcome::Synced(inner, _) => self.stale(inner, running),
-            Outcome::Scan(revision, _) => *revision != self.scan_revision,
+            Outcome::Scan(revision, _) | Outcome::SourceOffline(revision, _) => {
+                *revision != self.scan_revision
+            }
+            Outcome::Missing(revision, _) => {
+                *revision != self.missing.revision || running.collection != self.settings.collection
+            }
             Outcome::Search(revision, ..) => *revision != self.query_revision,
             Outcome::Folders(revision, _) => {
                 self.folder_pending != Some(*revision)
@@ -1538,6 +1571,16 @@ impl PhotoApp {
                         !scan.warnings.is_empty(),
                     );
                     self.scan = scan;
+                }
+                Ok(Outcome::SourceOffline(revision, path)) if revision == self.scan_revision => {
+                    log::info!(target: "import", "quelle_nicht_verbunden pfad={path:?}");
+                    self.source_offline = Some(path);
+                }
+                Ok(Outcome::Missing(revision, folders))
+                    if revision == self.missing.revision
+                        && running.collection == self.settings.collection =>
+                {
+                    self.missing.accept(folders);
                 }
                 Ok(Outcome::Search(revision, status, page, filters))
                     if revision == self.query_revision =>

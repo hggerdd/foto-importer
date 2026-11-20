@@ -84,7 +84,16 @@ impl PhotoApp {
             ui.label(RichText::new("Sammlung").size(23.0).strong());
             if !self.settings.collection.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Bestand …").clicked() {
+                    let label = if self.status.missing > 0 {
+                        format!("Bestand · {} fehlen …", self.status.missing)
+                    } else {
+                        "Bestand …".into()
+                    };
+                    if ui
+                        .button(label)
+                        .on_hover_text("Bestand aktualisieren, Metadaten, fehlende Dateien")
+                        .clicked()
+                    {
                         self.collection_dialog = Some(CollectionDialog::Inventory);
                     }
                     if ui.selectable_label(self.inspector, "Bilddetails").clicked() {
@@ -220,16 +229,19 @@ impl PhotoApp {
             ui.heading(match dialog {
                 CollectionDialog::Filters => "Sammlung filtern",
                 CollectionDialog::Inventory => "Sammlungsbestand",
+                CollectionDialog::Missing => "Fehlende Dateien",
             });
             egui::ScrollArea::vertical()
                 .id_salt(match dialog {
                     CollectionDialog::Filters => "filters",
                     CollectionDialog::Inventory => "inventory",
+                    CollectionDialog::Missing => "missing",
                 })
                 .max_height((ctx.content_rect().height() - 190.0).clamp(100.0, 550.0))
                 .show(ui, |ui| match dialog {
                     CollectionDialog::Filters => self.search_builder(ui),
                     CollectionDialog::Inventory => self.inventory_controls(ui),
+                    CollectionDialog::Missing => self.missing_controls(ui),
                 });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
@@ -277,7 +289,16 @@ impl PhotoApp {
         ui.separator();
         ui.label(RichText::new("Fehlende Dateien").strong());
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Fehlende & letzte Änderungen anzeigen").clicked() {
+            if ui
+                .button(format!("Fehlende Dateien ({}) …", self.status.missing))
+                .on_hover_text(
+                    "Je Ordner ansehen, erneut suchen, neu verknüpfen oder Einträge entfernen",
+                )
+                .clicked()
+            {
+                self.open_missing();
+            }
+            if ui.button("Letzte Änderungen anzeigen").clicked() {
                 let root = self.settings.collection.clone();
                 self.collection_dialog = None;
                 self.launch("Bestandsbericht lesen", false, "report", move |_| {
