@@ -72,12 +72,21 @@
   `diagnostic_log`, Standard an, wirkt sofort); Ordner `%APPDATA%\FotoImporter\logs` neben
   der Einstellungsdatei, nie in einer Sammlung. Aufrufer nutzen die `log`-Makros mit
   ausdrücklichem Bereich (`target: "job"`) oder `core::diag::span` für Zeiten. `log` ist
-  schon über eframe im Baum; Schreiber und Rotation sind eigener Code (`core::diag`, rund 300
+  schon über eframe im Baum; Schreiber und Rotation sind eigener Code (`core::diag`, rund 350
   Zeilen), weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
   Gesamtgrenze bieten und `file-rotate` mehr Abhängigkeiten bringt als es spart.
   Formatiert wird auf dem aufrufenden Thread, geschrieben auf einem eigenen Thread über eine
   begrenzte Warteschlange (`DIAG_QUEUE`); ist sie voll, gehen Zeilen verloren und werden
-  gezählt, die Oberfläche wartet nie. Dateien `foto-importer-<Zeitstempel>.log` zu höchstens
+  gezählt, die Oberfläche wartet nie. Durchgehend geschrieben: Nach jedem Leeren der
+  Warteschlange (also Millisekunden nach dem Einreihen) geht alles ans Betriebssystem und
+  übersteht damit Absturz, Hängen und Abschießen; Warnungen sofort, Fehler und Paniken sofort
+  mit `sync_data` bis auf die Platte, alles andere spätestens nach `DIAG_SYNC_INTERVAL` (5 s,
+  Stromausfall). Der Panik-Haken wartet bei voller Warteschlange auf Platz und höchstens
+  `DIAG_PANIC_FLUSH` (2 s), bis die Zeile auf der Platte steht, erst dann läuft der
+  bisherige Haken (Release ohne `panic = "abort"`). Der Explorer zeigt die Größe einer offenen
+  Logdatei unter NTFS verzögert (oft 0 Bytes), weil der Verzeichniseintrag erst beim
+  Schließen nachgeführt wird; der Inhalt ist trotzdem lesbar. Dateien
+  `foto-importer-<Zeitstempel>.log` zu höchstens
   `DIAG_FILE_BYTES` (30 MB), alle zusammen höchstens `DIAG_TOTAL_BYTES` (300 MB); beim
   Beginn einer neuen Datei werden die ältesten gelöscht, andere Dateien im Ordner nie.
   Format je Zeile: `2026-11-19 18:25:03.123 INFO  job ende art=faces dauer_ms=73.4 …`
@@ -92,7 +101,7 @@
   Abgleich (MatchCache bereit/vollständig), langsame oder fehlerhafte Vorschauen,
   Datenbank-Öffnen ab `DIAG_SLOW_DB_OPEN_MS` oder mit Fehler, Migrationen; jeder Hinweis
   der Oberfläche (Fehler als Warnung), fehlgeschlagenes Speichern der Einstellungen; Panik
-  auf jedem Thread mit Ort und Backtrace, danach wird das Log geleert. Kosten (2026-11-19,
+  auf jedem Thread mit Ort und Backtrace (sofort auf der Platte). Kosten (2026-11-19,
   `examples/diag_bench.rs`, Debug-Build): ausgeschaltet 15 ns je Zeile, eingeschaltet 8 µs
   (Formatieren und Einreihen); im Normalbetrieb wenige Zeilen je Sekunde.
 - **Oberfläche:** Ein Arbeitsbereich, Kontext rechts, sichtbare
