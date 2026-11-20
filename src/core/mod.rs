@@ -21,6 +21,7 @@ pub mod maintenance;
 pub mod matching;
 pub mod metadata;
 pub mod migrations;
+pub mod missing;
 pub mod onnx_runtime;
 pub mod people_table;
 pub mod person_insights;

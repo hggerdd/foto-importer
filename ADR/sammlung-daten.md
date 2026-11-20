@@ -40,14 +40,37 @@
 - **Foto-Identität:** Dateien verweisen über `files.photo_id` auf ein Foto. Identität kommt
   bevorzugt aus Kameraseriennummer und Auslösezähler, mit festgelegten Rückfällen. Pfade
   beschreiben die Ablage, nicht die Identität. Beim Zusammenführen bleibt der ältere Anker,
-  der andere wird weitergeleitet. Verschiebungen werden über Datei-IDs und bekannte Hashes
-  nachvollzogen.
+  der andere wird weitergeleitet. Verschiebungen und umbenannte Ordner vollzieht der
+  Bestandslauf nach, ohne neue Zeilen: Die alte Zeile (Datei-ID, Foto-ID, Gesichter,
+  Entscheidungen) übernimmt den neuen Pfad, `faces.source_relpath` folgt. Reihenfolge der
+  Zuordnung für eine neue Datei, deren alter Pfad fehlt: (1) gleiche Datei-ID (NTFS-Index,
+  auf exFAT bei Ordnerumbenennung ebenfalls stabil) und Größe; (2) gleicher Dateiname
+  (gefaltet), Größe und Änderungszeit, geprüft gegen einen gespeicherten Schnellhash, falls
+  vorhanden; (3) bekannter BLAKE3-Hash. Bei (2) wird nicht geraten: passen mehrere
+  verschwundene Zeilen oder tragen mehrere neue Dateien ohne Bestandszeile denselben Namen und
+  dieselbe Größe, bleibt die alte Zeile fehlend und die neue Datei neu; der Lauf meldet
+  „N mehrdeutig, nicht zugeordnet“ und die Ansicht „Fehlende Dateien“ bietet, wo eindeutig,
+  das Neu-Verknüpfen an.
+- **Fehlende Dateien beim Lesen:** Metadaten- und Gesichtslauf prüfen jede Datei. Fehlt sie
+  (`NotFound`, Windows-Fehler 2/3), wird sie als fehlend markiert (`status='missing'`, Zeile
+  `changes` mit `kind='missing'`; Zeilen, Foto-IDs und Entscheidungen bleiben), WARN im
+  Diagnose-Log mit Anzahl und Beispielpfad, und der Lauf geht weiter. Fehlende Dateien
+  fallen aus allen Warteschlangen (`status='present'`), bis ein Bestandslauf sie wiederfindet.
+  Ist die Sammlung selbst nicht mehr erreichbar (Datenbankdatei fehlt), wird nichts markiert.
+- **Fehlende Einträge entfernen** (Ansicht „Fehlende Dateien“, `core::missing`): löscht nur
+  `files`- und `meta`-Zeilen mit `status='missing'` der gewählten Ordner, nachdem jede Datei
+  noch einmal auf der Platte gesucht wurde (wieder Vorhandenes bleibt). Fotos, Gesichter und
+  Personenzuordnungen bleiben; die Rückfrage nennt Fotos ohne Datei und bestätigte Gesichter.
+  **Neu verknüpfen** übergibt fehlende Zeilen an ihre schon eingetragenen Entsprechungen
+  (eindeutig gleicher Name, Größe, Änderungszeit, alle in einem Zielordner) und entfernt die
+  doppelten neuen Zeilen; nur solange an deren Fotos noch keine Gesichter hängen.
 - **Indizierung in vier Schritten:** Ordner lesen, Bestand vergleichen, Dateien eintragen
   (Stapel zu 500 je Transaktion, sofort sichtbar), abschließen. Metadaten (ExifTool) und
   BLAKE3-Prüfung sind eigene, fortsetzbare Läufe. Ungelesene Dateien liest zusätzlich ein Hintergrundlauf
   (siehe [Anwendung](anwendung.md)); `CollectionStatus.unread` zählt sie ohne frühere Fehler.
-- **Schutz vor Massenverlust:** Nur ein vollständig durchgelaufener Lauf markiert Dateien als
-  fehlend; bei Lesefehlern nie, über 20 % nur nach Bestätigung. Ein abgebrochener Lauf behält
+- **Schutz vor Massenverlust:** Im Bestandslauf markiert nur ein vollständig durchgelaufener
+  Lauf unbesuchte Dateien als fehlend (einzeln geprüfte Dateien im Metadaten- und
+  Gesichtslauf siehe oben); bei Lesefehlern nie, über 20 % nur nach Bestätigung. Ein abgebrochener Lauf behält
   Eingetragenes. Bei Hash-Abweichung bleibt der gespeicherte Vergleichswert erhalten.
 - **Projektion für Abfragen:** `metadata_photos` enthält je Foto die bevorzugte Variante und
   wird von Triggern in derselben Transaktion gepflegt; die Originaltabellen bleiben maßgeblich.

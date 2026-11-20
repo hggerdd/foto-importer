@@ -15,6 +15,15 @@ use std::{
     time::Duration,
 };
 
+/// ExifTool ließ sich nicht starten. Dann hilft kein Aufteilen des Blocks: der Lauf endet.
+#[derive(Debug)]
+pub struct ExifToolUnavailable;
+impl std::fmt::Display for ExifToolUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExifTool fehlt oder ist nicht startbar. Pfad in Einstellungen prüfen.")
+    }
+}
+
 pub fn read_metadata(paths: &[PathBuf], executable: &str, control: &Control) -> Result<Vec<Json>> {
     let mut args = tempfile::NamedTempFile::new()?;
     for path in paths {
@@ -42,7 +51,7 @@ pub fn read_metadata(paths: &[PathBuf], executable: &str, control: &Control) -> 
         .stdout(output.try_clone()?)
         .stderr(error.try_clone()?)
         .spawn()
-        .context("ExifTool fehlt oder ist nicht startbar. Pfad in Einstellungen prüfen.")?;
+        .context(ExifToolUnavailable)?;
     let status = wait_child(&mut child, control, Duration::from_secs(120))?;
     if !status.success() && status.code() != Some(1) {
         error.rewind()?;
@@ -125,7 +134,7 @@ pub fn enrich_scoped(
     collection.writable()?;
     control.phase("Reihenfolge festlegen (neueste zuerst)", "");
     let order = super::scope::metadata_order(collection, scope)?;
-    let done = enrich_files(
+    let enriched = enrich_files(
         collection,
         executable,
         control,
@@ -134,7 +143,7 @@ pub fn enrich_scoped(
     )?;
     control.phase("Sicherung schreiben", "");
     collection.backup()?;
-    Ok(format!("{done} Dateien mit Metadaten angereichert"))
+    Ok(enriched.summary())
 }
 
 /// Hintergrundlauf mit niedriger Priorität: eine Portion noch nie versuchter Dateien in
@@ -148,7 +157,7 @@ pub fn enrich_background(
     collection.writable()?;
     let portion = crate::config::METADATA_BACKGROUND_PORTION;
     let order = super::scope::metadata_unread(collection, portion)?;
-    let done = enrich_files(
+    let enriched = enrich_files(
         collection,
         executable,
         control,
@@ -159,7 +168,7 @@ pub fn enrich_background(
     if !more {
         collection.backup()?;
     }
-    Ok(format!("{done} Dateien mit Metadaten angereichert"))
+    Ok(enriched.summary())
 }
 
 /// Liest die Metadaten aller vorhandenen Dateien eines Fotos neu und überschreibt deren
@@ -172,17 +181,45 @@ pub fn enrich_photo(
 ) -> Result<String> {
     collection.writable()?;
     let ids = super::scope::photo_files(collection, photo)?;
-    let done = enrich_files(
+    let enriched = enrich_files(
         collection,
         executable,
         control,
         &ids,
         crate::config::METADATA_CHUNK,
     )?;
-    Ok(format!("Metadaten gelesen ({done} Dateien)"))
+    Ok(if enriched.missing > 0 {
+        format!(
+            "Metadaten gelesen ({} Dateien) · {} Dateien nicht gefunden, als fehlend markiert",
+            enriched.done, enriched.missing
+        )
+    } else {
+        format!("Metadaten gelesen ({} Dateien)", enriched.done)
+    })
 }
 
-/// Liest `order` in Blöcken zu `chunk` Dateien und speichert jeden Block in einer
+/// Ergebnis eines Metadatenlaufs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Enriched {
+    /// Erfolgreich gelesene Dateien.
+    pub done: usize,
+    /// Dateien, die nicht mehr da waren und als fehlend markiert wurden.
+    pub missing: usize,
+}
+impl Enriched {
+    fn summary(&self) -> String {
+        let mut text = format!("{} Dateien mit Metadaten angereichert", self.done);
+        if self.missing > 0 {
+            text.push_str(&format!(
+                " · {} nicht gefunden, als fehlend markiert (Sammlung → Bestand → Fehlende Dateien)",
+                self.missing
+            ));
+        }
+        text
+    }
+}
+
+/// Liest `order` in Blöcken zu `chunk` Dateien mit ExifTool und speichert jeden Block in einer
 /// Transaktion. Zwischen den Blöcken wird auf Abbruch geprüft.
 fn enrich_files(
     collection: &mut Collection,
@@ -190,48 +227,143 @@ fn enrich_files(
     control: &Control,
     order: &[i64],
     chunk: usize,
-) -> Result<usize> {
+) -> Result<Enriched> {
+    enrich_with(collection, order, chunk, control, &mut |paths, control| {
+        read_metadata(paths, executable, control)
+    })
+}
+
+/// Lesefunktion eines Blocks: Pfade hinein, ExifTool-JSON heraus.
+pub type Reader<'a> = dyn FnMut(&[PathBuf], &Control) -> Result<Vec<Json>> + 'a;
+
+/// Wie `enrich_files`, mit austauschbarer Lesefunktion (Tests ohne ExifTool). Einzelne Dateien
+/// halten den Block nicht auf: Fehlende werden als fehlend markiert, nicht lesbare erhalten
+/// `meta_state='error'`, und scheitert ExifTool an einem Block, wird er geteilt, bis die
+/// schuldige Datei allein steht.
+pub fn enrich_with(
+    collection: &mut Collection,
+    order: &[i64],
+    chunk: usize,
+    control: &Control,
+    read: &mut Reader<'_>,
+) -> Result<Enriched> {
     let total = order.len();
-    let mut done = 0;
+    let mut result = Enriched::default();
     let mut processed = 0;
+    let mut missing_example = None;
     control.phase("Metadaten lesen (ExifTool)", "Dateien");
     control.progress(0, total);
     let mut position = 0;
     loop {
         control.checkpoint()?;
-        let ids = &order[position..(position + chunk).min(total)];
+        let ids = &order[position..(position + chunk.max(1)).min(total)];
         if ids.is_empty() {
             break;
         }
         position += ids.len();
-        let marks = vec!["?"; ids.len()].join(",");
-        let mut rows = collection
-            .db
-            .prepare(&format!(
-                "SELECT id,relpath,photo_id FROM files WHERE id IN ({marks})"
-            ))?
-            .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.sort_by_key(|r| ids.iter().position(|id| *id == r.0));
+        let rows = block_rows(collection, ids)?;
         if rows.is_empty() {
             break;
         }
-        let paths: Vec<_> = rows
-            .iter()
-            .map(|r| collection.safe_path(&r.1))
-            .collect::<Result<_>>()?;
-        let raw = read_metadata(&paths, executable, control)?;
-        done += store_results(collection, &rows, &paths, raw, control)?;
         processed += rows.len();
+        let (readable, paths, missing) = locate(collection, rows)?;
+        if !missing.is_empty() {
+            missing_example.get_or_insert_with(|| missing[0].1.clone());
+            result.missing += collection.mark_missing(&missing, "metadaten")?;
+        }
+        if !readable.is_empty() {
+            let raw = read_split(&paths, control, read)?;
+            result.done += store_results(collection, &readable, &paths, raw, control)?;
+        }
         control.progress(processed, total);
     }
-    Ok(done)
+    if let Some(example) = missing_example {
+        log::warn!(
+            target: "metadaten",
+            "dateien_fehlen anzahl={} beispiel={example:?}",
+            result.missing
+        );
+    }
+    Ok(result)
+}
+
+/// Datei-ID, Pfad und Foto der Dateien eines Blocks in der Reihenfolge von `ids`; nur
+/// vorhandene Dateien (eine inzwischen als fehlend markierte wird übersprungen).
+fn block_rows(collection: &Collection, ids: &[i64]) -> Result<Vec<FileRow>> {
+    let marks = vec!["?"; ids.len()].join(",");
+    let mut rows = collection
+        .db
+        .prepare(&format!(
+            "SELECT id,relpath,photo_id FROM files WHERE id IN ({marks}) AND status='present'"
+        ))?
+        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.sort_by_key(|r| ids.iter().position(|id| *id == r.0));
+    Ok(rows)
+}
+
+/// Teilt einen Block in lesbare Dateien (samt Pfad) und fehlende (ID, Pfad). Andere Fehler
+/// beim Auflösen (z. B. Pfad außerhalb der Sammlung) werden an der Datei vermerkt.
+type Located = (Vec<FileRow>, Vec<PathBuf>, Vec<(i64, String)>);
+fn locate(collection: &Collection, rows: Vec<FileRow>) -> Result<Located> {
+    let (mut readable, mut paths, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    for row in rows {
+        match collection.safe_path(&row.1) {
+            Ok(path) => {
+                readable.push(row);
+                paths.push(path);
+            }
+            Err(error) if super::collection::is_not_found(&error) => missing.push((row.0, row.1)),
+            Err(error) => {
+                collection.db.execute(
+                    "UPDATE files SET meta_state='error',meta_error=? WHERE id=?",
+                    params![format!("{error:#}"), row.0],
+                )?;
+            }
+        }
+    }
+    Ok((readable, paths, missing))
+}
+
+/// Liest einen Block; scheitert ExifTool daran, wird er halbiert. Eine einzelne Datei, an der
+/// es scheitert, erhält ein Ergebnis mit `Error`, das `store_results` als Fehler vermerkt.
+/// Fehlt ExifTool oder wurde abgebrochen, endet der Lauf.
+fn read_split(paths: &[PathBuf], control: &Control, read: &mut Reader<'_>) -> Result<Vec<Json>> {
+    match read(paths, control) {
+        Ok(raw) => Ok(raw),
+        Err(error) if error.downcast_ref::<ExifToolUnavailable>().is_some() => Err(error),
+        Err(error) => {
+            control.checkpoint()?;
+            if let [path] = paths {
+                log::warn!(
+                    target: "metadaten",
+                    "datei_fehler pfad={:?} fehler={:?}",
+                    path.display().to_string(),
+                    format!("{error:#}")
+                );
+                return Ok(vec![serde_json::json!({
+                    "SourceFile": path.to_string_lossy(),
+                    "Error": format!("{error:#}"),
+                })]);
+            }
+            log::warn!(
+                target: "metadaten",
+                "block_geteilt dateien={} fehler={:?}",
+                paths.len(),
+                format!("{error:#}")
+            );
+            let (left, right) = paths.split_at(paths.len() / 2);
+            let mut raw = read_split(left, control, read)?;
+            raw.extend(read_split(right, control, read)?);
+            Ok(raw)
+        }
+    }
 }
 
 /// Speichert die ExifTool-Ergebnisse eines Blocks (`meta`, `meta_state`, Foto-Identität) in

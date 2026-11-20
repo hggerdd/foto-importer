@@ -1,4 +1,8 @@
-use super::{files, jobs::Control, known_files::KnownFiles};
+use super::{
+    files,
+    jobs::Control,
+    known_files::{KnownFiles, Signature, Unseen},
+};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
@@ -174,6 +178,49 @@ impl Collection {
         }
         Ok(resolved)
     }
+    /// Ist die Sammlung selbst noch erreichbar? Fehlt die Datenbankdatei (Laufwerk getrennt),
+    /// darf keine einzelne Datei als fehlend gelten.
+    pub fn reachable(&self) -> bool {
+        self.root.join(".myfotomanager").is_file()
+    }
+
+    /// Markiert Dateien, die beim Lesen nicht mehr gefunden wurden, als fehlend (`status`
+    /// 'missing'). Zeilen, Foto-Identitäten, Gesichter und Entscheidungen bleiben; ein späterer
+    /// Bestandslauf findet die Dateien am alten oder (über die Umbenennungserkennung) am neuen
+    /// Ort wieder. `during` nennt den Lauf im Diagnose-Log.
+    pub fn mark_missing(&mut self, rows: &[(i64, String)], during: &str) -> Result<usize> {
+        self.writable()?;
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        if !self.reachable() {
+            bail!("Sammlung ist nicht mehr erreichbar; keine Datei wurde als fehlend markiert");
+        }
+        let tx = self.db.transaction()?;
+        let mut marked = 0;
+        for (id, relpath) in rows {
+            let changed = tx.execute(
+                "UPDATE files SET status='missing' WHERE id=? AND status='present'",
+                [id],
+            )?;
+            if changed == 0 {
+                continue;
+            }
+            marked += 1;
+            tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(NULL,'missing',?,?,NULL,datetime('now'))", params![id, relpath])?;
+            tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END WHERE id=(SELECT photo_id FROM files WHERE id=?)", [id])?;
+        }
+        tx.commit()?;
+        if marked > 0 {
+            log::warn!(
+                target: "sammlung",
+                "fehlend_markiert lauf={during:?} anzahl={marked} beispiel={:?}",
+                rows[0].1
+            );
+        }
+        Ok(marked)
+    }
+
     pub fn backup(&self) -> Result<()> {
         self.writable()?;
         let temp = tempfile::NamedTempFile::new_in(&self.root)?;
@@ -287,6 +334,7 @@ impl Collection {
             .map(|source| Ok(files::normalize(source.path.strip_prefix(&self.root)?)))
             .collect::<Result<Vec<String>>>()?;
         let mut known = KnownFiles::load(&self.db, &relpaths, &extension_folders, control)?;
+        known.note_walked(&relpaths, scan.files.iter().map(|f| f.size as i64));
         let scan_id = {
             let tx = self.db.transaction()?;
             tx.execute("INSERT INTO scans(kind,scope,started_at,status) VALUES('quick','',datetime('now'),'running')", [])?;
@@ -306,7 +354,7 @@ impl Collection {
             &export_folders,
             control,
         );
-        let (added, moved) = match entered {
+        let (added, moved, ambiguous) = match entered {
             Ok(counts) => counts,
             Err(error) => {
                 // Entered batches stay; nothing is marked missing and the scan is closed visibly.
@@ -342,14 +390,25 @@ impl Collection {
         }
         // Only rows whose state changes are written; the result equals the full rewrite.
         tx.execute("UPDATE photos SET status=CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END WHERE status IS NOT CASE WHEN EXISTS(SELECT 1 FROM files WHERE photo_id=photos.id AND status='present') THEN 'present' ELSE 'missing' END",[])?;
-        tx.execute("UPDATE scans SET status='done',finished_at=datetime('now'),stats_json=? WHERE id=?", params![serde_json::json!({"added":added,"moved":moved,"unvisited":missing,"marked_missing":mark_missing}).to_string(),scan_id])?;
+        tx.execute("UPDATE scans SET status='done',finished_at=datetime('now'),stats_json=? WHERE id=?", params![serde_json::json!({"added":added,"moved":moved,"ambiguous":ambiguous,"unvisited":missing,"marked_missing":mark_missing}).to_string(),scan_id])?;
         control.checkpoint()?;
         tx.commit()?;
+        if moved > 0 || ambiguous > 0 {
+            log::info!(
+                target: "sammlung",
+                "bestand verschoben={moved} mehrdeutig={ambiguous} nicht_gesehen={missing}"
+            );
+        }
         control.phase("Schritt 4 von 4 · Sicherung schreiben", "");
         self.backup()?;
         Ok(format!(
-            "{} Dateien · {added} neu · {moved} verschoben · {missing} nicht gesehen{}{}",
+            "{} Dateien · {added} neu · {moved} verschoben{} · {missing} nicht gesehen{}{}",
             total,
+            if ambiguous > 0 {
+                format!(" · {ambiguous} mehrdeutig, nicht zugeordnet")
+            } else {
+                String::new()
+            },
             if mark_missing {
                 ""
             } else {
@@ -386,8 +445,8 @@ impl Collection {
         extension_folders: &[String],
         export_folders: &[String],
         control: &Control,
-    ) -> Result<(usize, usize)> {
-        let (mut added, mut moved) = (0, 0);
+    ) -> Result<(usize, usize, usize)> {
+        let (mut added, mut moved, mut ambiguous) = (0, 0, 0);
         let total = scan.files.len();
         let mut position = 0;
         while position < total {
@@ -442,6 +501,21 @@ impl Collection {
                     moved += 1;
                     tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))", params![scan_id,found.id,found.relpath,rel])?;
                     known.relocate(&found, &stem, dir, extension_folders);
+                }
+                if old.is_none() {
+                    match known.moved_by_signature(&self.root, rel, size, mtime) {
+                        Signature::Unique(found)
+                            if signature_confirmed(&found, &source.path, control)? =>
+                        {
+                            old = Some((found.id, found.size, found.mtime));
+                            previous = found.relpath.clone();
+                            moved += 1;
+                            tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(?,'moved',?,?,?,datetime('now'))", params![scan_id,found.id,found.relpath,rel])?;
+                            known.relocate(&found, &stem, dir, extension_folders);
+                        }
+                        Signature::Ambiguous => ambiguous += 1,
+                        _ => {}
+                    }
                 }
                 if old.is_none() && known.has_hashed(size) {
                     let candidates = known.hashed_unseen(&self.root, size);
@@ -511,7 +585,7 @@ impl Collection {
                 .fetch_add(end - position, Ordering::Relaxed);
             position = end;
         }
-        Ok((added, moved))
+        Ok((added, moved, ambiguous))
     }
 
     pub fn verify(&mut self, control: &Control) -> Result<String> {
@@ -677,6 +751,15 @@ impl Collection {
         Ok("Verschiebung mit bestehender Foto-Identität zugeordnet".into())
     }
 }
+/// Eine Signaturzuordnung gilt nur, wenn ein früher gespeicherter Schnellhash (falls vorhanden)
+/// zum Inhalt der neuen Datei passt.
+fn signature_confirmed(found: &Unseen, path: &Path, control: &Control) -> Result<bool> {
+    match &found.quick_hash {
+        Some(hash) => Ok(*hash == super::import_service::quick_hash(path, control)?),
+        None => Ok(true),
+    }
+}
+
 pub(crate) fn family_directory(directory: &str, extensions: &[String]) -> String {
     let leaf = directory.rsplit('/').next().unwrap_or("");
     if extensions
@@ -766,6 +849,16 @@ fn file_id(path: &Path) -> Option<String> {
         use std::os::unix::fs::MetadataExt;
         path.metadata().ok().map(|m| m.ino().to_string())
     }
+}
+
+/// Fehlt die Datei oder ihr Ordner (`NotFound`, unter Windows Fehler 2 und 3)? Andere Fehler
+/// (Zugriff verweigert, Gerät nicht bereit) zählen nicht als fehlend.
+pub fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 /// Liegt im Ordner schon eine Sammlung? Ein einzelner Metadatenaufruf, nichts wird geöffnet.

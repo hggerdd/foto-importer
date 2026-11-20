@@ -10,6 +10,11 @@
   veröffentlicht (`persist_noclobber`). Vorhandene Zieldateien werden nie ersetzt.
 - **Teilfehler:** Fertige Kopien bleiben; ein Auftrag entfernt bei Fehler oder Abbruch nur
   seine eigene temporäre Datei.
+- **Quelle beim Start:** Die App liest die gespeicherte Quelle beim Start ein. Ist sie nicht
+  erreichbar (Karte oder Laufwerk nicht verbunden), ist das kein Fehler: die Importansicht
+  zeigt ruhig „Quelle nicht verbunden: …“, das Diagnose-Log eine INFO-Zeile. Liest der Nutzer
+  die Quelle ausdrücklich ein („Neu einlesen“, Ordnerwahl) oder importiert er, bleiben Fehler
+  Fehler.
 - **Ordnername** wird vor dem Start geprüft; der Zielplan ist vor dem Kopieren sichtbar.
 - **Warteschlange:** „Sicher importieren“ legt die gewählten Tage als Import fest und ist
   immer möglich, auch während ein anderer läuft. Ziel, Ordnername, DNG, Überspringen und

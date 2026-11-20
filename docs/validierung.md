@@ -492,3 +492,17 @@ Zählungen, Gruppen, Abgleich und nach erneuter Analyse, Rücknahme; Rangfolge u
 nach dem Abgleich; Bestätigen und Entfernen auf der Personenseite) und in
 `src/ui/app/tests.rs` die Karten beider Seiten. Nicht geprüft: Sichtprüfung in der laufenden
 App, Zeiten auf der USB-Festplatte selbst.
+
+## Umbenannte Ordner und fehlende Dateien (2026-11-20)
+
+Nur lesend an `E:\Bilder` (exFAT, USB-Festplatte, 98 082 Dateien): Nach der Umbenennung
+`260822_Hochzeit_Tag_2` → `260822_Geburtstag_Martin` (177 Dateien) haben die Dateien am neuen
+Ort dieselbe Datei-ID (`GetFileInformationByHandle`, Stichprobe 2 Dateien), Größe und
+Änderungszeit wie die gespeicherten Zeilen; Hashes sind nicht gespeichert. Ein
+Bestandslauf ordnet sie damit über Datei-ID und Größe den alten Zeilen zu. Nicht ausgeführt:
+der Bestandslauf selbst auf `E:\Bilder` (Sammlung blieb unverändert). Regressionen in
+`tests/missing_files.rs` (Umbenennung mit Datei-ID und ohne über Name/Größe/Zeit,
+mehrdeutige Fälle, Metadatenblock mit fehlender und mit unlesbarer Datei, Entfernen und
+Neu-Verknüpfen) und in `src/ui/app/tests.rs` (nicht verbundene Quelle beim Start, Dialog
+„Fehlende Dateien“). Der Gesichtslauf mit fehlender Datei ist ohne Modelle nicht offline
+getestet.

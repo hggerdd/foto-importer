@@ -6,6 +6,13 @@
   optional der Ordnerbaum links, die Galerie und rechts der Bildinspektor. Filter und
   Bestandspflege liegen in Dialogen, damit die Galerie ihre Höhe behält. Der Inspektor lässt
   sich ausblenden.
+- **Fehlende Dateien:** Der Knopf „Bestand …“ nennt fehlende Dateien („Bestand · N fehlen …“);
+  im Bestandsdialog öffnet „Fehlende Dateien (N) …“ eine Liste je Ordner (Varianten-Unterordner
+  zählen zum Tagesordner) mit Dateizahl und bestätigten Gesichtern, gelesen auf einem Worker.
+  Aktionen: „Erneut suchen“ (Bestand aktualisieren; findet umbenannte Ordner wieder),
+  „Mit „…“ neu verknüpfen“ (nur bei eindeutiger Entsprechung) und „Einträge entfernen“ für
+  gewählte Ordner nach einer Rückfrage mit Folgen. Regeln in
+  [Sammlung und Daten](sammlung-daten.md).
 - **Suche:** lesend, auf Foto-Ebene, seitenweise (48 Fotos). Kombinierbar sind Text, Datum,
   Monate, Metadatenregeln (UND/ODER), Personen (alle, mindestens eine, keine, nur diese) und
   Gesichtszustand. XMP-Bewertung und -Farbmarkierung haben beim Anzeigen Vorrang. Neue

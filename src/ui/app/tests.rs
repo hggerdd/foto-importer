@@ -3072,3 +3072,97 @@ fn person_details_open_the_faces_page_for_that_person() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn an_unreachable_source_at_startup_is_a_quiet_state_not_an_error() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let card = root.path().join("DCIM").join("103NZ6_2");
+    let source = card.to_string_lossy().into_owned();
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let settings = Settings {
+        source: source.clone(),
+        ..Settings::default()
+    };
+    let mut app = PhotoApp::with_settings(&creation, settings);
+    wait_for_tasks(&mut app);
+    assert!(
+        app.notice.as_ref().is_none_or(|n| !n.error),
+        "kein Fehlerhinweis beim Start"
+    );
+    assert_eq!(app.source_offline.as_deref(), Some(source.as_str()));
+    // Liest der Nutzer die Quelle ausdrücklich ein, bleibt es ein Fehler.
+    app.begin_scan();
+    assert!(app.source_offline.is_none());
+    wait_for_tasks(&mut app);
+    assert!(app.notice.as_ref().is_some_and(|n| n.error));
+    // Ist die Karte da, wird sie beim Start ganz normal eingelesen.
+    std::fs::create_dir_all(&card)?;
+    std::fs::write(card.join("a.jpg"), b"jpeg")?;
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = PhotoApp::with_settings(
+        &creation,
+        Settings {
+            source,
+            ..Settings::default()
+        },
+    );
+    wait_for_tasks(&mut app);
+    assert!(app.source_offline.is_none());
+    assert_eq!(app.scan.files.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn the_missing_files_dialog_lists_folders_and_removes_after_confirmation() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    for dir in ["Alt", "Bleibt"] {
+        std::fs::create_dir_all(root.path().join(dir))?;
+        for n in 0..3 {
+            std::fs::write(
+                root.path().join(dir).join(format!("{n}.jpg")),
+                format!("{dir}{n}"),
+            )?;
+        }
+    }
+    {
+        let mut c = Collection::open(root.path(), true)?;
+        c.quick_scan(false, &Control::default())?;
+        std::fs::remove_dir_all(root.path().join("Alt"))?;
+        c.quick_scan(true, &Control::default())?;
+        assert_eq!(c.status()?.missing, 3);
+    }
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    wait_for_tasks(&mut app);
+    app.view = View::Collection;
+    app.open_missing();
+    wait_for_tasks(&mut app);
+    let folders = app.missing.folders.clone().expect("gelesen");
+    assert_eq!(folders.len(), 1);
+    assert_eq!((folders[0].dir.as_str(), folders[0].files), ("Alt", 3));
+    let draw = |app: &mut PhotoApp| {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(980.0, 680.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+        );
+    };
+    draw(&mut app);
+    app.missing.selected.insert("Alt".into());
+    app.missing.confirm = true;
+    draw(&mut app);
+    assert_eq!(app.missing.chosen_impact(), (3, 3, 0));
+    app.remove_missing();
+    wait_for_tasks(&mut app);
+    let c = Collection::open(root.path(), false)?;
+    assert_eq!(c.status()?.missing, 0);
+    assert_eq!(c.status()?.files, 3, "vorhandene Dateien bleiben");
+    Ok(())
+}
