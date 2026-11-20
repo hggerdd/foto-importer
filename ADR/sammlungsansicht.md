@@ -9,7 +9,11 @@
 - **Suche:** lesend, auf Foto-Ebene, seitenweise (48 Fotos). Kombinierbar sind Text, Datum,
   Monate, Metadatenregeln (UND/ODER), Personen (alle, mindestens eine, keine, nur diese) und
   Gesichtszustand. XMP-Bewertung und -Farbmarkierung haben beim Anzeigen Vorrang. Neue
-  Suchanfragen brechen veraltete SQL-Arbeit ab.
+  Suchanfragen brechen veraltete SQL-Arbeit ab; das Öffnen der Ansicht startet keine neue,
+  solange eine Suche läuft (z. B. die vom Start). Gesamtzahl und Kameraliste lesen `meta`
+  nur, wenn eine Regel Spalten daraus braucht (sonst kalt über 30 s auf USB-Platten).
+  Außerhalb von „Gesichter“ und „Personen“ liest die App nur Personen und Zählungen, keine
+  Gesichtsgruppen samt Vorschlägen.
 - **Filter ohne Entwurf:** Jede Änderung im Filterdialog fragt die Sammlung sofort neu ab
   (auf dem Worker); Datums- und Wertfelder bei Fokusverlust, Enter oder Schließen des
   Dialogs. Es gibt keinen Anwenden-Knopf und keinen Zustand „Entwurf“; der Knopf zeigt

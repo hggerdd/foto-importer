@@ -649,6 +649,13 @@ pub fn predicate(search: &Search, detector: &str) -> Result<(String, Vec<Value>)
     }
     Ok((clauses.join(" AND "), args))
 }
+/// Verweist das Suchprädikat auf die Tabelle `meta` (Alias `m`)? `sm.` und ähnliche Aliase
+/// zählen nicht.
+fn reads_meta(sql: &str) -> bool {
+    sql.match_indices("m.").any(|(at, _)| {
+        at == 0 || !sql.as_bytes()[at - 1].is_ascii_alphanumeric() && sql.as_bytes()[at - 1] != b'_'
+    })
+}
 fn placeholders(count: usize) -> String {
     vec!["?"; count].join(",")
 }
@@ -679,12 +686,20 @@ pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Resu
     let result = (|| -> Result<SearchPage> {
         let from =
             format!("FROM metadata_photos p LEFT JOIN meta m ON m.file_id=p.file_id WHERE {sql}");
+        // Zählungen über alle Treffer lesen `meta` nur, wenn eine Regel es braucht: SQLite
+        // lässt den ungenutzten LEFT JOIN bei Aggregaten nicht weg, und jede Zeile von `meta`
+        // (samt JSON) liegt auf eigenen Seiten. Auf USB-Platten kostete das kalt über 30 s.
+        let count_from = if reads_meta(&sql) {
+            from.clone()
+        } else {
+            format!("FROM metadata_photos p WHERE {sql}")
+        };
         let total = collection.db.query_row(
-            &format!("SELECT count(*) {from}"),
+            &format!("SELECT count(*) {count_from}"),
             rusqlite::params_from_iter(&args),
             |r| r.get(0),
         )?;
-        let cameras=collection.db.prepare(&format!("SELECT coalesce(p.camera,'Unbekannt'),count(*) {from} GROUP BY p.camera ORDER BY count(*) DESC LIMIT 8"))?.query_map(rusqlite::params_from_iter(&args),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let cameras=collection.db.prepare(&format!("SELECT coalesce(p.camera,'Unbekannt'),count(*) {count_from} GROUP BY p.camera ORDER BY count(*) DESC LIMIT 8"))?.query_map(rusqlite::params_from_iter(&args),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut page_args = args.clone();
         let has_sources: bool = collection.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_sources')",

@@ -872,6 +872,14 @@ impl PhotoApp {
         self.view = view;
         self.recognition_tools_open = false;
         match view {
+            // Eine laufende Suche ist schon die neueste Anfrage (jede neue bricht die alte ab),
+            // z. B. die vom Start: nicht abbrechen und von vorn beginnen.
+            View::Collection
+                if self.tasks.iter().any(|t| {
+                    t.kind == "search"
+                        && t.collection == self.settings.collection
+                        && !t.task.control.cancel.load(Ordering::Relaxed)
+                }) => {}
             View::Collection => self.requery_collection(),
             View::Faces | View::People => self.refresh_faces(),
             _ => {}
@@ -1041,7 +1049,12 @@ impl PhotoApp {
         self.face_revision += 1;
         let revision = self.face_revision;
         let root = PathBuf::from(&self.settings.collection);
-        let mode = self.page_mode().to_string();
+        // Außerhalb von „Gesichter“ und „Personen“ braucht die Oberfläche nur Personen und
+        // Zählungen. Gruppen samt Namensvorschlägen (alle Referenzmerkmale lesen) kämen sonst
+        // schon beim Start und konkurrierten mit der ersten Sammlungssuche um die Platte; die
+        // Ansicht liest sie beim Öffnen (`open_view`).
+        let groups = matches!(self.view, View::Faces | View::People);
+        let mode = if groups { self.page_mode() } else { "tree" }.to_string();
         let page = self.face_index;
         let person = self.page_person();
         self.launch(
@@ -1055,7 +1068,7 @@ impl PhotoApp {
                 let read = |index| faces::page_with(&c, &mode, index, person, &control);
                 let mut index = page;
                 let mut snapshot = read(index)?;
-                if index > 0 && snapshot.groups.is_empty() {
+                if groups && index > 0 && snapshot.groups.is_empty() {
                     index -= 1;
                     snapshot = read(index)?;
                     if index > 0 && snapshot.groups.is_empty() {

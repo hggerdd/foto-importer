@@ -9,6 +9,7 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
     let creation = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.view = View::Faces;
     app.face_index = 3;
     app.refresh_faces();
     for _ in 0..1000 {
@@ -21,6 +22,61 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
     assert!(app.tasks.is_empty());
     assert_eq!(app.face_index, 0);
     assert!(app.face_page.groups.is_empty());
+    Ok(())
+}
+
+#[test]
+fn other_views_read_people_without_face_groups_and_keep_the_page() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    {
+        let c = Collection::open(root.path(), true)?;
+        c.db.execute_batch(
+            "INSERT INTO persons(id) VALUES(1);
+             INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+        )?;
+    }
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.view = View::Collection;
+    app.face_index = 3;
+    app.refresh_faces();
+    for _ in 0..1000 {
+        app.poll(&ctx);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.tasks.is_empty());
+    assert_eq!(app.face_index, 3);
+    assert_eq!(app.face_page.people.len(), 1);
+    assert!(app.face_page.groups.is_empty());
+    Ok(())
+}
+
+#[test]
+fn opening_the_collection_keeps_a_running_search() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.refresh_collection();
+    let revision = app.query_revision;
+    app.open_view(View::Collection);
+    assert_eq!(app.query_revision, revision);
+    for _ in 0..1000 {
+        app.poll(&ctx);
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    app.open_view(View::Collection);
+    assert_eq!(app.query_revision, revision + 1);
     Ok(())
 }
 

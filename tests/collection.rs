@@ -311,6 +311,41 @@ fn strict_people_search_requires_current_presence_policy_and_counts_weak_faces()
 }
 
 #[test]
+fn counts_match_with_and_without_metadata_rules() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = Collection::open(temp.path(), true)?;
+    seed(&c)?;
+    c.db.execute_batch(
+        "INSERT INTO meta(file_id,model,make,focal,lat,lon) VALUES
+             (1,'Z 6','Nikon',50,1,2),(2,'Z 6','Canon',24,NULL,NULL);",
+    )?;
+    let page = metadata::search(&c, &Search::default(), "")?;
+    assert_eq!((page.total, page.photos.len()), (3, 3));
+    assert_eq!(page.cameras.iter().map(|c| c.1).sum::<usize>(), 3);
+    let rule = |field: &str, operator: &str, value: &str| Search {
+        rules: vec![Rule {
+            field: field.into(),
+            operator: operator.into(),
+            value: value.into(),
+        }],
+        ..Default::default()
+    };
+    for (search, expected) in [
+        (rule("make", "is", "nikon"), 1),
+        (rule("focal", "min", "30"), 1),
+        (rule("gps", "empty", ""), 2),
+        (rule("rating", "empty", ""), 3),
+        (rule("camera", "is", "z 6"), 2),
+    ] {
+        let page = metadata::search(&c, &search, "")?;
+        assert_eq!(page.total, expected);
+        assert_eq!(page.photos.len(), expected);
+        assert_eq!(page.cameras.iter().map(|c| c.1).sum::<usize>(), expected);
+    }
+    Ok(())
+}
+
+#[test]
 fn bound_values_cannot_change_query_structure() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let c = Collection::open(temp.path(), true)?;
