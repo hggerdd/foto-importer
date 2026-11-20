@@ -5,6 +5,12 @@
 //! (`log::info!(target: "job", "…")`) oder [`span`] für Zeiten. Formatiert wird auf dem
 //! aufrufenden Thread, geschrieben auf einem eigenen Thread: Die Oberfläche wartet nie auf
 //! die Platte. Ist die Warteschlange voll, gehen Zeilen verloren und werden gezählt.
+//!
+//! Durchgehend geschrieben: Nach jedem Leeren der Warteschlange geht alles ans
+//! Betriebssystem (übersteht Absturz und Abschießen des Prozesses), Fehler und Paniken
+//! zusätzlich sofort bis auf die Platte, alles andere spätestens nach
+//! [`config::DIAG_SYNC_INTERVAL`] (Stromausfall). Der Explorer zeigt die Größe einer offenen
+//! Logdatei unter NTFS verzögert an (oft 0 Bytes); der Inhalt steht trotzdem in der Datei.
 
 use crate::config;
 use std::{
@@ -24,8 +30,28 @@ const PREFIX: &str = "foto-importer-";
 const SUFFIX: &str = ".log";
 
 enum Message {
-    Line(String),
+    Line(String, Urgency),
     Flush(mpsc::SyncSender<()>),
+}
+
+/// Wie schnell eine Zeile sicher sein muss.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Urgency {
+    /// Mit dem Rest der Warteschlange ans Betriebssystem.
+    Batch,
+    /// Sofort ans Betriebssystem (Warnungen).
+    Flush,
+    /// Sofort bis auf die Platte (Fehler, Panik).
+    Sync,
+}
+impl Urgency {
+    fn of(level: log::Level) -> Self {
+        match level {
+            log::Level::Error => Self::Sync,
+            log::Level::Warn => Self::Flush,
+            _ => Self::Batch,
+        }
+    }
 }
 
 /// Grenzen der Rotation: Größe einer Datei und aller Logdateien zusammen.
@@ -54,7 +80,7 @@ impl Diag {
         let mut roller = Roller::new(dir, limits);
         // Ohne Schreib-Thread schlägt jedes Senden fehl; die App läuft ohne Log weiter.
         let _ = std::thread::Builder::new()
-            .name("diagnose-log".into())
+            .name(WRITER_THREAD.into())
             .spawn(move || roller.run(&receiver));
         Self {
             enabled: AtomicBool::new(enabled),
@@ -81,13 +107,28 @@ impl Diag {
                 "diag",
                 &format_args!("verloren zeilen={lost}"),
             );
-            if self.sender.try_send(Message::Line(note)).is_ok() {
+            if self
+                .sender
+                .try_send(Message::Line(note, Urgency::Flush))
+                .is_ok()
+            {
                 self.dropped.fetch_sub(lost, Ordering::Relaxed);
             }
         }
         let line = format_line(chrono::Local::now(), level, area, message);
-        if let Err(mpsc::TrySendError::Full(_)) = self.sender.try_send(Message::Line(line)) {
+        if let Err(mpsc::TrySendError::Full(_)) = self
+            .sender
+            .try_send(Message::Line(line, Urgency::of(level)))
+        {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    /// Für die Panik: wartet auf Platz in der Warteschlange statt die Zeile zu verwerfen und
+    /// schreibt sie sofort bis auf die Platte. Nie vom Schreib-Thread selbst aufrufen.
+    fn write_urgent(&self, area: &str, message: &fmt::Arguments) {
+        if self.enabled() {
+            let line = format_line(chrono::Local::now(), log::Level::Error, area, message);
+            let _ = self.sender.send(Message::Line(line, Urgency::Sync));
         }
     }
     /// Wartet höchstens `timeout`, bis alles Eingereihte auf der Platte steht.
@@ -131,6 +172,9 @@ pub struct Roller {
     limits: Limits,
     file: Option<io::BufWriter<fs::File>>,
     size: u64,
+    /// Ans Betriebssystem übergeben, aber noch nicht bis auf die Platte durchgeschrieben.
+    unsynced: bool,
+    last_sync: Instant,
 }
 impl Roller {
     pub fn new(dir: PathBuf, limits: Limits) -> Self {
@@ -139,28 +183,68 @@ impl Roller {
             limits,
             file: None,
             size: 0,
+            unsynced: false,
+            last_sync: Instant::now(),
         }
     }
+    /// Schreibt, was ankommt: nach jedem Leeren der Warteschlange ans Betriebssystem,
+    /// spätestens nach `DIAG_SYNC_INTERVAL` bis auf die Platte, auch wenn nichts mehr kommt.
     fn run(&mut self, receiver: &mpsc::Receiver<Message>) {
-        while let Ok(message) = receiver.recv() {
-            self.handle(message);
-            while let Ok(message) = receiver.try_recv() {
+        loop {
+            let message = if self.unsynced {
+                let wait = config::DIAG_SYNC_INTERVAL.saturating_sub(self.last_sync.elapsed());
+                match receiver.recv_timeout(wait) {
+                    Ok(message) => Some(message),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match receiver.recv() {
+                    Ok(message) => Some(message),
+                    Err(_) => break,
+                }
+            };
+            if let Some(message) = message {
                 self.handle(message);
+                while let Ok(message) = receiver.try_recv() {
+                    self.handle(message);
+                }
+                self.flush();
             }
-            self.flush();
+            if self.unsynced && self.last_sync.elapsed() >= config::DIAG_SYNC_INTERVAL {
+                self.sync();
+            }
         }
-        self.flush();
+        self.sync();
     }
     fn handle(&mut self, message: Message) {
         match message {
             // Ein Schreibfehler (Platte voll) kostet nur diese Zeile; die nächste versucht
             // eine neue Datei.
-            Message::Line(line) => drop(self.write_line(&line)),
+            Message::Line(line, urgency) => {
+                if self.write_line(&line).is_ok() {
+                    match urgency {
+                        Urgency::Batch => {}
+                        Urgency::Flush => self.flush(),
+                        Urgency::Sync => self.sync(),
+                    }
+                }
+            }
             Message::Flush(ack) => {
                 self.flush();
                 let _ = ack.send(());
             }
         }
+    }
+    /// Schreibt bis auf die Platte (`sync_data`); teuer, daher nur für Fehler, Panik und im
+    /// Abstand `DIAG_SYNC_INTERVAL`.
+    pub fn sync(&mut self) {
+        self.flush();
+        if let Some(file) = &self.file {
+            let _ = file.get_ref().sync_data();
+        }
+        self.unsynced = false;
+        self.last_sync = Instant::now();
     }
     pub fn write_line(&mut self, line: &str) -> io::Result<()> {
         let len = line.len() as u64;
@@ -175,6 +259,7 @@ impl Roller {
             return Err(error);
         }
         self.size += len;
+        self.unsynced = true;
         Ok(())
     }
     pub fn flush(&mut self) {
@@ -185,7 +270,9 @@ impl Roller {
         }
     }
     fn rotate(&mut self) -> io::Result<()> {
-        self.flush();
+        if self.file.is_some() {
+            self.sync();
+        }
         self.file = None;
         fs::create_dir_all(&self.dir)?;
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f").to_string();
@@ -303,32 +390,50 @@ pub fn flush(timeout: Duration) {
     }
 }
 
+/// Name des Schreib-Threads; eine Panik dort kann nicht mehr ins eigene Log.
+const WRITER_THREAD: &str = "diagnose-log";
+
 /// Panik auf jedem Thread (auch Worker, deren Panik `jobs::Task` abfängt): Meldung, Ort und
-/// Backtrace ins Log, dann der bisherige Haken.
+/// Backtrace ins Log, bis auf die Platte geschrieben, bevor der bisherige Haken läuft und der
+/// Prozess womöglich endet.
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if enabled() {
+        if let Some(diag) = DIAG.get() {
             let thread = std::thread::current();
             let location = info
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()))
                 .unwrap_or_default();
-            log::error!(
-                target: "panik",
-                "thread={:?} ort={location} meldung={:?} backtrace={}",
+            record_panic(
+                diag,
                 thread.name().unwrap_or("unbenannt"),
+                &location,
                 info.payload()
                     .downcast_ref::<&str>()
                     .copied()
                     .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
                     .unwrap_or("unbekannt"),
-                std::backtrace::Backtrace::force_capture()
             );
-            flush(Duration::from_secs(2));
         }
         previous(info);
     }));
+}
+
+/// Schreibt die Panikzeile ohne Verlust bei voller Warteschlange und wartet höchstens
+/// `DIAG_PANIC_FLUSH`, bis sie auf der Platte steht.
+fn record_panic(diag: &Diag, thread: &str, location: &str, message: &str) {
+    if !diag.enabled() || thread == WRITER_THREAD {
+        return;
+    }
+    diag.write_urgent(
+        "panik",
+        &format_args!(
+            "thread={thread:?} ort={location} meldung={message:?} backtrace={}",
+            std::backtrace::Backtrace::force_capture()
+        ),
+    );
+    diag.flush(config::DIAG_PANIC_FLUSH);
 }
 
 /// Misst eine Arbeit und schreibt beim Verlassen `<was> dauer_ms=… <Felder>` in `area`.
@@ -489,6 +594,83 @@ mod tests {
             .find_map(|pair| pair.strip_prefix("dauer_ms="))
             .map(str::parse::<f64>);
         assert_eq!(duration.transpose()?, Some(73.4));
+        Ok(())
+    }
+
+    /// Liest alle Logdateien über eigene Handles, solange das Log weiterläuft.
+    fn read_all(dir: &Path) -> String {
+        log_files(dir)
+            .iter()
+            .filter_map(|(name, _)| fs::read_to_string(dir.join(name)).ok())
+            .collect()
+    }
+
+    /// Wartet höchstens `limit`, bis `needle` in den Dateien steht; gibt die Wartezeit zurück.
+    fn wait_for(dir: &Path, needle: &str, limit: Duration) -> Option<Duration> {
+        let started = Instant::now();
+        while started.elapsed() < limit {
+            if read_all(dir).contains(needle) {
+                return Some(started.elapsed());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+
+    #[test]
+    fn lines_reach_the_file_without_flush_or_shutdown() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().join("logs");
+        let diag = Diag::start(dir.clone(), true, Limits::APP);
+        diag.write(log::Level::Info, "test", &format_args!("erste info"));
+        assert!(
+            wait_for(&dir, "INFO  test erste info\n", Duration::from_secs(1)).is_some(),
+            "Info-Zeile nach 1 s nicht in der Datei: {:?}",
+            read_all(&dir)
+        );
+        // Spätere Zeilen ebenso, ohne dass die Datei geschlossen wird.
+        diag.write(log::Level::Info, "test", &format_args!("zweite info"));
+        diag.write(log::Level::Error, "test", &format_args!("ein fehler"));
+        assert!(wait_for(&dir, "ERROR test ein fehler\n", Duration::from_secs(1)).is_some());
+        assert!(read_all(&dir).contains("zweite info"));
+        assert_eq!(log_files(&dir).len(), 1);
+        drop(diag);
+        Ok(())
+    }
+
+    #[test]
+    fn an_error_is_on_disk_right_after_the_writer_takes_it() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().join("logs");
+        let mut roller = Roller::new(dir.clone(), Limits::APP);
+        roller.handle(Message::Line(
+            "x ERROR test fehler\n".into(),
+            Urgency::of(log::Level::Error),
+        ));
+        assert!(
+            read_all(&dir).contains("fehler"),
+            "ohne Leeren der Warteschlange"
+        );
+        assert!(!roller.unsynced, "Fehler sind durchgeschrieben");
+        roller.handle(Message::Line("x INFO  test info\n".into(), Urgency::Batch));
+        assert!(roller.unsynced);
+        Ok(())
+    }
+
+    #[test]
+    fn the_panic_line_is_written_before_the_hook_returns() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let dir = temp.path().join("logs");
+        let diag = Diag::start(dir.clone(), true, Limits::APP);
+        record_panic(&diag, "main", "src/x.rs:7", "kaputt");
+        let text = read_all(&dir);
+        assert!(
+            text.contains("ERROR panik thread=\"main\" ort=src/x.rs:7 meldung=\"kaputt\""),
+            "{text}"
+        );
+        // Vom Schreib-Thread selbst nichts (sonst wartete er auf sich).
+        record_panic(&diag, WRITER_THREAD, "src/y.rs:1", "selbst");
+        assert!(!read_all(&dir).contains("selbst"));
         Ok(())
     }
 

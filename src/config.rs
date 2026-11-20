@@ -98,6 +98,13 @@ pub const DIAG_TOTAL_BYTES: u64 = 300 * 1024 * 1024;
 /// Zeilen, die auf den Schreib-Thread warten dürfen; darüber gehen Zeilen verloren (gezählt),
 /// statt die Oberfläche zu blockieren.
 pub const DIAG_QUEUE: usize = 8192;
+/// Höchstabstand, in dem der Schreib-Thread Geschriebenes bis auf die Platte durchschreibt
+/// (`sync_data`), damit auch ein Stromausfall höchstens so viel kostet. An das Betriebssystem
+/// übergeben wird jede Zeile sofort nach dem Leeren der Warteschlange; Fehler und Paniken
+/// werden sofort durchgeschrieben.
+pub const DIAG_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// So lange wartet der Panik-Haken höchstens, bis die Panikzeile auf der Platte steht.
+pub const DIAG_PANIC_FLUSH: std::time::Duration = std::time::Duration::from_secs(2);
 /// Frames ab dieser Dauer (Aufbau, Tessellierung, Zeichnen) stehen einzeln im Log. 50 ms
 /// sind drei verpasste Bilder bei 60 Hz und als Ruckeln sichtbar.
 pub const DIAG_SLOW_FRAME_MS: f32 = 50.0;
