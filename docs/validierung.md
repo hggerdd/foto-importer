@@ -506,3 +506,19 @@ mehrdeutige Fälle, Metadatenblock mit fehlender und mit unlesbarer Datei, Entfe
 Neu-Verknüpfen) und in `src/ui/app/tests.rs` (nicht verbundene Quelle beim Start, Dialog
 „Fehlende Dateien“). Der Gesichtslauf mit fehlender Datei ist ohne Modelle nicht offline
 getestet.
+
+## Datensicherung (2026-11-20)
+
+`cargo run --release --example backup_bench -- tmp/backup-bench 800`: synthetische
+Sammlungsdatenbank 804 MB (Gesichtsvektoren 128 × float32, Metadaten-JSON, Einstellungszeilen)
+auf der lokalen SSD. `backup::create` mit Stufe 1: 11,0 s und 11,1 s (Online-Kopie 3,6 bis
+4,0 s, Packen 7,2 bis 7,4 s), ZIP 480 MB (60 %). Nur Packen der Datei: Stufe 1 7,1 s / 480 MB,
+Stufe 6 16,8 s / 416 MB, Stufe 9 23,9 s / 395 MB. Zwischenbedarf auf dem Laufwerk der
+Sammlung: Kopie der Datenbank plus ZIP. Nicht gemessen: echte Sammlung auf der
+USB-Festplatte (`E:\Bilder`, rund 824 MB; dort bestimmt der Datenträger die Dauer, also
+Lesen 824 MB plus Schreiben von etwa 1,3 GB) und der Packgrad echter Gesichtsdaten.
+Regressionen in `tests/backup.rs` (Auspacken mit Prüfsummen, `PRAGMA integrity_check` und
+Inhalt aller drei Teile, Nummern ohne Ersetzen, Aufräumen nur passender Namen, Abbruch ohne
+Reste, gleichzeitiger Schreiber), `tests/migrations.rs` (Sicherung mit altem Schemastand vor
+der Migration, Löschen bei „Biometrie entfernen“) und `tests/missing_files.rs` (Sicherung vor
+„Einträge entfernen“).

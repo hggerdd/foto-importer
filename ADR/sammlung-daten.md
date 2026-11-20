@@ -14,9 +14,43 @@
 - **Sperre:** Die Host/PID-Sperrdatei `.myfotomanager.lock` erlaubt einen schreibenden
   Prozess; eine weitere Instanz öffnet lesend. Fremde Sperren werden nie entfernt.
 - **Sicherungen:** `.myfotomanager.backup` nach abgeschlossenen Indexoperationen;
-  benannte Sicherungen vor Schema-Upgrade und Detektorwechsel.
+  benannte Sicherung vor Detektorwechsel. Vor einem Schema-Upgrade entsteht eine
+  Datensicherung (unten).
+- **Datensicherung der App-Daten** (`core::backup`, Einstellungen → „Datensicherung“): ein ZIP
+  `.myimporter.backup.NNN` (mindestens dreistellig, `config::BACKUP_PREFIX`) im
+  Sammlungsordner mit `sammlung/.myfotomanager`, `arbeitsplatz/central.sqlite` (eingestellter
+  Ort, auch bei ausgeschaltetem Abgleich), `arbeitsplatz/settings.json` und `manifest.json`
+  (Format, App-Version und Build, Zeitpunkt, Anlass, Quellpfade, Größe, SHA-256 und
+  Schemaversion je Eintrag, fehlende Quellen unter `skipped`). Nicht gesichert, weil
+  ableitbar oder wieder ladbar: Fotos, Vorschau- und Gesichtskacheln, Referenzexport
+  `.myfotomanager_faces`, ältere `.bak`-Kopien, `models/`, `runtime/`, `logs/`, Sperrdatei.
+  Datenbanken werden mit der SQLite-Online-Sicherung kopiert, auf einer eigenen
+  Leseverbindung mit einer über alle Schritte offenen Lesetransaktion: die Kopie ist ein
+  fester Stand, Schreiber laufen weiter und starten die Kopie nicht neu (Test mit
+  gleichzeitigem Schreiber). Die Kopie wird auf Journalmodus DELETE gestellt und ist
+  eigenständig. Ablauf: Platz prüfen (Quellen samt `-wal` zweimal plus 64 MB, sonst Abbruch
+  ohne Schreiben), Zwischenordner und Zwischen-ZIP `.myimporter.backup.tmp-*` im
+  Sammlungsordner, ZIP mit `sync_all`, dann Umbenennen auf die nächste Nummer (höchste
+  vorhandene plus eins) ohne Ersetzen (`persist_noclobber`; bei Kollision die folgende
+  Nummer). Fehler und Abbruch löschen die Zwischenstände; Reste eines Absturzes älter als
+  24 h entfernt der nächste Lauf. Danach werden die ältesten Sicherungen über „Sicherungen
+  behalten“ (Arbeitsplatz `backup_keep`, Standard 5, 1 bis 99) gelöscht, nur Dateien genau
+  dieses Musters, nie die neue. Deflate-Stufe `BACKUP_COMPRESSION_LEVEL` (1, siehe
+  [Validierung](../docs/validierung.md)). ZIP über das schon vorhandene `zip`-Crate (Deflate
+  über `flate2`, bereits für das ONNX-Paket im Baum), Prüfsummen über `sha2`, freier Platz
+  über `GetDiskFreeSpaceExW` ohne neues Crate: keine neue Abhängigkeit.
+- **Automatische Datensicherung vor riskanten Schritten:** vor einer Schema-Migration (in
+  `migrations::upgrade`, auf dem Worker, der die Sammlung schreibend öffnet) und vor
+  „Fehlende Einträge entfernen“ (in `missing::remove`, im selben Auftrag, mit Fortschritt und
+  Abbruch). Scheitert oder endet die Sicherung abgebrochen, findet der Schritt nicht statt
+  und der Auftrag meldet den Fehler. Den Plan (Arbeitsplatzdateien, Anzahl) setzt die
+  Oberfläche beim Start und nach jedem Speichern der Einstellungen (`backup::configure`);
+  ohne ihn (Tests, Beispiele) wird nur die Sammlungsdatenbank gesichert.
+  „Biometrie entfernen“ löscht alle Datensicherungen, weil sie Gesichtsdaten enthalten.
+  Eine Wiederherstellung in der Oberfläche gibt es nicht; ein Test packt eine Sicherung aus
+  und prüft Prüfsummen, `PRAGMA integrity_check` und Inhalt.
 - **Schema 6 mit Migration:** Stände 1 bis 5 werden beim ersten Schreibzugriff nach einer
-  Sicherung in einer Transaktion auf 6 gebracht; die Versionsnummer ändert sich erst mit dem
+  Datensicherung in einer Transaktion auf 6 gebracht; die Versionsnummer ändert sich erst mit dem
   Commit. Quellzeilen, IDs, Labels, Vektoren, Pins und Ablehnungen bleiben. Schema 4/5 darf
   lesend ohne Upgrade geöffnet werden. Unvollständige Pflichttabellen und unbekannte Versionen
   werden abgewiesen. Leser migrieren nie.
@@ -98,4 +132,6 @@ Zählung über `files.dir` nach jeder Änderungsart). Trigger auf
 `files` feuern bei jedem `UPDATE` einer gelisteten Spalte; unveränderte Zeilen nur über nicht
 gelistete Spalten anfassen. Pläne neuer Gesichtsabfragen ohne `sqlite_stat1` prüfen
 (`face_save_bench steps … ohne-statistik`, `EXPLAIN QUERY PLAN`). Migrationstests bilden vorhandene Zwischenstände ab. Neue Module
-binden an Foto-IDs und beachten Weiterleitungen.
+binden an Foto-IDs und beachten Weiterleitungen. Neue App-eigene Nutzerdaten (Datei oder
+Datenbank) in die Datensicherung aufnehmen oder hier begründen, warum nicht; neue riskante
+Schritte (Massenlöschung, Umbau) rufen vorher `backup::automatic` und brechen bei Fehler ab.

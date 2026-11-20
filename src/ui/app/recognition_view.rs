@@ -317,7 +317,7 @@ impl PhotoApp {
                     }
                 });
                 egui::CollapsingHeader::new("Biometrie entfernen").show(ui, |ui| {
-                    ui.label("Entfernt Gesichter, Personen und bekannte Biometrie-Sicherungen. Fotos und Inventar bleiben erhalten.");
+                    ui.label("Entfernt Gesichter, Personen und bekannte Biometrie-Sicherungen; Datensicherungen (.myimporter.backup.NNN) werden gelöscht. Fotos und Inventar bleiben erhalten.");
                     ui.checkbox(
                         &mut self.central_ui.wipe_references,
                         "Auch zentral gespeicherte Referenzbilder löschen (Personen im zentralen Bestand bleiben)",

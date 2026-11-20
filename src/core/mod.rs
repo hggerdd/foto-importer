@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod central;
 pub mod choice_filter;
 pub mod collection;

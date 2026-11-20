@@ -114,6 +114,28 @@ pub const DIAG_FRAME_SUMMARY: std::time::Duration = std::time::Duration::from_se
 pub const DIAG_SLOW_PREVIEW_MS: u128 = 1000;
 /// Öffnen einer Sammlungsdatenbank ab dieser Dauer steht im Log (sonst wenige Millisekunden).
 pub const DIAG_SLOW_DB_OPEN_MS: u128 = 200;
+/// Datensicherung (`core::backup`): Dateiname im Sammlungsordner ist dieser Anfang plus eine
+/// mindestens dreistellige Nummer (`.myimporter.backup.001`). Nur Dateien genau dieses Musters
+/// gelten als Sicherung und werden beim Aufräumen gelöscht.
+pub const BACKUP_PREFIX: &str = ".myimporter.backup.";
+pub const BACKUP_DIGITS: usize = 3;
+/// Anfang der Zwischendateien und -ordner einer laufenden Sicherung im Sammlungsordner.
+pub const BACKUP_TEMP_PREFIX: &str = ".myimporter.backup.tmp-";
+/// Zwischenstände eines abgestürzten Laufs, die älter sind, werden beim nächsten Lauf entfernt.
+pub const BACKUP_STALE_TEMP: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// So viele Sicherungen bleiben standardmäßig liegen (Einstellung „Sicherungen behalten“) und
+/// zulässiger Bereich der Einstellung.
+pub const BACKUP_KEEP: usize = 5;
+pub const BACKUP_KEEP_RANGE: (usize, usize) = (1, 99);
+/// Deflate-Stufe der Sicherungs-ZIPs (0 bis 9). Gemessen am 2026-11-20 mit
+/// `examples/backup_bench.rs` (synthetische Sammlungsdatenbank 804 MB, lokale SSD, Release):
+/// Stufe 1 packt in 7,1 s auf 480 MB, Stufe 6 in 16,8 s auf 416 MB, Stufe 9 in 23,9 s auf
+/// 395 MB. Gesichtsvektoren lassen sich kaum packen; 13 % mehr Platz für die halbe Zeit.
+pub const BACKUP_COMPRESSION_LEVEL: i64 = 1;
+/// Seiten je Schritt der SQLite-Online-Sicherung; dazwischen Fortschritt und Abbruch.
+pub const BACKUP_STEP_PAGES: i32 = 2048;
+/// Zuschlag auf den geschätzten Platzbedarf einer Sicherung.
+pub const BACKUP_SPACE_MARGIN: u64 = 64 * 1024 * 1024;
 pub const SUPPORTED: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "nef", "cr2", "cr3", "arw", "dng", "raw",
     "orf", "mp4", "mov", "avi", "mkv", "m4v",
@@ -186,6 +208,8 @@ pub struct Settings {
     pub index_pending: Vec<String>,
     /// Diagnose-Log mit Frame- und Auftragszeiten und Fehlern schreiben (`core::diag`).
     pub diagnostic_log: bool,
+    /// Datensicherung: so viele `.myimporter.backup.NNN` bleiben im Sammlungsordner liegen.
+    pub backup_keep: usize,
 }
 
 impl Default for Settings {
@@ -215,6 +239,7 @@ impl Default for Settings {
             dng_update: Default::default(),
             index_pending: Vec::new(),
             diagnostic_log: true,
+            backup_keep: BACKUP_KEEP,
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
             model_dir: resources.join("models").to_string_lossy().into_owned(),
@@ -260,6 +285,15 @@ impl Settings {
             },
             images: self.central_images,
             relations: self.central_relations,
+        }
+    }
+    /// Arbeitsplatzdateien, die zu einer Datensicherung gehören: diese Einstellungsdatei und
+    /// die Zentraldatei am eingestellten Ort (auch wenn der Abgleich gerade aus ist; fehlt
+    /// sie, steht das im Manifest).
+    pub fn backup_app_data(&self) -> crate::core::backup::AppData {
+        crate::core::backup::AppData {
+            settings: Some(Self::path()),
+            central: Some(self.central().path),
         }
     }
     pub fn load() -> Self {
