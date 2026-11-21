@@ -14,11 +14,37 @@ impl PhotoApp {
     }
 
     /// Fehlt noch etwas, bevor Fotos analysiert werden können (Laufzeit oder Modelle)?
-    fn setup_needed(&self) -> bool {
-        !Path::new(&self.settings.onnx_runtime).is_file()
-            || !self.model_weights_present()
-            || self.models_installing()
-            || self.runtime_downloading()
+    /// Die Dateiprüfung wird zwischengespeichert: neu geprüft wird bei geänderten Pfaden oder
+    /// Modellen, nach dem Ende einer Installation bzw. eines Downloads und spätestens nach
+    /// `SETUP_CHECK_INTERVAL`.
+    pub(super) fn setup_needed(&self) -> bool {
+        if self.models_installing() || self.runtime_downloading() {
+            // Danach sofort neu prüfen: die Dateien kommen gerade erst.
+            self.setup_files.borrow_mut().take();
+            return true;
+        }
+        let key = SetupKey {
+            runtime: self.settings.onnx_runtime.clone(),
+            model_dir: self.settings.model_dir.clone(),
+            detector: self.detector.clone(),
+            embedder: self.embedder.clone(),
+            manifests: self.models.len(),
+        };
+        let mut cached = self.setup_files.borrow_mut();
+        if let Some(files) = cached.as_ref()
+            && files.key == key
+            && files.checked.elapsed() < config::SETUP_CHECK_INTERVAL
+        {
+            return !files.ready;
+        }
+        let ready =
+            Path::new(&self.settings.onnx_runtime).is_file() && self.model_weights_present();
+        *cached = Some(SetupFiles {
+            key,
+            checked: std::time::Instant::now(),
+            ready,
+        });
+        !ready
     }
 
     fn face_stand(&self) -> FaceStand {
@@ -611,4 +637,21 @@ mod status_tests {
         assert_eq!(status_line(&partly).1, Some(MainAction::Continue));
         assert_eq!(status_line(&stand(0, 0)).1, None);
     }
+}
+
+/// Wovon die Dateiprüfung der Einrichtung abhängt; ändert sich etwas, wird neu geprüft.
+#[derive(PartialEq)]
+struct SetupKey {
+    runtime: String,
+    model_dir: String,
+    detector: String,
+    embedder: String,
+    manifests: usize,
+}
+
+/// Ergebnis der letzten Dateiprüfung von `setup_needed`.
+pub(super) struct SetupFiles {
+    key: SetupKey,
+    pub(super) checked: std::time::Instant,
+    ready: bool,
 }

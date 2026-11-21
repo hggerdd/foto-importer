@@ -3344,3 +3344,25 @@ fn the_missing_files_dialog_lists_folders_and_removes_after_confirmation() -> an
     assert_eq!(c.status()?.files, 3, "vorhandene Dateien bleiben");
     Ok(())
 }
+
+#[test]
+fn the_setup_check_is_cached_and_repeated_when_the_paths_change() -> anyhow::Result<()> {
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let dir = tempfile::tempdir()?;
+    let runtime = dir.path().join("onnxruntime.dll");
+    app.settings.onnx_runtime = runtime.to_string_lossy().into_owned();
+    let checked = |app: &PhotoApp| app.setup_files.borrow().as_ref().map(|f| f.checked);
+    assert!(app.setup_needed());
+    let first = checked(&app);
+    assert!(first.is_some());
+    // Weitere Frames fragen das Dateisystem nicht erneut.
+    assert!(app.setup_needed());
+    assert_eq!(checked(&app), first);
+    // Ein anderer Pfad wird sofort neu geprüft.
+    app.settings.onnx_runtime = dir.path().join("anders.dll").to_string_lossy().into_owned();
+    assert!(app.setup_needed());
+    assert_ne!(checked(&app), first);
+    Ok(())
+}

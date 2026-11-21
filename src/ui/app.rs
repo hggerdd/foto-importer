@@ -400,6 +400,9 @@ pub struct PhotoApp {
     /// Abschnitt „Datensicherung“ der Einstellungen.
     backups: backup_view::BackupUi,
     closing: bool,
+    /// Zuletzt geprüfte Einrichtung der Gesichtserkennung (`setup_needed`), damit nicht jeder
+    /// Frame das Dateisystem fragt.
+    setup_files: std::cell::RefCell<Option<recognition_view::SetupFiles>>,
     maintenance_paused: bool,
     /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
     metadata_paused: bool,
@@ -541,6 +544,7 @@ impl PhotoApp {
             missing: Default::default(),
             backups: Default::default(),
             closing: false,
+            setup_files: Default::default(),
             maintenance_paused: false,
             metadata_paused: false,
             metadata_bg_failed: false,

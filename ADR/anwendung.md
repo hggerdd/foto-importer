@@ -59,7 +59,10 @@
   Aufträge „Laufzeit herunterladen“ (falls die Laufzeit fehlt) und „Modellgewichte
   installieren“ (falls die Standardgewichte fehlen). Der zweite Schritt beginnt nur nach
   erfolgreichem ersten; Fehler oder „Abbrechen“ beenden die Kette. Ist beides vorhanden,
-  steht dort „eingerichtet“.
+  steht dort „eingerichtet“. Ob Laufzeit und Gewichte da sind, fragt die Ansicht „Gesichter“
+  nicht in jedem Frame ab: Das Ergebnis gilt bis zu `SETUP_CHECK_INTERVAL` (5 s) und wird
+  sofort neu geprüft, wenn sich Pfade oder Modellwahl ändern oder eine Installation bzw. ein
+  Download endet.
 - **Navigation:** links fest, Hauptpunkte Importieren, Sammlung, Gesichter, Personen; unten
   abgesetzt Aufgaben und Einstellungen (`NAV_MAIN`, `NAV_BOTTOM`). Die Zeitreise ist kein
   Hauptpunkt, sondern eine Ansicht der gewählten Person (siehe [Personen](personen.md)).
