@@ -782,6 +782,235 @@ fn person_faces_page_confirms_probable_and_removes_only_deselected_faces() -> an
     Ok(())
 }
 
+/// „Vorschläge prüfen“ mit einer Gruppe aus drei Vorschlägen für Anna (1) in einer
+/// temporären Sammlung.
+fn tile_icon_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    let c = Collection::open(root, true)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+    )?;
+    for id in 1..=3_i64 {
+        c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,person_id,assignment) VALUES(?,?,?,'det',0,0,1,1,1,1,'suggested')",
+            rusqlite::params![id, id, format!("{id}.jpg")],
+        )?;
+    }
+    drop(c);
+    let (context, mut app) = review_app(root);
+    app.face_page.groups = vec![
+        (1..=3)
+            .map(|id| Face {
+                source: format!("{id}.jpg"),
+                ..review_face(id, 0.6)
+            })
+            .collect(),
+    ];
+    app.face_page.total_groups = 1;
+    app.face_page.status.review = 3;
+    Ok((context, app))
+}
+
+/// Mitte des Kachelsymbols `icon` auf der Kachel des Gesichts aus `source`.
+fn tile_icon_pos(
+    context: &egui::Context,
+    app: &mut PhotoApp,
+    source: &str,
+    icon: &str,
+) -> egui::Pos2 {
+    let widgets = frame_with(context, app, Vec::new());
+    let tile = widgets
+        .iter()
+        .find(|(text, _)| *text == format!("Gesichtsausschnitt in {source}"))
+        .unwrap_or_else(|| panic!("Kachel {source} nicht gezeichnet: {:?}", page_ids(app)))
+        .1;
+    widgets
+        .iter()
+        .find(|(text, rect)| text == icon && tile.contains(rect.center()))
+        .unwrap_or_else(|| panic!("{icon} auf {source} nicht gezeichnet"))
+        .1
+        .center()
+}
+
+/// Ein (`clicks` = 1) oder zwei schnelle Linksklicks an `pos`.
+fn click_at(context: &egui::Context, app: &mut PhotoApp, pos: egui::Pos2, clicks: usize) {
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // Pause länger als die Doppelklickfrist (je Bild 1/60 s), damit frühere Klicks nicht
+    // mitzählen.
+    for _ in 0..30 {
+        frame_with(context, app, vec![egui::Event::PointerGone]);
+    }
+    frame_with(context, app, vec![egui::Event::PointerMoved(pos)]);
+    for _ in 0..clicks {
+        frame_with(context, app, vec![press(true)]);
+        frame_with(context, app, vec![press(false)]);
+    }
+    // Maus weg, damit spätere Bilder keinen Rest dieses Klicks sehen.
+    frame_with(context, app, vec![egui::Event::PointerGone]);
+}
+
+fn face_rows(root: &Path) -> anyhow::Result<Vec<(i64, Option<i64>, String)>> {
+    let c = Collection::open(root, false)?;
+    let rows =
+        c.db.prepare("SELECT id, person_id, IFNULL(assignment,'') FROM faces ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn rejections(root: &Path) -> anyhow::Result<Vec<(i64, i64)>> {
+    let c = Collection::open(root, false)?;
+    let rows =
+        c.db.prepare("SELECT face_id, person_id FROM face_rejections ORDER BY face_id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Kachelsymbole: Einfachklick auf Haken oder Kreuz bewirkt nichts und schaltet keine Auswahl
+/// um; Doppelklick bestätigt bzw. lehnt genau dieses Gesicht ab, die Gruppe bleibt mit den
+/// übrigen Gesichtern (samt Abwahl) stehen; Strg+Z nimmt es zurück; „?“ öffnet den Dialog.
+#[test]
+fn tile_icons_decide_exactly_one_face_on_double_click() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = tile_icon_app(root.path())?;
+    let is = "Doppelklick: das ist Anna";
+    let is_not = "Doppelklick: das ist nicht Anna";
+    // Ein Klick auf die Kachel selbst wählt sie weiterhin ab.
+    let tile = frame_with(&context, &mut app, Vec::new())
+        .into_iter()
+        .find(|(text, _)| text == "Gesichtsausschnitt in 1.jpg")
+        .expect("Kachel 1")
+        .1;
+    click_at(&context, &mut app, tile.center(), 1);
+    assert_eq!(app.drafts["p1:1,2,3"].excluded, BTreeSet::from([1]));
+    // Einfachklicks auf Haken und Kreuz: nichts gespeichert, Auswahl unverändert.
+    for icon in [is, is_not] {
+        let pos = tile_icon_pos(&context, &mut app, "2.jpg", icon);
+        click_at(&context, &mut app, pos, 1);
+    }
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 0);
+    assert_eq!(app.drafts["p1:1,2,3"].excluded, BTreeSet::from([1]));
+    assert_eq!(page_ids(&app), vec![vec![1, 2, 3]]);
+    // Doppelklick auf den Haken von Gesicht 2: nur dieses verschwindet.
+    let pos = tile_icon_pos(&context, &mut app, "2.jpg", is);
+    click_at(&context, &mut app, pos, 2);
+    // Der Auftrag kann schon fertig sein (dann liegt er im Rücknahmestapel).
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 1);
+    assert_eq!(page_ids(&app), vec![vec![1, 3]], "die Gruppe bleibt stehen");
+    assert_eq!(
+        app.drafts["p1:1,3"].excluded,
+        BTreeSet::from([1]),
+        "die Abwahl der übrigen bleibt"
+    );
+    // Doppelklick auf das Kreuz von Gesicht 3.
+    let pos = tile_icon_pos(&context, &mut app, "3.jpg", is_not);
+    click_at(&context, &mut app, pos, 2);
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 2);
+    assert_eq!(page_ids(&app), vec![vec![1]]);
+    wait_for_tasks(&mut app);
+    assert_eq!(
+        face_rows(root.path())?,
+        vec![
+            (1, Some(1), "suggested".into()),
+            (2, Some(1), "user".into()),
+            (3, None, String::new()),
+        ]
+    );
+    assert_eq!(rejections(root.path())?, vec![(3, 1)]);
+    assert_eq!(app.undo.len(), 2, "beide Entscheidungen sind zurücknehmbar");
+    // Strg+Z nimmt die Ablehnung zurück, ein zweites die Bestätigung.
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(face_rows(root.path())?[2], (3, Some(1), "suggested".into()));
+    assert!(rejections(root.path())?.is_empty());
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(face_rows(root.path())?[1], (2, Some(1), "suggested".into()));
+    // „?“ öffnet den Dialog „Einzeln benennen“ für genau dieses Gesicht.
+    app.face_page.groups = vec![
+        (1..=3)
+            .map(|id| Face {
+                source: format!("{id}.jpg"),
+                ..review_face(id, 0.6)
+            })
+            .collect(),
+    ];
+    let pos = tile_icon_pos(&context, &mut app, "3.jpg", "Namen wählen …");
+    click_at(&context, &mut app, pos, 1);
+    assert_eq!(app.naming, Some(3));
+    assert_eq!(naming_tasks(&app), 0);
+    Ok(())
+}
+
+/// Welche Symbole erscheinen: Haken und Kreuz nur mit Zielperson, auf bestätigten Seiten nur
+/// das Kreuz, ohne Zielperson nur das Fragezeichen.
+#[test]
+fn tile_icons_follow_the_target_person_of_the_group() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let labels = |context: &egui::Context, app: &mut PhotoApp| {
+        let widgets = frame_with(context, app, Vec::new());
+        let count = |label: &str| widgets.iter().filter(|(text, _)| text == label).count();
+        (
+            count("Doppelklick: das ist nicht Anna"),
+            count("Doppelklick: das ist Anna"),
+            count("Namen wählen …"),
+        )
+    };
+    // „Benennen“ mit sicherem Vorschlag (zwei Gesichter) und ohne (ein Gesicht).
+    let (context, mut app) = sure_app(root.path());
+    assert_eq!(labels(&context, &mut app), (2, 2, 3));
+    app.face_page.groups.truncate(1);
+    app.face_page.suggestions.clear();
+    assert_eq!(
+        labels(&context, &mut app),
+        (0, 0, 2),
+        "nur das Fragezeichen"
+    );
+    // Ohne Zielperson bleibt der Doppelklick wirkungslos.
+    let group = app.face_page.groups[0].clone();
+    assert!(!app.decide_group(&group, faces_view::Decision::OneIs(5)));
+    // Bestätigte Gesichter: nur Kreuz und Fragezeichen; ein Haken wäre wirkungslos.
+    let confirmed = |id| Face {
+        assignment: Some("user".into()),
+        ..review_face(id, 1.0)
+    };
+    let people = app.face_page.people.clone();
+    for mode in ["confirmed", "person-confirmed"] {
+        if mode == "confirmed" {
+            app.face_mode = mode.into();
+        } else {
+            app.relation_from = Some(1);
+            app.set_person_mode(PersonMode::Faces);
+            app.set_person_face_mode(mode);
+            assert_eq!(app.page_mode(), mode);
+        }
+        // Keine Leseaufträge: die Seite bleibt die von Hand gesetzte.
+        app.tasks.clear();
+        app.face_page.people = people.clone();
+        app.face_page.groups = vec![vec![confirmed(8), confirmed(9)]];
+        assert_eq!(labels(&context, &mut app), (2, 0, 2), "{mode}");
+        let group = app.face_page.groups[0].clone();
+        assert!(!app.decide_group(&group, faces_view::Decision::OneIs(8)));
+    }
+    // „Ungeeignet“ und „Ignoriert“: nur das Fragezeichen.
+    app.view = View::Faces;
+    for mode in ["unsuitable", "ignored"] {
+        app.face_mode = mode.into();
+        app.face_page.groups = vec![vec![confirmed(8)]];
+        assert_eq!(labels(&context, &mut app), (0, 0, 1), "{mode}");
+    }
+    assert_eq!(naming_tasks(&app), 0);
+    Ok(())
+}
+
 #[test]
 fn person_details_open_the_faces_page_for_that_person() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;

@@ -46,6 +46,22 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Rechtsklickmenü der Gruppenkacheln:** „Einzeln benennen …“ und „Foto in der Sammlung
   zeigen“; Letzteres öffnet die Sammlung mit der Suche nach Ordner und Dateiname ohne Endung
   (trifft auch RAW/DNG desselben Fotos), das erste Ergebnis ist gewählt.
+- **Kachelsymbole:** Jede Gruppenkachel trägt oben rechts dauerhaft dezente, unter der Maus
+  hervorgehobene Symbole (eine gemeinsame Funktion `tile_icons` für alle Gruppenkarten),
+  von links: Kreuz, Haken, Fragezeichen. Haken und Kreuz gibt es nur, wenn die Gruppe eine
+  Zielperson X hat (`tile_target`): in „Vorschläge prüfen“ und „Wahrscheinlich X“ die
+  vorgeschlagene Person, in „Benennen“ der sichere Vorschlag von „Ist das X?“. Auf Seiten
+  bestätigter Gesichter („Bestätigt“ und „Bestätigt“ einer Person) ist X die Person der
+  Gruppe, dort gibt es nur das Kreuz. „Ungeeignet“, „Ignoriert“ und Gruppen ohne Zielperson
+  zeigen nur das Fragezeichen. **Doppelklick** auf den Haken bestätigt genau dieses Gesicht
+  als X (`user`), Doppelklick auf das Kreuz lehnt X für genau dieses Gesicht ab (gespeicherte
+  Ablehnung; trug es X, wird es unbenannt) – derselbe Weg wie „Bestätigen“ bzw. „Keines ist
+  X“ (`decide_group` mit `Decision::OneIs`/`OneIsNot`, `name_group` mit nur dieser ID); die
+  übrigen Gesichter bleiben unberührt. Beide Klicks müssen dasselbe Symbol treffen. Ein
+  Klick auf das Fragezeichen öffnet „Einzeln benennen“ wie das Rechtsklickmenü. Ein Klick
+  auf ein Symbol schaltet die Auswahl der Kachel nie um; über einem Symbol ruht die
+  Fotovorschau. Die Gruppe bleibt stehen, solange Gesichter übrig sind, und behält Abwahl
+  und Namensentwurf; Strg+Z nimmt die Entscheidung zurück.
 - **„Ist das X?“ in „Benennen“:** Besteht der erste Vorschlag der Gruppe dieselbe Regel wie
   der Abgleich (`recognition::Limits::sure_suggestion` über `accept`, mit Schwelle und Abstand
   der Sammlung aus `faces::Status`), steht über den Kacheln eine hervorgehobene Zeile mit
@@ -63,7 +79,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   prüfen“ und „Erledigt“, Referenzporträt der Karte und von „Ist das X?“, Porträt in den
   Personendetails, Kacheln, Abschnittsansicht und große Vorschau der Zeitreise) hat ein
   Rechtsklickmenü „Einzeln benennen …“; der Hinweistext nennt „Rechtsklick: einzeln
-  benennen“ (Gruppenkacheln: „… oder Foto in der Sammlung zeigen“). Der Linksklick bleibt unverändert (Auswahl bzw. Fokus). Der Eintrag öffnet
+  benennen“ (Gruppenkacheln: „… oder Foto in der Sammlung zeigen“, dazu die Kachelsymbole).
+  Der Linksklick bleibt unverändert (Auswahl bzw. Fokus). Der Eintrag öffnet
   denselben Dialog wie in den Bilddetails der Sammlung; er ist ein globales Fenster, hängt an
   keiner Ansicht und liest seine Vorschläge mit eigener Revision. „Übernehmen“ setzt nur
   dieses Gesicht auf `user` (eine bestehende Ablehnung dieser Person entfällt), andere
@@ -92,7 +109,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Sofortiges Speichern:** Entschiedene Gesichter verschwinden sofort aus der Seite
   (`queue_hiding`), der Schreibauftrag läuft dahinter in Eingabereihenfolge. Der
   Ausblendstand ergibt sich aus den laufenden Aufträgen; bei einem Fehler erscheinen die
-  Gesichter wieder. Nach dem Speichern rückt die nächste Gruppe an die bisherige Position.
+  Gesichter wieder. Nach dem Speichern rückt die nächste Gruppe an die bisherige Position;
+  bleiben Gesichter der Gruppe übrig (Kachelsymbol, abgewählte entfernen), bleibt sie stehen.
 - **Seitenabfragen** bilden Teilgruppen aus Zählungen je Person, ohne Fensterfunktionen über
   alle Gesichter. Referenzen und Porträts werden je Seite einmal geladen und leben nur einen
   Lesestand lang.

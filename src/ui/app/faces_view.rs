@@ -325,6 +325,14 @@ impl PhotoApp {
         }) else {
             return;
         };
+        // Bleiben Gesichter der Gruppe übrig (Kachelsymbol, „N abgewählte sind nicht X“),
+        // bleibt sie stehen: kein Sprung zur nächsten Gruppe.
+        if self.face_page.groups[slot]
+            .iter()
+            .any(|face| !undo.before.iter().any(|snapshot| snapshot.id == face.id))
+        {
+            return;
+        }
         let Some(first) = self.face_page.groups[slot].first() else {
             return;
         };
@@ -418,7 +426,8 @@ impl PhotoApp {
     /// `top`: oberste Gruppe der Seite; nur ihre Knöpfe nennen die Tasten.
     fn group(&mut self, ui: &mut egui::Ui, group: &[Face], focus: bool, top: bool) {
         let key = draft_key(group);
-        let kind = card_kind(self.page_mode());
+        let mode = self.page_mode().to_string();
+        let kind = card_kind(&mode);
         let naming = self.page_mode() == "unknown";
         // In „Vorschläge prüfen“ und auf der Gesichterseite einer Person steht die Person fest.
         let proposed = matches!(kind, CardKind::Review | CardKind::Assigned)
@@ -461,6 +470,13 @@ impl PhotoApp {
         let sure = naming
             .then(|| sure_suggestion(&self.face_page.status, proposals.as_ref()))
             .flatten();
+        // Zielperson der Kachelsymbole (Haken/Kreuz); ohne sie gibt es nur das Fragezeichen.
+        let target = tile_target(&mode, &self.face_page, group);
+        let tile_hint = if target.is_some() {
+            TILE_ICONS_HINT
+        } else {
+            TILE_MENU_HINT
+        };
         theme::card(ui).show(ui, |ui| {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
             ui.set_min_width(ui.available_width());
@@ -707,10 +723,8 @@ impl PhotoApp {
                                     &exiftool,
                                     egui::vec2(size, size),
                                 );
-                                let response = response.on_hover_text(format!(
-                                    "Gesicht {}\n{TILE_MENU_HINT}",
-                                    face.id
-                                ));
+                                let response = response
+                                    .on_hover_text(format!("Gesicht {}\n{tile_hint}", face.id));
                                 match tile_menu(&response) {
                                     Some(TileAction::Name) => name_one = Some(face.id),
                                     Some(TileAction::ShowPhoto) => show_photo = Some(face.clone()),
@@ -747,6 +761,22 @@ impl PhotoApp {
                                         [rect.left_bottom(), rect.right_top()],
                                         egui::Stroke::new(2.0_f32, egui::Color32::from_gray(230)),
                                     );
+                                }
+                                // Nach der Kachel angemeldet, damit die Symbole über ihr liegen
+                                // und ihr Klick die Auswahl nicht umschaltet.
+                                match tile_icons(
+                                    ui,
+                                    response.rect,
+                                    ui.id().with(("tile-icons", face.id)),
+                                    target.as_ref(),
+                                    !busy,
+                                ) {
+                                    Some(TileIcon::Is) => decision = Some(Decision::OneIs(face.id)),
+                                    Some(TileIcon::IsNot) => {
+                                        decision = Some(Decision::OneIsNot(face.id))
+                                    }
+                                    Some(TileIcon::Name) => name_one = Some(face.id),
+                                    None => {}
                                 }
                                 if let Some(note) = person_faces_view::better_note(
                                     self.face_page.better.get(&face.id),
@@ -933,6 +963,46 @@ impl PhotoApp {
                 (removed, BTreeSet::new(), Some(person), String::new(), false)
             }
             Decision::NotFace => return self.mark_not_face(kept.into_iter().collect()),
+            Decision::OneIs(id) | Decision::OneIsNot(id) => {
+                // Kachelsymbol: dieselbe Entscheidung wie für die Gruppe, nur für dieses
+                // Gesicht; die übrigen bleiben unberührt (keine Ablehnung, keine Bestätigung).
+                let confirm = matches!(decision, Decision::OneIs(_));
+                let Some(target) = tile_target(self.page_mode(), &self.face_page, group)
+                    .filter(|target| ids.contains(&id) && (target.confirm || !confirm))
+                else {
+                    return false;
+                };
+                let selected = if confirm {
+                    BTreeSet::from([id])
+                } else {
+                    BTreeSet::new()
+                };
+                // Auswahl und Namensentwurf der übrigen Gesichter gehen mit in die verkleinerte
+                // Karte über.
+                let rest: Vec<Face> = group.iter().filter(|f| f.id != id).cloned().collect();
+                if let Some(draft) = draft
+                    && !rest.is_empty()
+                {
+                    let carried = Draft {
+                        name: draft.name.clone(),
+                        person: draft.person,
+                        excluded: draft
+                            .excluded
+                            .iter()
+                            .copied()
+                            .filter(|x| *x != id)
+                            .collect(),
+                    };
+                    self.drafts.insert(draft_key(&rest), carried);
+                }
+                (
+                    vec![id],
+                    selected,
+                    Some(target.person),
+                    String::new(),
+                    false,
+                )
+            }
         };
         let config = self.settings.central();
         let hide = ids.clone();
@@ -987,6 +1057,52 @@ pub(super) enum Decision {
     NotFace,
     /// Abgewählte bestätigte Gesichter sind nicht die Person (Gesichterseite einer Person).
     RemoveExcluded,
+    /// Kachelsymbol Haken: genau dieses Gesicht ist die Zielperson der Gruppe.
+    OneIs(i64),
+    /// Kachelsymbol Kreuz: genau dieses Gesicht ist nicht die Zielperson der Gruppe.
+    OneIsNot(i64),
+}
+
+/// Zielperson X einer Gruppe für die Kachelsymbole.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TileTarget {
+    pub(super) person: i64,
+    pub(super) name: String,
+    /// Haken anbieten? Nur für noch nicht bestätigte Gesichter.
+    pub(super) confirm: bool,
+}
+
+/// Zielperson der Gruppe für Haken und Kreuz: in „Vorschläge prüfen“ und „Wahrscheinlich X“
+/// die vorgeschlagene Person, in „Benennen“ der sichere Vorschlag („Ist das X?“), auf Seiten
+/// bestätigter Gesichter die Person (dort nur das Kreuz). Sonst keine („Ungeeignet“,
+/// „Ignoriert“, unbenannte Gruppen ohne sicheren Vorschlag).
+pub(super) fn tile_target(
+    mode: &str,
+    page: &faces::FacePage,
+    group: &[Face],
+) -> Option<TileTarget> {
+    let first = group.first()?;
+    let named = |person: i64, confirm: bool| {
+        let name = page.people.iter().find(|p| p.id == person)?.name.clone();
+        Some(TileTarget {
+            person,
+            name,
+            confirm,
+        })
+    };
+    match mode {
+        "review" | "probable" => named(first.person?, true),
+        "confirmed" | "person-confirmed" => named(first.person?, false),
+        "unknown" if first.person.is_none() => {
+            let (person, name, _) = sure_for_group(page, group)?;
+            Some(TileTarget {
+                person,
+                name,
+                confirm: true,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Art der Gruppenkarte, folgt aus der gelesenen Seite.
@@ -1128,8 +1244,157 @@ enum TileAction {
     Name,
     ShowPhoto,
 }
-/// Hinweis unter der Maus für Kacheln mit [`tile_menu`].
-const TILE_MENU_HINT: &str = "Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+/// Hinweis unter der Maus für Kacheln mit [`tile_menu`] und nur dem Fragezeichen.
+const TILE_MENU_HINT: &str = "Fragezeichen oben rechts: Namen wählen\n\
+     Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+/// Hinweis für Kacheln einer Gruppe mit Zielperson (Haken und Kreuz).
+const TILE_ICONS_HINT: &str = "Doppelklick auf Haken oder Kreuz oben rechts: nur dieses Gesicht \
+     ist bzw. ist nicht die Person; Fragezeichen: Namen wählen\n\
+     Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+
+/// Symbol oben rechts auf einer Gruppenkachel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TileIcon {
+    /// Kreuz: „das ist nicht X“ (Doppelklick).
+    IsNot,
+    /// Haken: „das ist X“ (Doppelklick).
+    Is,
+    /// Fragezeichen: Namen wählen (Klick).
+    Name,
+}
+
+/// Hinweistext (und Beschriftung für Bedienhilfen) eines Kachelsymbols.
+fn tile_icon_hint(icon: TileIcon, name: &str) -> String {
+    match icon {
+        TileIcon::IsNot => format!("Doppelklick: das ist nicht {name}"),
+        TileIcon::Is => format!("Doppelklick: das ist {name}"),
+        TileIcon::Name => "Namen wählen …".into(),
+    }
+}
+
+/// Die Symbole oben rechts auf einer Gruppenkachel, für alle Seiten mit Gruppenkarten gleich:
+/// von links Kreuz, Haken (nur mit Zielperson; der Haken nur, wenn `target.confirm`) und
+/// Fragezeichen. Haken und Kreuz wirken erst auf Doppelklick, das Fragezeichen auf Klick.
+/// Die Symbole müssen nach der Kachel angemeldet werden: Dann liegen sie über ihr, und ein
+/// Klick auf ein Symbol schaltet die Auswahl der Kachel nicht um. Dauerhaft dezent, unter der
+/// Maus hervorgehoben; dunkler Grund mit hellem Zeichen, lesbar in hell und dunkel.
+fn tile_icons(
+    ui: &mut egui::Ui,
+    tile: egui::Rect,
+    id: egui::Id,
+    target: Option<&TileTarget>,
+    enabled: bool,
+) -> Option<TileIcon> {
+    let mut icons = Vec::with_capacity(3);
+    if let Some(target) = target {
+        icons.push(TileIcon::IsNot);
+        if target.confirm {
+            icons.push(TileIcon::Is);
+        }
+    }
+    icons.push(TileIcon::Name);
+    let name = target.map(|t| t.name.as_str()).unwrap_or_default();
+    let edge = (tile.width() / 5.0).clamp(14.0, 20.0);
+    let (margin, gap) = (3.0, 2.0);
+    let mut chosen = None;
+    for (index, icon) in icons.iter().rev().enumerate() {
+        let right = tile.right() - margin - index as f32 * (edge + gap);
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(right - edge, tile.top() + margin),
+            egui::vec2(edge, edge),
+        );
+        // Das Fragezeichen öffnet nur den Dialog und bleibt deshalb auch während eines
+        // Schreibauftrags bedienbar.
+        let active = enabled || *icon == TileIcon::Name;
+        let hint = tile_icon_hint(*icon, name);
+        let response = ui.interact(rect, id.with(*icon as u8), egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, active, hint.clone())
+        });
+        let response = response.on_hover_text(&hint);
+        let hovered = response.hovered() && active;
+        if hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let painter = ui.painter();
+        let center = rect.center();
+        let radius = edge / 2.0;
+        painter.circle_filled(
+            center,
+            radius,
+            egui::Color32::from_black_alpha(if hovered { 210 } else { 120 }),
+        );
+        let color = match (hovered, active, icon) {
+            (_, false, _) => egui::Color32::from_white_alpha(90),
+            (true, _, TileIcon::Is) => egui::Color32::from_rgb(130, 230, 130),
+            (true, _, TileIcon::IsNot) => egui::Color32::from_rgb(255, 130, 130),
+            (true, _, TileIcon::Name) => egui::Color32::WHITE,
+            (false, _, _) => egui::Color32::from_white_alpha(200),
+        };
+        let stroke = egui::Stroke::new(1.6_f32, color);
+        let r = radius * 0.45;
+        match icon {
+            TileIcon::IsNot => {
+                painter.line_segment(
+                    [center + egui::vec2(-r, -r), center + egui::vec2(r, r)],
+                    stroke,
+                );
+                painter.line_segment(
+                    [center + egui::vec2(-r, r), center + egui::vec2(r, -r)],
+                    stroke,
+                );
+            }
+            TileIcon::Is => {
+                painter.add(egui::Shape::line(
+                    vec![
+                        center + egui::vec2(-r, 0.0),
+                        center + egui::vec2(-r * 0.25, r * 0.8),
+                        center + egui::vec2(r * 1.1, -r * 0.9),
+                    ],
+                    stroke,
+                ));
+            }
+            TileIcon::Name => {
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    "?",
+                    egui::FontId::proportional(edge * 0.75),
+                    color,
+                );
+            }
+        }
+        if !active {
+            continue;
+        }
+        let fired = match icon {
+            TileIcon::Name => response.clicked(),
+            // Eigener Doppelklick: beide Klicks müssen dieses Symbol treffen. egui zählt auch
+            // einen schnellen Klick auf die Kachel und dann auf das Symbol als Doppelklick.
+            TileIcon::Is | TileIcon::IsNot => {
+                response.clicked() && {
+                    let now = ui.input(|i| i.time);
+                    let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+                    let key = response.id.with("last-click");
+                    let last = ui.data(|d| d.get_temp::<f64>(key));
+                    let double = last.is_some_and(|last| now - last <= delay);
+                    ui.data_mut(|d| {
+                        if double {
+                            d.remove::<f64>(key);
+                        } else {
+                            d.insert_temp(key, now);
+                        }
+                    });
+                    double
+                }
+            }
+        };
+        if fired {
+            chosen = Some(*icon);
+        }
+    }
+    chosen
+}
 
 /// Rechtsklickmenü einer Kachel in einer Gruppenkarte: „Einzeln benennen …“ und „Foto in
 /// der Sammlung zeigen“. Der Linksklick bleibt unberührt.
