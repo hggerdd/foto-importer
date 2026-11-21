@@ -57,6 +57,14 @@ impl PhotoApp {
         let mode = self.page_mode().to_string();
         let page = &mut self.face_page;
         let before: usize = page.groups.iter().map(Vec::len).sum();
+        // Ausgeblendete Gesichter des zweiten Abschnitts („Eher jemand anderes“).
+        let others = page
+            .groups
+            .iter()
+            .flatten()
+            .filter(|f| hidden.contains(&f.id) && page.better.contains_key(&f.id))
+            .count();
+        page.probable_others = page.probable_others.saturating_sub(others);
         for group in &mut page.groups {
             group.retain(|f| !hidden.contains(&f.id));
         }

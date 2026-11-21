@@ -104,6 +104,12 @@ pub struct FacePage {
     /// Gesichter insgesamt im Reiter über alle Seiten („unsuitable“, „probable“, „confirmed“,
     /// „person-confirmed“, „ignored“; sonst 0).
     pub faces_total: usize,
+    /// Reiter „probable“: Gesichter des zweiten Abschnitts („Eher jemand anderes“), deren
+    /// beste Person nicht die gewählte ist; in `faces_total` enthalten.
+    pub probable_others: usize,
+    /// Reiter „probable“: beste andere Person (ID, Personenscore) je Gesicht der Seite aus dem
+    /// zweiten Abschnitt. Gruppen mischen die Abschnitte nie.
+    pub better: BTreeMap<i64, (i64, f32)>,
 }
 
 /// Tabellenzeilen und Porträts für den Reiter „persons“, sonst leer.
@@ -557,21 +563,31 @@ fn unsuitable_page(
         .collect();
     Ok((groups, total))
 }
+/// Seite des Reiters „probable“ (Gruppen der Seite und alles, was die Seite dazu zeigt).
+#[derive(Default)]
+struct ProbablePage {
+    groups: Vec<Vec<Face>>,
+    total_groups: usize,
+    faces_total: usize,
+    others: usize,
+    better: BTreeMap<i64, (i64, f32)>,
+}
 /// Seite des Reiters „probable“: unbestätigte Gesichter, die wahrscheinlich `person` zeigen
-/// (`recognition::person_candidates`), nach Personenscore absteigend in Gruppen zu
-/// `GROUP_MAX` geschnitten; die erste Gruppe ist die wahrscheinlichste. Jedes Gesicht trägt
-/// für die Seite `person` als Vorschlag und seinen Personenscore als `score`, damit die Karte
-/// wie in „Vorschläge prüfen“ bestätigt und ablehnt. Ergebnis: Gruppen der Seite, Zahl der
-/// Gruppen und der Gesichter insgesamt.
+/// (`recognition::person_candidates`). Zuerst die Gesichter, deren beste Person `person` ist,
+/// dann („Eher jemand anderes“) die, bei denen eine andere Person vorn liegt; jeder Abschnitt
+/// nach Personenscore absteigend für sich in Gruppen zu `GROUP_MAX` geschnitten, sodass keine
+/// Gruppe beide Abschnitte mischt. Jedes Gesicht trägt für die Seite `person` als Vorschlag
+/// und seinen Personenscore als `score`, damit die Karte wie in „Vorschläge prüfen“ bestätigt
+/// und ablehnt.
 fn probable_page(
     collection: &Collection,
     embedder: &str,
     person: Option<i64>,
     page: usize,
     control: &Control,
-) -> Result<(Vec<Vec<Face>>, usize, usize)> {
+) -> Result<ProbablePage> {
     let Some(person) = person.filter(|_| !embedder.is_empty()) else {
-        return Ok((Vec::new(), 0, 0));
+        return Ok(ProbablePage::default());
     };
     let candidates = super::recognition::person_candidates(
         collection,
@@ -580,25 +596,38 @@ fn probable_page(
         crate::config::PERSON_CANDIDATE_MIN,
         control,
     )?;
-    let parts: Vec<&[(i64, f32)]> = candidates.chunks(crate::config::GROUP_MAX).collect();
-    let mut groups = Vec::new();
+    let split = candidates.partition_point(|c| c.better.is_none());
+    let (first, second) = candidates.split_at(split);
+    let parts: Vec<&[super::recognition::PersonCandidate]> = first
+        .chunks(crate::config::GROUP_MAX)
+        .chain(second.chunks(crate::config::GROUP_MAX))
+        .collect();
+    let mut result = ProbablePage {
+        total_groups: parts.len(),
+        faces_total: candidates.len(),
+        others: second.len(),
+        ..ProbablePage::default()
+    };
     for part in parts
         .iter()
         .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
         .take(crate::config::FACE_GROUPS_PER_PAGE)
     {
-        let ids: Vec<i64> = part.iter().map(|(id, _)| *id).collect();
-        let scores: BTreeMap<i64, f32> = part.iter().copied().collect();
+        let ids: Vec<i64> = part.iter().map(|c| c.face).collect();
+        let scores: BTreeMap<i64, f32> = part.iter().map(|c| (c.face, c.score)).collect();
+        result
+            .better
+            .extend(part.iter().filter_map(|c| Some((c.face, c.better?))));
         let mut rows = faces_in_order(collection, &ids)?;
         for face in &mut rows {
             face.person = Some(person);
             face.score = scores[&face.id];
         }
         if !rows.is_empty() {
-            groups.push(rows);
+            result.groups.push(rows);
         }
     }
-    Ok((groups, parts.len(), candidates.len()))
+    Ok(result)
 }
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     page_filtered(collection, mode, page, None)
@@ -630,6 +659,8 @@ pub fn page_with(
     let total_groups: usize;
     let mut faces_total = 0;
     let mut review_people = BTreeMap::new();
+    let mut probable_others = 0;
+    let mut better = BTreeMap::new();
     if matches!(mode, "persons" | "tree" | "graph") {
         // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
         let (relations, family, questions) = tree_state(collection)?;
@@ -650,6 +681,8 @@ pub fn page_with(
             rejections: BTreeMap::new(),
             review_people: BTreeMap::new(),
             faces_total: 0,
+            probable_others: 0,
+            better: BTreeMap::new(),
         });
     }
     if mode == "unknown" && status.embedder.is_empty() {
@@ -668,14 +701,18 @@ pub fn page_with(
             rejections: BTreeMap::new(),
             review_people: BTreeMap::new(),
             faces_total: 0,
+            probable_others: 0,
+            better: BTreeMap::new(),
         });
     }
     if mode == "unsuitable" {
         (groups, faces_total) = unsuitable_page(collection, &status.embedder, page)?;
         total_groups = faces_total.div_ceil(crate::config::GROUP_MAX);
     } else if mode == "probable" {
+        let probable = probable_page(collection, &status.embedder, person, page, control)?;
         (groups, total_groups, faces_total) =
-            probable_page(collection, &status.embedder, person, page, control)?;
+            (probable.groups, probable.total_groups, probable.faces_total);
+        (probable_others, better) = (probable.others, probable.better);
     } else if mode == "person-confirmed" && person.is_none() {
         total_groups = 0;
     } else if mode == "unknown" && !status.embedder.is_empty() {
@@ -793,6 +830,8 @@ pub fn page_with(
         rejections,
         review_people,
         faces_total,
+        probable_others,
+        better,
     })
 }
 

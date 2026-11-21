@@ -101,11 +101,18 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Abgleich vergleicht (nicht vom Nutzer benannt, auch Vorschläge anderer Personen), ohne
   seine Ausschlüsse für diese Person (abgelehnt, im Foto bestätigt, vor dem Geburtsjahr);
   Schwelle und Abstand gelten nicht, nur die Untergrenze `config::PERSON_CANDIDATE_MIN`
-  (0,40, nicht gemessen, begrenzt nur die Liste). Absteigend nach Wert, dann ID. Die Werte
-  stammen aus dem Zwischenspeicher, wenn er für Sammlung und Modell bereitliegt (der Leser
-  bringt ihn per `sync` auf den Stand und hält die Sperre nur dafür; der Abgleich wartet auf
-  sie ohne Rückgabepunkt, gegenseitiges Warten ist ausgeschlossen); sonst rechnet ein
-  Durchgang über die Vektoren nur die Spalte dieser Person, ohne Zwischenspeicher aufzubauen.
+  (0,40, nicht gemessen, begrenzt nur die Liste). Je Gesicht zusätzlich die beste Person
+  wie im Abgleich (`best_two` über alle Personen mit Referenzen, Ordnung Score, Name, ID,
+  ohne die Ausschlüsse des Gesichts für andere Personen). Reihenfolge: erst Gesichter, deren
+  beste Person X ist, dann die übrigen (mit der besseren Person und ihrem Wert); je
+  Abschnitt absteigend nach dem Wert für X, bei Gleichstand nach Gesichts-ID. Ein
+  Gleichstand zwischen X und einer anderen Person entscheidet wie im Abgleich der Name, dann
+  die ID. Die Werte stammen aus dem Zwischenspeicher, wenn er für Sammlung und Modell
+  bereitliegt (der Leser bringt ihn per `sync` auf den Stand und hält die Sperre nur dafür;
+  der Abgleich wartet auf sie ohne Rückgabepunkt, gegenseitiges Warten ist ausgeschlossen);
+  sonst rechnet ein Durchgang über die Vektoren die Spalte dieser Person und nur für
+  Gesichter ab der Untergrenze alle Spalten (Blockrechnung wie oben), ohne Zwischenspeicher
+  aufzubauen. Beide Wege sind bitgleich (`person_candidates_with` wählt ausdrücklich).
   Läuft auf dem Leser der Seite (`faces::page_with`, Modus `probable`). Messung in
   [Validierung](../docs/validierung.md).
 - Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte

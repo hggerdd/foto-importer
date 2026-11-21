@@ -493,6 +493,30 @@ nach dem Abgleich; Bestätigen und Entfernen auf der Personenseite) und in
 `src/ui/app/tests.rs` die Karten beider Seiten. Nicht geprüft: Sichtprüfung in der laufenden
 App, Zeiten auf der USB-Festplatte selbst.
 
+### Zwei Abschnitte „am ehesten X“ und „eher jemand anderes“ (2026-11-21)
+
+Release, SFace, 37.189 Gesichter, „leo“ (Person 19). Der Weg ohne Zwischenspeicher lief
+direkt und nur lesend auf `E:\Bilder` (USB-Festplatte), der Weg über den Zwischenspeicher
+auf einer Kopie (SQLite-Sicherung, lesend geöffnet; danach gelöscht), dort zum Vergleich
+auch der Weg ohne Zwischenspeicher:
+
+| Schritt | Zeit |
+|---|---|
+| Liste ohne Zwischenspeicher, `E:\Bilder`, erster Lauf (kalte USB-Festplatte) | 2,17 s |
+| dasselbe, Folgeläufe | 195 bis 206 ms (vorher 99 ms) |
+| Liste ohne Zwischenspeicher, Kopie auf SSD, nach dem Abgleich | 257 bis 287 ms |
+| Liste aus dem Zwischenspeicher (Kopie) | 87 bis 108 ms (vorher 70 bis 79 ms) |
+| ganze Seite „probable“ aus dem Zwischenspeicher (Kopie) | 149 bis 184 ms |
+| Abgleich, der den Zwischenspeicher aufbaut (Kopie) | 599 ms |
+
+5.044 Gesichter erreichen 0,40: 2.960 mit leo als bester Person, 2.084 mit einer anderen
+Person vorn; beide Rechenwege liefern dieselbe Liste. Ohne Zwischenspeicher kostet die
+beste Person das Rechnen aller Personenspalten für die Gesichter ab 0,40. Regression:
+`tests/face_pages.rs` `faces_that_look_more_like_someone_else_come_in_a_second_section`
+(Abschnitte, Hinweis auf die bessere Person, Ausschlüsse, Gleichstand nach ID, beide Wege
+bitgleich, Gruppen mischen die Abschnitte nicht). Nicht geprüft: Sichtprüfung in der
+laufenden App.
+
 ## Umbenannte Ordner und fehlende Dateien (2026-11-20)
 
 Nur lesend an `E:\Bilder` (exFAT, USB-Festplatte, 98 082 Dateien): Nach der Umbenennung
