@@ -123,6 +123,7 @@ impl Collection {
                 // Neue Beziehungstypen sind nur Zeilen; ältere Sammlungen erhalten sie beim
                 // Öffnen mit Schreibrecht. Schreibgeschützt bleibt alles unverändert.
                 db.execute_batch(&super::relations::seed_sql())?;
+                super::recognition::renew_outdated_references(&db)?;
             }
             let flags = rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
                 | rusqlite::functions::FunctionFlags::SQLITE_UTF8;

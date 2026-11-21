@@ -79,6 +79,43 @@ pub const GROUP_SUGGESTION_FACES: usize = 5;
 pub const FACE_REVIEW_MIN: f32 = 0.60;
 pub const FACE_REVIEW_MARGIN: f32 = 0.05;
 pub const FACE_SURE_MIN: f32 = 0.70;
+/// Referenzauswahl (`recognition`, `matching::select_references`): Je Person werden
+/// `reference_limit(n)` der `n` bestätigten Gesichter ausgewählt, eine sättigende Funktion ohne
+/// Untergrenze: `ceil(S·(1−exp(−n/S)))`, höchstens `n`, mit `S = REFERENCE_SATURATION`. Für
+/// kleine `n` sind das fast alle Gesichter (30 → 30, 100 → 95), für häufige Personen gegen
+/// `S` (500 → 372, 1000 → 571, 5000 → 799). Gemessen am 2026-11-21 mit
+/// `examples/reference_limit_eval.rs` (SFace, eine Sammlung, 17.023 bestätigte Gesichter,
+/// 50 Personen, feste Testmenge 2.931 Gesichter): Personen über 500 Gesichtern erreichen 0,60
+/// mit Abstand in 90 % statt 63 % (fest 100), Verwechslungen sinken von 5,4 % auf 0,1 %. Mehr
+/// als 800 (bis „alle“) brachte dort kaum mehr, aber mehr Verwechslungen bei mittleren
+/// Personen (1,4 % statt 0,5 %).
+pub const REFERENCE_SATURATION: f32 = 800.0;
+/// Höchstzahl Kandidaten je Person (Pins kommen hinzu), je Jahr nach Qualität im Wechsel.
+/// Ohne diese Grenze war die Auswahl bei 800 schlechter (bei 0,70: 76 % statt 78 % der
+/// richtigen Person über 500 Gesichtern), weil die Jahresverteilung verloren geht.
+pub const REFERENCE_CANDIDATES_MAX: usize = 2048;
+/// Validierung (nur für „Validierung auswerten“, nie im Abgleich): 20 % der Auswahl, höchstens
+/// `REFERENCE_VALIDATION_MAX`; unter `REFERENCE_VALIDATION_FROM` Ausgewählten keine, damit
+/// seltene Personen alle Gesichter als Referenz nutzen.
+pub const REFERENCE_VALIDATION_MAX: usize = 40;
+pub const REFERENCE_VALIDATION_FROM: usize = 50;
+/// Kennung der geltenden Auswahlregel. Ändert sich Grenze oder Validierung, wird sie erhöht:
+/// Beim nächsten Öffnen werden alle Personen neu ausgewählt
+/// (`recognition::renew_outdated_references`).
+pub const REFERENCE_POLICY: &str = "saturating-800-v1";
+/// Wie viele der `confirmed` bestätigten Gesichter einer Person ausgewählt werden.
+pub fn reference_limit(confirmed: usize) -> usize {
+    let max = REFERENCE_SATURATION;
+    ((max * (1.0 - (-(confirmed as f32) / max).exp())).ceil() as usize).min(confirmed)
+}
+/// Wie viele von `chosen` ausgewählten Gesichtern als Validierung zurückgehalten werden.
+pub fn reference_validation(chosen: usize) -> usize {
+    if chosen < REFERENCE_VALIDATION_FROM {
+        0
+    } else {
+        ((chosen as f32 * 0.2).round() as usize).min(REFERENCE_VALIDATION_MAX)
+    }
+}
 /// Obergrenze für den Speicher des inkrementellen Abgleichs (Vektoren und Personenwerte je
 /// Gesicht, `recognition::MatchCache`). 100.000 Gesichter mit 128 Dimensionen und 40 Personen
 /// brauchen rund 70 MB; darüber hinaus fällt der Abgleich auf den vollständigen Lauf zurück.
