@@ -32,7 +32,8 @@
   - Abgelehnte Rückfragen werden als Mengenvereinigung in beide Richtungen übernommen.
   - Konflikte löst nur der Nutzer: lokal behalten, zentral übernehmen oder keine von beiden.
 - **Schema-Upgrade 1 auf 2** geschieht beim Öffnen mit Schreibrecht, additiv, nach einer
-  Sicherung `central.sqlite.v1.bak`.
+  Sicherung `central.sqlite.v1.bak` (`VACUUM INTO`). Scheitert die Sicherung, unterbleibt
+  die Migration, ein angefangener Rest wird entfernt und das Öffnen meldet den Fehler.
 
 ## Grenzen
 
