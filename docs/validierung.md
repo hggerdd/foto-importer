@@ -34,6 +34,36 @@ unter `tmp/demo`; zum Öffnen `FOTO_IMPORTER_SETTINGS` auf dessen `settings.json
 
 Einzelne Abweichungen von Python stehen in der [Funktionsmatrix](paritaet.md).
 
+### Umgebungsvariablen für Sichtprüfungen
+
+Nur für Sichtprüfungen und Bildschirmfotos; im Normalbetrieb bleiben sie ungesetzt. Gelesen
+werden sie einmal beim Start (`PhotoApp::with_settings`, `TimeUi::from_env`,
+`PeopleUi::sort_from_env`).
+
+| Variable | Wirkung |
+|---|---|
+| `FOTO_IMPORTER_SETTINGS` | Pfad der Einstellungsdatei (auch im Normalbetrieb nutzbar, siehe ADR Anwendung) |
+| `FOTO_IMPORTER_CACHE` | Ordner des lokalen Beschleunigungs-Caches |
+| `FOTO_IMPORTER_VIEW` | Startansicht: `import`, `collection`, `faces`, `people`, `persons`, `time`, `tasks`, `settings` |
+| `FOTO_IMPORTER_FACE_MODE` | Reiter bzw. Ansicht: `unknown`, `review`, `confirmed`, `ignored`, `unsuitable`, `persons`, `person-faces`, `tree`, `graph`, `time` |
+| `FOTO_IMPORTER_ACTION` | Startet nach dem Öffnen einen Lauf, z. B. `scan`; `central_sync` gleicht den zentralen Bestand einmal ab |
+| `FOTO_IMPORTER_FOLDER` | Ordnerfilter der Sammlungsansicht vor dem ersten Laden (relativer Ordnerpfad, leer = ohne) |
+| `FOTO_IMPORTER_PEOPLE_SELECT` | Person (ID), die in der Personentabelle gewählt und sichtbar gerollt wird |
+| `FOTO_IMPORTER_PEOPLE_SORT` | Sortierspalte der Personentabelle, z. B. `photos:desc` (`name`, `photos`, `faces`, `birth`, `gender`, `relations`, `family`, `first`, `last`, `hints`; `:asc`/`:desc`) |
+| `FOTO_IMPORTER_PEOPLE_POPUP` | Offenes Auswahlfeld der Personentabelle für das Bildschirmfoto |
+| `FOTO_IMPORTER_TREE_PERSON`, `FOTO_IMPORTER_TREE_UP`, `FOTO_IMPORTER_TREE_DOWN` | Fokusperson (ID) und Generationen nach oben/unten im Stammbaum |
+| `FOTO_IMPORTER_GRAPH_PERSON` | Im Personengraph vorausgewählte Person (ID) |
+| `FOTO_IMPORTER_TIME_PERSON` | Person (ID) der Zeitreise |
+| `FOTO_IMPORTER_TIME_AXIS` | `age` zeigt die Zeitreise über dem Alter statt über dem Datum |
+| `FOTO_IMPORTER_TIME_GRAIN` | Abschnitte der Zeitreise: `year` oder `month` (sonst automatisch) |
+| `FOTO_IMPORTER_CAPTURE` | Pfad eines PNG: die App speichert nach der Wartezeit (oder mit F12) ein Bild des Fensters |
+| `FOTO_IMPORTER_CAPTURE_DELAY` | Wartezeit vor dem Bild in Sekunden (Standard 5), z. B. wenn Bilder nachladen |
+
+Beispiel Zeitreise nach Alter, je Jahr (PowerShell, Demosammlung):
+`$env:FOTO_IMPORTER_SETTINGS="tmp/demo/settings.json"; $env:FOTO_IMPORTER_VIEW="time";
+$env:FOTO_IMPORTER_TIME_PERSON="1"; $env:FOTO_IMPORTER_TIME_AXIS="age";
+$env:FOTO_IMPORTER_TIME_GRAIN="year"; cargo run`.
+
 ## ONNX-Runtime-Download am 06.11.2026
 
 `cargo test --locked --test onnx_runtime -- --ignored` hat das offizielle
