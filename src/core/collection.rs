@@ -2,6 +2,7 @@ use super::{
     files,
     jobs::Control,
     known_files::{KnownFiles, Signature, Unseen},
+    migrations::SCHEMA_VERSION,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -103,13 +104,14 @@ impl Collection {
                     "INSERT INTO collection VALUES(?,datetime('now'),'rust-0.1')",
                     [uuid::Uuid::new_v4().to_string()],
                 )?;
-                db.execute("INSERT INTO projection_revision VALUES(0)", [])?;
                 db.execute_batch(&format!("{} COMMIT;", super::relations::seed_sql()))?;
-            } else if write && (1..=5).contains(&version) {
+            } else if write && (1..SCHEMA_VERSION).contains(&version) {
                 let mut span = super::diag::span("db", "migration");
                 span.field("von_schema", version);
                 super::migrations::upgrade(&db, &root, version)?;
-            } else if version != 6 && !(!write && (4..=5).contains(&version)) {
+            } else if version != SCHEMA_VERSION
+                && !(!write && (4..SCHEMA_VERSION).contains(&version))
+            {
                 bail!(
                     "Schema {version} benötigt ein unterstütztes Upgrade. Sammlung über Bestand aktualisieren öffnen."
                 );

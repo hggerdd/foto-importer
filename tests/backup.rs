@@ -100,7 +100,10 @@ fn a_backup_restores_collection_central_and_settings() -> Result<()> {
     assert_eq!(manifest["format"], 1);
     assert_eq!(manifest["reason"], "test");
     assert_eq!(manifest["entries"].as_array().map(Vec::len), Some(3));
-    assert_eq!(manifest["entries"][0]["schema_version"], 6);
+    assert_eq!(
+        manifest["entries"][0]["schema_version"],
+        foto_importer::core::migrations::SCHEMA_VERSION
+    );
 
     let db = Connection::open(restored.path().join("sammlung/.myfotomanager"))?;
     assert_eq!(integrity(&db)?, "ok");

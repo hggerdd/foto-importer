@@ -3,8 +3,8 @@
 //! Auf einer USB-Festplatte kosten die Zählungen der Sammlung (Gesamtzahl, Kameras, Bestand)
 //! kalt zusammen viele Sekunden, die erste Seite nur rund eine. Deshalb liest die Oberfläche
 //! die Seite zuerst und zählt danach. Eine Zählung gilt weiter, solange sich die
-//! Projektionsrevision der Sammlung (`projection_revision`, von Triggern bei jeder Änderung an
-//! Fotos, Dateien und Projektionsspalten erhöht) nicht geändert hat.
+//! Datenrevision des Bestands (`core::revision`, Bereich `files`, von Triggern bei jeder
+//! Änderung an Dateien und Projektionsspalten erhöht) nicht geändert hat.
 //!
 //! Die Startansicht (erste Seite ohne Filter samt Zählungen) liegt zusätzlich als kleine
 //! JSON-Datei im lokalen Cache-Ordner des Arbeitsplatzes, nie in der Sammlung. Sie wird beim
@@ -15,44 +15,30 @@ use super::{
     collection::{Collection, CollectionStatus},
     local_cache,
     metadata::{self, Photo, Search},
+    revision::{self, Domain},
 };
 use anyhow::Result;
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Art und Formatnummer der Startansicht im lokalen Cache (`core::local_cache`); andere
-/// Nummern und die Dateien vor Format 2 (ohne Hülle von `local_cache`) gelten als fehlend.
-const CACHE: (&str, u32) = ("start", 2);
+/// Nummern gelten als fehlend. Format 3: Stand aus `data_revision` (Schema 7).
+const CACHE: (&str, u32) = ("start", 3);
 
-/// Stand einer Sammlung: Identität (`collection.id`) und Projektionsrevision.
+/// Stand einer Sammlung: Identität (`collection.id`) und Revision des Bestands.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamp {
     pub identity: String,
     pub revision: i64,
 }
 
-/// Liest den Stand mit zwei Zugriffen auf je eine kleine Tabelle. `None`, wenn die Sammlung
-/// keine Identität oder Revision hat (dann wird nie wiederverwendet).
+/// Liest den Stand ([`revision::read`]). `None`, wenn die Sammlung keine Identität oder
+/// Revision hat (dann wird nie wiederverwendet).
 pub fn stamp(collection: &Collection) -> Result<Option<Stamp>> {
-    let identity: Option<String> = collection
-        .db
-        .query_row("SELECT id FROM collection LIMIT 1", [], |r| r.get(0))
-        .optional()?;
-    let revision: Option<i64> = collection
-        .db
-        .query_row(
-            "SELECT revision FROM projection_revision LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(match (identity, revision) {
-        (Some(identity), Some(revision)) if !identity.is_empty() => {
-            Some(Stamp { identity, revision })
-        }
-        _ => None,
-    })
+    Ok(revision::read(&collection.db)?.map(|r| Stamp {
+        revision: r.get(Domain::Files),
+        identity: r.identity,
+    }))
 }
 
 /// Zählungen einer Suche: Bestand der Sammlung, Gesamtzahl und häufigste Kameras.

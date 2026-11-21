@@ -88,7 +88,9 @@ CREATE TABLE metadata_photos(
 
 CREATE TABLE face_sources(photo_id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL);
 
-CREATE TABLE projection_revision(revision INTEGER NOT NULL);
+CREATE TABLE data_revision(domain TEXT PRIMARY KEY,revision INTEGER NOT NULL) WITHOUT ROWID;
+
+INSERT OR IGNORE INTO data_revision VALUES('files',0),('faces',0),('people',0);
 
 CREATE TABLE folder_counts(dir TEXT PRIMARY KEY,photos INTEGER NOT NULL) WITHOUT ROWID;
 
@@ -162,7 +164,7 @@ ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
 ;DELETE FROM face_sources WHERE photo_id=new.photo_id;INSERT INTO face_sources SELECT photo_id,id FROM files WHERE photo_id=new.photo_id
             AND status='present' AND ext IN ('jpg','jpeg','png','tif','tiff','nef','nrw','dng')
-            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE projection_revision SET revision=revision+1; END;
+            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER browse_files_update AFTER UPDATE OF photo_id,status,relpath,name,ext,size,meta_state ON files BEGIN DELETE FROM metadata_photos WHERE photo_id=old.photo_id;INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
@@ -182,7 +184,7 @@ ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
 ;DELETE FROM face_sources WHERE photo_id=new.photo_id;INSERT INTO face_sources SELECT photo_id,id FROM files WHERE photo_id=new.photo_id
             AND status='present' AND ext IN ('jpg','jpeg','png','tif','tiff','nef','nrw','dng')
-            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE projection_revision SET revision=revision+1; END;
+            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER browse_files_delete AFTER DELETE ON files BEGIN DELETE FROM metadata_photos WHERE photo_id=old.photo_id;INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
@@ -193,7 +195,7 @@ ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
 ;DELETE FROM face_sources WHERE photo_id=old.photo_id;INSERT INTO face_sources SELECT photo_id,id FROM files WHERE photo_id=old.photo_id
             AND status='present' AND ext IN ('jpg','jpeg','png','tif','tiff','nef','nrw','dng')
-            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE projection_revision SET revision=revision+1; END;
+            ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id LIMIT 1;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER browse_meta_insert AFTER INSERT ON meta BEGIN DELETE FROM metadata_photos WHERE photo_id=(SELECT photo_id FROM files WHERE id=new.file_id);INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
@@ -202,7 +204,7 @@ FROM files f LEFT JOIN meta m ON m.file_id=f.id
 WHERE f.photo_id=(SELECT photo_id FROM files WHERE id=new.file_id) AND f.status='present' AND f.ext!='xmp'
 ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
-;UPDATE projection_revision SET revision=revision+1; END;
+;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER browse_meta_update AFTER UPDATE OF dt_original,model,lens,iso ON meta BEGIN DELETE FROM metadata_photos WHERE photo_id=(SELECT photo_id FROM files WHERE id=old.file_id);INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
@@ -218,7 +220,7 @@ FROM files f LEFT JOIN meta m ON m.file_id=f.id
 WHERE f.photo_id=(SELECT photo_id FROM files WHERE id=new.file_id) AND f.status='present' AND f.ext!='xmp'
 ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
-;UPDATE projection_revision SET revision=revision+1; END;
+;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER browse_meta_delete AFTER DELETE ON meta BEGIN DELETE FROM metadata_photos WHERE photo_id=(SELECT photo_id FROM files WHERE id=old.file_id);INSERT INTO metadata_photos 
 SELECT f.id AS file_id,f.photo_id,f.relpath,f.name,f.ext,f.size,f.meta_state,
@@ -227,7 +229,7 @@ FROM files f LEFT JOIN meta m ON m.file_id=f.id
 WHERE f.photo_id=(SELECT photo_id FROM files WHERE id=old.file_id) AND f.status='present' AND f.ext!='xmp'
 ORDER BY (f.meta_state='done') DESC,(m.dt_original IS NOT NULL) DESC,
  f.ext IN ('nef','nrw','dng') DESC,f.id LIMIT 1
-;UPDATE projection_revision SET revision=revision+1; END;
+;UPDATE data_revision SET revision=revision+1 WHERE domain='files'; END;
 
 CREATE TRIGGER folder_counts_insert AFTER INSERT ON metadata_photos BEGIN INSERT INTO folder_counts VALUES(rtrim(rtrim(new.relpath,replace(new.relpath,'/','')),'/'),1) ON CONFLICT(dir) DO UPDATE SET photos=photos+1; END;
 
@@ -293,4 +295,52 @@ CREATE TRIGGER group_face_state
             WHERE face_id=new.id AND new.person_id IS NULL AND new.ignored=0 AND new.retained=0;
         END;
 
-PRAGMA user_version=6;
+CREATE TRIGGER revision_faces_insert AFTER INSERT ON faces WHEN new.person_id IS NOT NULL BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_faces_update AFTER UPDATE OF person_id,assignment,ignored,retained ON faces WHEN (old.person_id IS NOT NULL OR new.person_id IS NOT NULL) AND (old.person_id IS NOT new.person_id OR old.assignment IS NOT new.assignment OR old.ignored IS NOT new.ignored OR old.retained IS NOT new.retained) BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_faces_delete AFTER DELETE ON faces WHEN old.person_id IS NOT NULL BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_rejections_insert AFTER INSERT ON face_rejections BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_rejections_update AFTER UPDATE ON face_rejections BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_rejections_delete AFTER DELETE ON face_rejections BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_training_set_insert AFTER INSERT ON training_set BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_training_set_update AFTER UPDATE ON training_set BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_training_set_delete AFTER DELETE ON training_set BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_settings_insert AFTER INSERT ON face_settings BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_settings_update AFTER UPDATE ON face_settings BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_face_settings_delete AFTER DELETE ON face_settings BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='faces'; END;
+
+CREATE TRIGGER revision_persons_insert AFTER INSERT ON persons BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_persons_update AFTER UPDATE ON persons BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_persons_delete AFTER DELETE ON persons BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_person_attrs_insert AFTER INSERT ON person_attrs BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_person_attrs_update AFTER UPDATE ON person_attrs BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_person_attrs_delete AFTER DELETE ON person_attrs BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relations_insert AFTER INSERT ON relations BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relations_update AFTER UPDATE ON relations BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relations_delete AFTER DELETE ON relations BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relation_types_insert AFTER INSERT ON relation_types BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relation_types_update AFTER UPDATE ON relation_types BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+CREATE TRIGGER revision_relation_types_delete AFTER DELETE ON relation_types BEGIN UPDATE data_revision SET revision=revision+1 WHERE domain='people'; END;
+
+PRAGMA user_version=7;

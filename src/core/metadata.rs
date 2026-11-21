@@ -822,9 +822,9 @@ pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Resu
     result
 }
 /// Hängen die Zählungen eines Filters nur an Daten, deren Änderungen die
-/// Projektionsrevision (`projection_revision`) erhöhen? Dann darf eine Zählung bei gleicher
-/// Revision wiederverwendet werden. Gesichter, Personen und `meta`-Spalten außerhalb der
-/// Projektion zählen nicht dazu.
+/// Datenrevision des Bestands (`core::revision`, Bereich `files`) erhöhen? Dann darf eine
+/// Zählung bei gleicher Revision wiederverwendet werden. Gesichter, Personen und
+/// `meta`-Spalten außerhalb der Projektion zählen nicht dazu.
 pub fn counts_follow_revision(filters: &Search) -> bool {
     filters.text.trim().is_empty()
         && filters.people_all.is_empty()

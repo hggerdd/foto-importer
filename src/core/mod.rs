@@ -32,6 +32,7 @@ pub mod progress;
 pub mod recognition;
 pub mod relations;
 pub mod relationship_graph;
+pub mod revision;
 pub mod scope;
 pub mod start_view;
 pub mod thumb_cache;

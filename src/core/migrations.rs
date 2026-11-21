@@ -31,9 +31,14 @@ fn columns(db: &Connection, table: &str) -> Result<BTreeSet<String>> {
         .collect::<rusqlite::Result<_>>()?)
 }
 
+/// Aktuelle Schemaversion der Sammlungsdatenbank (`PRAGMA user_version` in `schema.sql`).
+pub const SCHEMA_VERSION: i64 = 7;
+
 /// Upgrade only recognized historical source structures; source rows and IDs survive.
+/// Stände 1 bis 5 bauen dazu die Projektionen neu auf; Schema 6 erhält nur die
+/// Datenrevision (`data_revision` samt Triggern, ersetzt `projection_revision`).
 pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
-    if !(1..=5).contains(&version) {
+    if !(1..SCHEMA_VERSION).contains(&version) {
         bail!("Nicht unterstützte Schema-Version {version}");
     }
     let canonical = Connection::open_in_memory()?;
@@ -57,7 +62,7 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
     // Datensicherung vor dem Umbau; scheitert sie, bleibt die Sammlung unverändert.
     super::backup::automatic(
         root,
-        &format!("vor Schema-Migration {version} → 6"),
+        &format!("vor Schema-Migration {version} → {SCHEMA_VERSION}"),
         &super::jobs::Control::default(),
     )
     .context("Schema-Migration nicht begonnen; die Sammlung bleibt unverändert")?;
@@ -80,19 +85,22 @@ pub fn upgrade(db: &Connection, root: &Path, version: i64) -> Result<()> {
             }
             db.execute_batch(&format!("DROP TRIGGER IF EXISTS {trigger}"))?;
         }
+        // Die frühere Projektionsrevision ersetzt `data_revision`; ihre Trigger sind oben
+        // durch die kanonischen ersetzt.
+        db.execute_batch("DROP TABLE IF EXISTS projection_revision;")?;
         db.execute_batch("DROP INDEX IF EXISTS ix_group_page;")?;
         db.execute_batch(&schema)?;
         db.execute_batch(&super::relations::seed_sql())?;
-        rebuild_metadata_photos(db)?;
-        db.execute_batch("DELETE FROM face_sources;
+        if version <= 5 {
+            rebuild_metadata_photos(db)?;
+            db.execute_batch("DELETE FROM face_sources;
             INSERT INTO face_sources SELECT photo_id,id FROM (
                 SELECT photo_id,id,ROW_NUMBER() OVER(PARTITION BY photo_id ORDER BY CASE WHEN ext IN ('jpg','jpeg') THEN 0 WHEN ext IN ('png','tif','tiff') THEN 1 ELSE 2 END,id) preference
                 FROM files WHERE status='present' AND photo_id IS NOT NULL AND ext IN ('jpg','jpeg','png','tif','tiff','nef','nrw','dng')
             ) WHERE preference=1;
-            INSERT INTO projection_revision SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM projection_revision);
-            UPDATE projection_revision SET revision=revision+1;
-            INSERT OR IGNORE INTO face_group_dirty SELECT e.embedder_id,e.face_id FROM face_embeddings e JOIN faces f ON f.id=e.face_id WHERE f.person_id IS NULL AND f.ignored=0 AND f.retained=0;
-            PRAGMA user_version=6;")?;
+            INSERT OR IGNORE INTO face_group_dirty SELECT e.embedder_id,e.face_id FROM face_embeddings e JOIN faces f ON f.id=e.face_id WHERE f.person_id IS NULL AND f.ignored=0 AND f.retained=0;")?;
+        }
+        db.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION};"))?;
         Ok(())
     })();
     db.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
