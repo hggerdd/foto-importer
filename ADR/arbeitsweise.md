@@ -16,10 +16,14 @@
 - **Branches:** Neue Arbeit beginnt auf einem `codex/`-Branch; `main` ist der stabile Stand.
 - **Unteragenten** arbeiten nur im Projektordner: Arbeitskopie unter
   `worktrees/<aufgabe>` (`git worktree add worktrees/<aufgabe> -b codex/<aufgabe> main`),
-  Build-Ausgaben über `CARGO_TARGET_DIR` unter `worktrees/.target/`, Zwischendateien unter
-  `tmp/`. Beide Ordner sind von Git ausgeschlossen. Die Hauptsitzung räumt nach dem Merge auf.
-- **Python-Referenz** (`python-legacy`) ist nur Verhaltensreferenz, kein Laufzeitbestandteil.
-  Bekannte Abweichungen stehen in [docs/paritaet.md](../docs/paritaet.md).
+  Build-Ausgaben über `CARGO_TARGET_DIR` unter `worktrees/.target/<aufgabe>`,
+  Zwischendateien im eigenen Worktree unter `tmp/` (also `worktrees/<aufgabe>/tmp/`). Alles
+  davon ist von Git ausgeschlossen (`/worktrees/`, `/tmp/`). Nach dem Merge werden Worktree,
+  Branch und Build-Ordner entfernt.
+- **Python-Referenz** ist nur der lokale Ordner `C:\ttt\foto-importer`: Verhaltensreferenz,
+  kein Laufzeitbestandteil. Ein Branch mit der Python-Version existiert nicht mehr.
+  Bekannte Abweichungen stehen in [docs/paritaet.md](../docs/paritaet.md) (historischer
+  Stand).
 
 ## Grenzen
 

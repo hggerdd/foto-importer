@@ -135,15 +135,33 @@ impl Central {
     }
 
     /// Legt Schema 1 an bzw. erweitert es additiv auf Schema 2. Eine bestehende Version-1-Datei
-    /// wird vorher best-effort mit `VACUUM INTO` gesichert; scheitert die Sperre oder fehlt das
-    /// Schreibrecht, bleibt die Datei unverändert (die Transaktion wird nicht committet).
+    /// wird vorher mit `VACUUM INTO` gesichert; scheitert die Sicherung, unterbleibt die
+    /// Migration und ein angefangener Sicherungsrest wird entfernt. Scheitert die Sperre oder
+    /// fehlt das Schreibrecht, bleibt die Datei unverändert (die Transaktion wird nicht committet).
     fn migrate(&mut self, path: &Path, version: i64) -> Result<()> {
-        if version == 1 {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let backup = path.with_file_name(format!("{name}.v1.bak"));
-            if !backup.exists() {
-                let target = backup.to_string_lossy().replace('\'', "''");
-                let _ = self.db.execute_batch(&format!("VACUUM INTO '{target}'"));
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.migrate_with_backup(version, &path.with_file_name(format!("{name}.v1.bak")))
+    }
+    fn migrate_with_backup(&mut self, version: i64, backup: &Path) -> Result<()> {
+        if version == 1 && !backup.exists() {
+            let target = backup.to_string_lossy().replace('\'', "''");
+            if let Err(error) = self.db.execute_batch(&format!("VACUUM INTO '{target}'")) {
+                // Nur den eben begonnenen Rest entfernen; vorher gab es die Datei nicht.
+                if backup.is_file()
+                    && let Err(remove) = std::fs::remove_file(backup)
+                {
+                    log::warn!(
+                        target: "zentral",
+                        "sicherungsrest_nicht_entfernt pfad={:?} fehler={remove}",
+                        backup.display().to_string()
+                    );
+                }
+                log::warn!(target: "zentral", "v1_sicherung_fehlgeschlagen fehler={error}");
+                return Err(anyhow::Error::new(error).context(format!(
+                    "Sicherung {} vor der Migration der Zentraldatei fehlgeschlagen; \
+                     Zentraldatei unverändert",
+                    backup.display()
+                )));
             }
         }
         let tx = self
@@ -910,4 +928,52 @@ pub fn linked_count(collection: &Collection) -> Result<usize> {
         [],
         |r| r.get::<_, i64>(0),
     )? as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_v1_backup_aborts_the_migration() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("central.sqlite");
+        let db = Connection::open(&path)?;
+        db.execute_batch(
+            "CREATE TABLE people(gid TEXT PRIMARY KEY, name TEXT NOT NULL,
+                gender TEXT NOT NULL DEFAULT '', birth_year TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL, merged_into TEXT);
+             CREATE TABLE refs(id INTEGER PRIMARY KEY, gid TEXT NOT NULL,
+                model_key TEXT NOT NULL, jpeg BLOB NOT NULL, created_at TEXT NOT NULL);
+             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO people VALUES('g1','Alt','','','','t','t',NULL);
+             PRAGMA user_version=1;",
+        )?;
+        let mut central = Central {
+            db,
+            images: false,
+            relations: false,
+        };
+        // Der Sicherungsordner fehlt: `VACUUM INTO` scheitert, die Migration unterbleibt.
+        let unreachable = dir.path().join("fehlt").join("central.sqlite.v1.bak");
+        let error = central
+            .migrate_with_backup(1, &unreachable)
+            .expect_err("Sicherung muss scheitern");
+        assert!(format!("{error:#}").contains("unverändert"), "{error:#}");
+        let version: i64 = central
+            .db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        assert_eq!(version, 1);
+        assert!(!unreachable.exists());
+        // Mit erreichbarer Sicherung gelingt die Migration.
+        let backup = dir.path().join("central.sqlite.v1.bak");
+        central.migrate_with_backup(1, &backup)?;
+        let version: i64 = central
+            .db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        assert_eq!(version, 2);
+        assert!(backup.is_file());
+        Ok(())
+    }
 }

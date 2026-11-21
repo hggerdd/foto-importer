@@ -141,8 +141,6 @@ pub fn enrich_scoped(
         &order,
         crate::config::METADATA_CHUNK,
     )?;
-    control.phase("Sicherung schreiben", "");
-    collection.backup()?;
     Ok(enriched.summary())
 }
 
@@ -164,10 +162,6 @@ pub fn enrich_background(
         &order,
         crate::config::METADATA_BACKGROUND_CHUNK,
     )?;
-    let more = order.len() >= portion;
-    if !more {
-        collection.backup()?;
-    }
     Ok(enriched.summary())
 }
 

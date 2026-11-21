@@ -162,6 +162,8 @@ enum Outcome {
     ),
     /// Neue Datensicherung erstellt (Hinweistext).
     BackupCreated(String),
+    /// Tägliche Datensicherung fertig: Sammlung, Datum, Zusammenfassung.
+    DailyBackup(String, String, String),
     /// Frisch gelesene Seite einer Suche mit Stand; Zählungen nur, wenn eine bekannte Zählung
     /// für diesen Stand gilt (sonst zählt danach `Counts`).
     Search(u64, Option<Stamp>, Vec<Photo>, Option<Counts>, Search),
@@ -387,8 +389,6 @@ pub struct PhotoApp {
     delete_phrase: String,
     move_old: String,
     move_new: String,
-    purge_scans: u32,
-    purge_confirm: bool,
     dng_status: String,
     /// Importquelle, die beim Start nicht erreichbar war (z. B. Karte nicht eingesteckt).
     source_offline: Option<String>,
@@ -421,6 +421,9 @@ pub struct PhotoApp {
     /// Zuletzt in der Galerie gezeigter Stand eines laufenden Indexlaufs (Stapelzahl, Zeitpunkt).
     live_refresh: (usize, std::time::Instant),
     last_night: String,
+    /// Die geöffnete Sammlung wartet auf die Prüfung der täglichen Datensicherung (Start oder
+    /// Wechsel der Sammlung); sie folgt, sobald Startseite und Zählung geladen sind.
+    daily_backup_due: bool,
     capture_started: std::time::Instant,
     capture_requested: bool,
     /// Frame-Zeiten fürs Diagnose-Log.
@@ -530,8 +533,6 @@ impl PhotoApp {
             delete_phrase: String::new(),
             move_old: String::new(),
             move_new: String::new(),
-            purge_scans: 0,
-            purge_confirm: false,
             dng_status: "Converter-Version wird gelesen …".into(),
             source_offline: None,
             missing: Default::default(),
@@ -551,6 +552,7 @@ impl PhotoApp {
             auto_metadata_pending: false,
             live_refresh: (0, std::time::Instant::now()),
             last_night: String::new(),
+            daily_backup_due: false,
             capture_started: std::time::Instant::now(),
             capture_requested: false,
             frame_meter: FrameMeter::default(),
@@ -622,6 +624,7 @@ impl PhotoApp {
             app.refresh_collection();
             // Personen und Gesichter erst nach der Sammlung (siehe `faces_after_search`).
             app.faces_after_search = true;
+            app.daily_backup_due = true;
         }
         // Sichtprüfung: startet z. B. "scan" gleich nach dem Öffnen (docs/validierung.md).
         if let Ok(action) = std::env::var("FOTO_IMPORTER_ACTION") {
@@ -703,7 +706,9 @@ impl PhotoApp {
                 Control {
                     // Nutzeraktionen (Benennen, Rücknahme, Einzeländerung) warten nicht auf
                     // laufende Lesevorgänge: nur lange Hintergrundaufträge geben nach (ADR 0066).
-                    background: write && !matches!(kind, "naming" | "undo" | "mutation"),
+                    // Die tägliche Sicherung schreibt nicht in die Sammlung, gibt aber ebenso nach.
+                    background: write && !matches!(kind, "naming" | "undo" | "mutation")
+                        || kind == "backup-daily",
                     ..Default::default()
                 },
                 move |control| {
@@ -721,8 +726,10 @@ impl PhotoApp {
                         None
                     };
                     let _foreground = if !write
-                        && !matches!(kind, "picker" | "dngupdates" | "runtime-download")
-                    {
+                        && !matches!(
+                            kind,
+                            "picker" | "dngupdates" | "runtime-download" | "backup-daily"
+                        ) {
                         Some(crate::core::jobs::foreground())
                     } else {
                         None
@@ -1179,6 +1186,7 @@ impl PhotoApp {
         self.metadata_paused = false;
         self.auto_analysis_pending = false;
         self.auto_metadata_pending = false;
+        self.daily_backup_due = !self.settings.collection.is_empty();
         self.thumbnails.clear();
         if Path::new(&self.settings.collection)
             .join(".myfotomanager")
@@ -1300,16 +1308,7 @@ impl PhotoApp {
             self.refresh_faces();
             return;
         }
-        if [
-            "scan",
-            "metadata",
-            "analyze",
-            "confirm_missing",
-            "purge",
-            "resolve",
-        ]
-        .contains(&action)
-        {
+        if ["scan", "metadata", "analyze", "confirm_missing", "resolve"].contains(&action) {
             self.undo.clear();
         }
         let settings = self.settings.clone();
@@ -1320,11 +1319,9 @@ impl PhotoApp {
         let embedder = self.embedder.clone();
         let old = self.move_old.clone();
         let new = self.move_new.clone();
-        let age = self.purge_scans;
         let label = match action.as_str() {
             "scan" => "Sammlung indizieren",
             "confirm_missing" => "Fehlende nach Prüfung markieren",
-            "purge" => "Fehlende Indexeinträge entfernen",
             "resolve" => "Verschiebung zuordnen",
             "metadata" => "Metadaten lesen",
             "verify" => "Dateien auf Fehler prüfen",
@@ -1346,7 +1343,6 @@ impl PhotoApp {
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
                 "confirm_missing" => c.quick_scan(true, &control)?,
-                "purge" => c.purge_missing(age as i64)?,
                 "resolve" => c.resolve_move(&old, &new, &control)?,
                 "metadata" => {
                     metadata::enrich_scoped(&mut c, &settings.exiftool, &control, &scope)?
@@ -1643,11 +1639,21 @@ impl PhotoApp {
                 }
                 // Fehlende Zusatzangaben der Personendetails sind kein Fehler für den Nutzer;
                 // die Abschnitte bleiben dann leer und werden mit dem nächsten Stand neu gelesen.
-                Err(_)
+                // Abgelöste (abgebrochene) Lesevorgänge sind normal, alles andere wird geloggt.
+                Err(e)
                     if matches!(
                         running.kind,
                         "person-insights" | "person-duplicates" | "timeline-people"
-                    ) => {}
+                    ) =>
+                {
+                    if !running.task.control.cancel.load(Ordering::Relaxed) {
+                        log::warn!(
+                            target: "personen",
+                            "zusatzangaben_nicht_gelesen art={} fehler={e:#}",
+                            running.kind
+                        );
+                    }
+                }
                 Ok(Outcome::Duplicates(revision, duplicates))
                     if running.collection == self.settings.collection =>
                 {
@@ -1661,6 +1667,15 @@ impl PhotoApp {
                 // Ein neueres Lesen der Sicherungen hat dieses abgelöst; Fehler beim Lesen selbst
                 // kommen als `Outcome::Backups`.
                 Err(_) if running.kind == "backup-list" => {}
+                Err(e) if running.kind == "backup-daily" => {
+                    // Abbruch (Nutzer, Programmende) ist kein Fehler; die Sicherung folgt beim
+                    // nächsten Öffnen. Ein Fehler erscheint als Hinweis.
+                    if running.task.control.cancel.load(Ordering::Relaxed) {
+                        log::info!(target: "sicherung", "taeglich abgebrochen");
+                    } else {
+                        self.message(format!("Tägliche Datensicherung: {e:#}"), true);
+                    }
+                }
                 Err(_) if running.kind == "folders" => {
                     // Der Worker liefert Fehler als `Outcome::Folders`; hier landet nur ein
                     // unerwartetes Ende. Nur das erwartete Lesen der aktuellen Sammlung zählt.
@@ -1748,6 +1763,16 @@ impl PhotoApp {
                         && running.collection == self.settings.collection =>
                 {
                     self.backups.accept(files);
+                }
+                Ok(Outcome::DailyBackup(collection, date, summary)) => {
+                    log::info!(target: "sicherung", "taeglich {summary}");
+                    self.settings
+                        .daily_backup_dates
+                        .insert(collection.clone(), date);
+                    self.save();
+                    if collection == self.settings.collection && !self.backups.loading {
+                        self.backups.files = None;
+                    }
                 }
                 Ok(Outcome::BackupCreated(message)) => {
                     self.message(message, false);
@@ -2116,6 +2141,7 @@ impl PhotoApp {
             self.refresh_faces();
         }
         self.start_metadata_background();
+        self.start_daily_backup();
         let now = chrono::Local::now();
         if !self.closing
             && !self.busy()
@@ -2441,7 +2467,10 @@ impl eframe::App for PhotoApp {
             log::info!(target: "job", "beim_beenden_gestoppt art={} name={:?}", task.kind, task.task.label);
             task.task.control.stop();
         }
-        let _ = self.settings.save();
+        // Beim Beenden gibt es keine Oberfläche mehr für einen Hinweis: nur loggen.
+        if let Err(error) = self.settings.save() {
+            log::warn!(target: "start", "einstellungen_nicht_gespeichert beim_beenden fehler={error:#}");
+        }
         log::info!(target: "start", "app_beendet laufzeit_s={}", diag::uptime().as_secs());
         diag::flush(Duration::from_secs(2));
     }

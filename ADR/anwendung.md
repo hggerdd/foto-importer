@@ -82,8 +82,8 @@
   `diagnostic_log`, Standard an, wirkt sofort); Ordner `%APPDATA%\FotoImporter\logs` neben
   der Einstellungsdatei, nie in einer Sammlung. Aufrufer nutzen die `log`-Makros mit
   ausdrücklichem Bereich (`target: "job"`) oder `core::diag::span` für Zeiten. `log` ist
-  schon über eframe im Baum; Schreiber und Rotation sind eigener Code (`core::diag`, rund 350
-  Zeilen), weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
+  schon über eframe im Baum; Schreiber und Rotation sind eigener, kleiner Code (`core::diag`),
+  weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
   Gesamtgrenze bieten und `file-rotate` mehr Abhängigkeiten bringt als es spart.
   Formatiert wird auf dem aufrufenden Thread, geschrieben auf einem eigenen Thread über eine
   begrenzte Warteschlange (`DIAG_QUEUE`); ist sie voll, gehen Zeilen verloren und werden
@@ -134,7 +134,10 @@ läuft nur bei geöffneter App.
 Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden; Aufträge über `launch`
 erscheinen damit auch im Diagnose-Log. Eigene Logzeilen immer mit Bereich ohne `::`
 (`target: "…"`), sonst gelten sie als fremd und erscheinen erst ab Warnung. Fehler, die
-nur geschluckt werden, mindestens als Warnung loggen. Neuer Zustand, der nur für
+nicht als Hinweis erscheinen (Hintergrund, Zusatzangaben, Beenden), mindestens als Warnung
+loggen; nichts wird still verworfen. Abbrüche und von Revisionen abgelöste Antworten sind
+keine Fehler. Einstellungen werden über `PhotoApp::save` gespeichert (Hinweis bei Fehler,
+danach `configure_backup`), direkt über `Settings::save` nur beim Beenden (dann Warnung). Neuer Zustand, der nur für
 eine Sammlung gilt, wird in `set_collection` zurückgesetzt. Ansichten wechseln über
 `open_view`, `set_face_mode` und `set_person_mode`, damit die passende Seite gelesen wird
 (`page_mode`). Neue Grenzwerte gehören in

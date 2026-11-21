@@ -410,7 +410,7 @@ impl PhotoApp {
                             .selectable_value(&mut self.settings.work_portion, n, text)
                             .changed()
                         {
-                            let _ = self.settings.save();
+                            self.save();
                         }
                     }
                 });
@@ -427,7 +427,7 @@ impl PhotoApp {
             )
             .changed()
         {
-            let _ = self.settings.save();
+            self.save();
         }
     }
 }

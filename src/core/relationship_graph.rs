@@ -359,9 +359,14 @@ pub fn network(collection: &Collection) -> Result<Network> {
     }
     // Porträts wie in der Personentabelle: eine Fensterabfrage ohne Merkmalsvektoren (die
     // Vektoren aller bestätigten Gesichter kosteten kalt auf der USB-Platte rund 4,5 s).
-    // Fehlende Gesichter dürfen den Graphen nicht verhindern.
+    // Fehlende Gesichter dürfen den Graphen nicht verhindern; der Fehler wird geloggt.
     let ids: Vec<i64> = people.iter().map(|(id, _)| *id).collect();
-    let mut portraits = super::faces::person_portraits(collection, "", &ids).unwrap_or_default();
+    let mut portraits = super::faces::person_portraits(collection, "", &ids).unwrap_or_else(
+        |error| {
+            log::warn!(target: "personen", "portraets_nicht_gelesen ansicht=graph fehler={error:#}");
+            Default::default()
+        },
+    );
     let mut nodes: Vec<Node> = people
         .into_iter()
         .map(|(person, name)| Node {

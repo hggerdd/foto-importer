@@ -6,7 +6,7 @@ use super::{
     previews,
     scope::Scope,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -135,7 +135,11 @@ fn table_state(
     );
     let ids: Vec<i64> = people.iter().map(|p| p.id).collect();
     // Ohne Merkmale: eine Fensterabfrage, keine Vektoren dekodieren (Tabelle bleibt schnell).
-    let portraits = person_portraits(collection, "", &ids).unwrap_or_default();
+    // Fehlende Porträts verhindern die Tabelle nicht, werden aber geloggt.
+    let portraits = person_portraits(collection, "", &ids).unwrap_or_else(|error| {
+        log::warn!(target: "personen", "portraets_nicht_gelesen ansicht=tabelle fehler={error:#}");
+        Default::default()
+    });
     Ok((rows, portraits))
 }
 
@@ -872,15 +876,12 @@ pub fn analyze_scoped(
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
     let detector_key = inference::presence_detector_key(&models.detector.key());
     let embedder_key = models.embedder.key();
+    // Ein Detektorwechsel verändert alle späteren Erkennungen: vorher sichern, sonst unterbleibt
+    // die Analyse.
     if setting(collection, "rust.detector_key")?.is_some_and(|key| key != detector_key) {
-        collection.db.backup(
-            "main",
-            collection.root.join(format!(
-                ".myfotomanager.before-detector-{}.bak",
-                uuid::Uuid::new_v4()
-            )),
-            None,
-        )?;
+        super::backup::automatic(&collection.root, "Detektorwechsel", control)
+            .context("Analyse nicht gestartet")?;
+        control.set_face_phase(super::jobs::FacePhase::Analysis);
     }
     for (key, value) in [
         ("rust.auto", models.embedder.thresholds.auto),
@@ -1071,15 +1072,22 @@ pub fn analyze_scoped(
                 }
             }
             if complete {
-                // Eine fehlgeschlagene Nachberechnung bricht die Analyse nicht ab.
-                let _ = upgrade_small_faces(
+                // Eine fehlgeschlagene Nachberechnung bricht die Analyse nicht ab, wird aber
+                // geloggt (ein Abbruch meldet sich gleich danach selbst).
+                if let Err(error) = upgrade_small_faces(
                     collection,
                     &mut models,
                     (photo, &relative, orientation),
                     (&embedder_key, &fingerprint),
                     exiftool,
                     control,
-                );
+                ) && !control.cancel.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    log::warn!(
+                        target: "gesichter",
+                        "nachberechnung_fehlgeschlagen foto={photo} datei={relative:?} fehler={error:#}"
+                    );
+                }
                 control.checkpoint()?;
             }
             done += 1;
@@ -1088,10 +1096,6 @@ pub fn analyze_scoped(
         prepare_groups(collection, &embedder_key, control)?;
     }
     super::grouping::rebuild_groups(collection, &embedder_key, control)?;
-    // Die Sicherung kostet bei großen Sammlungen spürbar Zeit: nur nach neuer Arbeit.
-    if worked > 0 {
-        collection.backup()?;
-    }
     if let Some(example) = missing_example {
         log::warn!(target: "gesichter", "dateien_fehlen anzahl={missing} beispiel={example:?}");
     }

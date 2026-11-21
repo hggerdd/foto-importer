@@ -90,8 +90,8 @@
   Bekannte. Gespeicherte Einträge haben „Entfernen“, berechnete sind kursiv und nicht
   bearbeitbar; berechnete Partner, Eltern und Kinder wiederholen die gespeicherten nicht.
 - **Personendetails, Zusatzangaben** (`person_insights`): ein Leseauftrag je Person und
-  Datenstand (`face_page_serial`) auf einem Worker mit Revision, nie je Bild. Fehler bleiben
-  still; der Abschnitt bleibt leer. Nur für Personen mit Fotos.
+  Datenstand (`face_page_serial`) auf einem Worker mit Revision, nie je Bild. Fehler erscheinen
+  nicht als Hinweis, werden aber als Warnung geloggt; der Abschnitt bleibt leer. Nur für Personen mit Fotos.
   - **Häufig zusammen mit:** bis zu acht Personen (`config::PERSON_COMPANIONS`) mit den meisten
     gemeinsamen Fotos, gezählt wie der Graph und die Sammlungssuche
     (`relationship_graph::for_person`). Der Name wählt die Person, die Zahl öffnet die Sammlung

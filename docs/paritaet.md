@@ -1,13 +1,18 @@
 # Funktionsmatrix und überprüfte Grenzen
 
-Referenz: Python-Commit `32fbe4761b47f637a79505d783c94a2969ebc599`.
-Stand: 05.11.2026. „Implementiert“ bezeichnet vorhandenen Code, keine pauschale
+> **Historisch.** Diese Matrix beschreibt den Abgleich mit der Python-Referenz zum Stand
+> 05.11.2026 und wird nicht mehr fortgeschrieben. Den geltenden Stand beschreiben die
+> [Themen-ADRs](../ADR/README.md). Offensichtlich falsche Angaben wurden am 21.11.2026
+> berichtigt (Bildcache, Ordnerbaum, Namensvorschläge).
+
+Referenz: Python-Commit `32fbe4761b47f637a79505d783c94a2969ebc599` (nur noch lokal in
+`C:\ttt\foto-importer`). „Implementiert“ bezeichnet vorhandenen Code, keine pauschale
 Zusicherung identischer Ergebnisse auf jeder privaten Sammlung.
 
 | Ablauf | Rust-Stand und Belege | Prüfgrenze |
 |---|---|---|
 | Rekursiver Quellscan, EXIF/IPTC-/Dateisystemdatum | `files.rs`, Datumstests | Weitere Kamera-IPTC-Varianten nicht evaluiert |
-| Tagesauswahl, vollständige Galerie, große Vorschau | Sichtbereichsraster, 32-MiB-/128-Cache; 100.000-Dateien-Cachetest | Kein kompletter 500.000-Fotos-UI-Benchmark |
+| Tagesauswahl, vollständige Galerie, große Vorschau | Sichtbereichsraster, Texturcache 192 MiB / 512 Einträge; 100.000-Dateien-Cachetest | Kein kompletter 500.000-Fotos-UI-Benchmark |
 | Sicherer Import nach Endungsordnern | Vollständiges Staging, exklusiver freier Zielname, Abbruch/Teilfehler | Keine Stromausfall-/NAS-Dauerhaftigkeitsgarantie; Dateiattribute nicht vollständig wie copystat |
 | Vorprüfung und Duplikatüberspringen | Kameraidentität, Name/Größe plus BLAKE3-Sampling; Prozessfixture | ExifTool-/MakerNotes-Echttest mit realen RAWs offen |
 | DNG | Separater Adobe-Prozess, Staging, Abbruch, tägliche Versionsprüfung | Echter Adobe-Converterlauf nicht ausgeführt |
@@ -16,12 +21,12 @@ Zusicherung identischer Ergebnisse auf jeder privaten Sammlung.
 | Metadatenanreicherung und stabile Identität | ExifTool, starke Kameraidentität, Zusammenführung mit Redirect | Umfangreiche reale MakerNotes-Kombinationen offen |
 | Integrität | BLAKE3, Vergleichswerte bei Abweichung unverändert | Gesonderte Lastmessung großer realer Bestände offen |
 | Kombinierte Suche | Alle/mindestens eine/keine Personen, nur diese, Datum, Monate, Metadaten-UND/ODER, XMP-Priorität | Breite Semantik vorhanden; kein vollständiger Differentialtest aller Python-Fälle |
-| Ergebnisbegrenzung und Ordnernavigation | 48 Fotos, 200 direkte Unterordner pro Seite; abbrechbare SQL-Abfragen | Drilldown ersetzt den gleichzeitig aufgeklappten Tk-Ordnerbaum |
+| Ergebnisbegrenzung und Ordnernavigation | 48 Fotos je Seite; einklappbarer Ordnerbaum, vollständig gelesen, ohne Begrenzung der Unterordner; abbrechbare SQL-Abfragen | Bedienung weicht vom Tk-Ordnerbaum ab |
 | Bilddetails und Gesichtsaktionen | Orientierte Quelle, passende Rahmen/Namen, Benennen/Löschen, Referenzaktionen | Variantenrahmen nur bei gleicher Quelle; große private Gruppen nicht visuell evaluiert |
 | Lokale Inferenz | YuNet/SFace und SCRFD/ArcFace mit SHA-256 und CPU ausgeführt | Synthetische Smoke-Tests, kein Nachweis gleicher realer Präzision wie OpenCV |
 | Wiederaufnahme und Modellwechsel | Modell-/Quelljobs, eigene Rust-Räume, IoU-Erhaltung, historische Nutzerlabels | Umfangreiche Hin-/Zurückwechsel mit privaten Gesichtern offen |
 | Gruppen und Rücknahme | Complete Link, höchstens 28 sichtbare Mitglieder (ADR 0056), Größe vor Pagination, Ablehnungen und Pins | Langzeittest mit echter Tastatur-/Screenreader-Nutzung offen |
-| Namensvorschläge und Lernen | Drei Ähnlichkeitsvorschläge (Kosinus) je Gesicht ohne trainierten Klassifikator (gemessen ohne Nutzen), Pins/Ausschlüsse, FPS mit Jahresbalance, Maximum-Weight-Fotozuordnung, Alter/Ko-Okkurrenz | Split bewusst anders reproduziert (ADR 0040); keine Qualitätsgarantie |
+| Namensvorschläge und Lernen | Drei Ähnlichkeitsvorschläge (Kosinus) je Gesicht ohne trainierten Klassifikator (gemessen ohne Nutzen), Pins/Ausschlüsse, FPS mit Jahresbalance, Maximum-Weight-Fotozuordnung, Ausschluss vor der Geburt; kein Bonus für gemeinsames Auftreten (Ko-Okkurrenz) | Split bewusst anders reproduziert (ADR 0040); keine Qualitätsgarantie |
 | Personen und Beziehungen | Stabile IDs, Bearbeiten, Fotofilter, Merge, kanonische Kanten, Zyklusprüfung; Ableitung der Python-Referenz (zwei Schritte) ersetzt durch den allgemeinen Verwandtschaftsrechner (Rust, [ADR 0061](../ADR/personen.md)): nur Eltern-Kind, Partner, frühere Partner, Freund, Bekannter gespeichert; Geschwister, Großeltern bis Ururgroßeltern, Onkel/Tante, Nichten/Neffen, Cousins aller Grade, Stief- und Schwiegerfamilie berechnet; Geschwister/Cousin nur als Behelf; Rückfragen bei fehlenden Eltern; Person ohne Foto anlegen; Stammbaumansicht mit Verwandtschaftsprüfung; Eingabe als Satz aus beiden Richtungen mit Geschlechtsformen | Parität zur Python-Referenz bei Beziehungen nicht geprüft (bewusste Abweichung: mehr Ableitung, Behelfstypen); zentraler Beziehungsabgleich zwischen Sammlungen ([ADR 0065](../ADR/zentral.md)) ist eine Rust-Erweiterung ohne Python-Vorbild; Stammbaum nicht mit Screenreader oder Nutzern geprüft; Schwippschwager und mehrstufige Verschwägerung nicht benannt |
 | Export, Validierung, Biometrielöschung | Atomare Ausschnitte/Manifest, Held-out-Auswertung, Bereinigung bekannter Backups | Auswertungsbericht kompakter als der Python-Bericht; historische fremde Exporte bleiben außerhalb der Kontrolle |
 | Automatik | Sammlungsbezogen opt-in nach Import / 03:00 bei laufender App; Metadaten optional vorher | Kein Dienst bei geschlossener App; keine externe Aufgabenplanung |
@@ -40,7 +45,7 @@ Schema-6-Grenze aus 0037.
 Noch **nicht als vollständig nachgewiesen** gelten: reale Kamera-/Adobe-Parität,
 exakte OpenCV-Alignment-/Detektionsgleichheit, sämtliche seltenen Bestandsfälle,
 private Präzisionsmessungen und große reale UI-/NAS-Lastläufe. Einzelne technische
-Auswertungsfelder, freie Sortier-/Diagrammansichten und die alte Bauminteraktion
-sind nicht identisch nachgebildet. Diese Grenzen sind kein stilles Erfolgsversprechen.
+Auswertungsfelder, freie Sortier-/Diagrammansichten und die Bedienung des alten
+Ordnerbaums sind nicht identisch nachgebildet. Diese Grenzen sind kein stilles Erfolgsversprechen.
 
 Ausgeführte Prüfungen: [Validierung](validierung.md).

@@ -1148,23 +1148,29 @@ impl MatchCache {
 /// Zwischenspeicher des laufenden Programms (eine Sammlung, ein Modell zugleich).
 static MATCH_CACHE: std::sync::Mutex<Option<MatchCache>> = std::sync::Mutex::new(None);
 
+/// Sperre des Zwischenspeichers. Ist sie durch eine Panik vergiftet, kann der Inhalt halb
+/// geändert sein: er wird verworfen (der nächste Abgleich baut ihn neu auf) und gewarnt.
+fn match_cache() -> std::sync::MutexGuard<'static, Option<MatchCache>> {
+    MATCH_CACHE.lock().unwrap_or_else(|poisoned| {
+        log::warn!(target: "gesichter", "abgleich_cache_vergiftet verworfen=ja");
+        let mut guard = poisoned.into_inner();
+        *guard = None;
+        MATCH_CACHE.clear_poison();
+        guard
+    })
+}
+
 /// Abgleich nach Bestätigungen: inkrementell über den Zwischenspeicher des Programms
 /// ([`MatchCache`]), Ergebnis bitgleich zum vollständigen Lauf ([`rematch_full`]).
 pub fn rematch(collection: &mut Collection, key: &str, control: &Control) -> Result<()> {
-    let mut cache = MATCH_CACHE
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-        .unwrap_or_default();
+    let mut cache = match_cache().take().unwrap_or_default();
     let mut span = super::diag::span("gesichter", "abgleich");
     span.field("cache_bereit", cache.owner.is_some());
     let result = rematch_with(collection, key, control, &mut cache);
     span.field("cache_gesichter", cache.len())
         .field("ok", result.is_ok());
     drop(span);
-    if let Ok(mut slot) = MATCH_CACHE.lock() {
-        *slot = Some(cache);
-    }
+    *match_cache() = Some(cache);
     result
 }
 
@@ -1301,7 +1307,7 @@ pub fn person_candidates(
     // bereitliegt; der Abgleich wartet ohne Rückgabepunkt auf sie, ein gegenseitiges Warten ist
     // daher ausgeschlossen. Ohne passenden Zwischenspeicher wird sie vor dem Rechnen frei.
     let owner = (collection.root.clone(), key.to_string());
-    let mut slot = MATCH_CACHE.lock().ok();
+    let mut slot = Some(match_cache());
     let ready = slot
         .as_ref()
         .and_then(|slot| slot.as_ref())

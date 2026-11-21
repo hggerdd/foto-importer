@@ -70,8 +70,9 @@
   Nachlesen länger als 0,5 s, zeigt der Kopf „aktualisiert …“.
 - **Ordnerübersicht in der Sammlung:** Der Baum liest die Tabelle `folder_counts` (Fotos je
   Ordner, von Triggern gepflegt, siehe [Sammlung und Daten](sammlung-daten.md)); das sind
-  wenige Seiten. Lokale Caches außerhalb der Sammlung (Startansicht, Vorschauen) sind nur
-  Beschleunigung: Ohne sie ist jede Ansicht vollständig und richtig, nur langsamer; der
+  wenige Seiten. Lokale Caches außerhalb der Sammlung (auf der Platte: Startansicht,
+  Vorschau-Cache, Personenliste der Zeitreise, Personengraph; im Speicher: MatchCache des
+  Abgleichs) sind nur Beschleunigung: Ohne sie ist jede Ansicht vollständig und richtig, nur langsamer; der
   Ordnerbaum selbst wird nicht lokal gespeichert. Fehlt die Tabelle (ältere Sammlung, nur lesend geöffnet),
   zählt der Baum über `ix_files_dir_cover` (Messung 2026-11-17, `E:\Bilder`,
   USB-Festplatte, 98 082 Dateien: kalt 16,6 s, warm 0,02 s; nur über `metadata_photos` kalt

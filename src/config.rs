@@ -240,6 +240,10 @@ pub struct Settings {
     pub diagnostic_log: bool,
     /// Datensicherung: so viele `.myimporter.backup.NNN` bleiben im Sammlungsordner liegen.
     pub backup_keep: usize,
+    /// Beim ersten Öffnen einer Sammlung an einem Tag automatisch sichern (niedrige Priorität).
+    pub daily_backup: bool,
+    /// Datum (`JJJJ-MM-TT`) der letzten täglichen Sicherung je Sammlungspfad.
+    pub daily_backup_dates: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -270,6 +274,8 @@ impl Default for Settings {
             index_pending: Vec::new(),
             diagnostic_log: true,
             backup_keep: BACKUP_KEEP,
+            daily_backup: true,
+            daily_backup_dates: Default::default(),
             converter: r"C:\Program Files\Adobe\Adobe DNG Converter\Adobe DNG Converter.exe".into(),
             exiftool: "exiftool".into(),
             model_dir: resources.join("models").to_string_lossy().into_owned(),

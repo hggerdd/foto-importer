@@ -1,7 +1,7 @@
 # Foto-Importer · Rust
 
 Native lokale Fotoverwaltung in `C:\ttt\foto-importer-rust`, portiert aus
-[Python-Referenz 32fbe476](https://github.com/hggerdd/foto-importer/tree/32fbe4761b47f637a79505d783c94a2969ebc599).
+der Python-Referenz (Stand 32fbe476, nur noch lokal in `C:\ttt\foto-importer`).
 Die zentralen Abläufe sind nativ implementiert und mit Regressionen abgesichert.
 Vollständige Gleichwertigkeit für jede reale Kamera-/Modellkonstellation ist damit
 noch nicht nachgewiesen. Der genaue Stand steht in der [Funktionsmatrix](docs/paritaet.md).
@@ -63,18 +63,22 @@ den Modellordner im Benutzerprofil. [Modellanleitung](models/README.md)
 
 Originale werden ausschließlich gelesen. Vollständige Kopien werden unter freien
 Zielnamen veröffentlicht. Vorhandene Zieldateien bleiben erhalten.
-Bekannte Schema-Stände 1–5 werden beim ersten Schreibzugriff mit einer vorherigen
-SQLite-Sicherung auf Schema 6 aktualisiert. IDs und Nutzerentscheidungen bleiben
+Bekannte Schema-Stände 1–5 werden beim ersten Schreibzugriff nach einer vorherigen
+Datensicherung auf Schema 6 aktualisiert. IDs und Nutzerentscheidungen bleiben
 erhalten. Unvollständige Pflicht-Quelltabellen und unbekannte Versionen werden
 abgewiesen. Schema 4/5 kann zunächst lesend geöffnet werden.
 
 Arbeitsplatzeinstellungen: `%APPDATA%\FotoImporter\settings.json`, atomar
 geschrieben. Für isolierte Tests überschreibt `FOTO_IMPORTER_SETTINGS` den Pfad.
-Sammlung: `.myfotomanager`, Anwendungssperre `.myfotomanager.lock`, letzte
-abgeschlossene Indexsicherung `.myfotomanager.backup`. Fremde Sperren werden nicht entfernt.
-Vor Upgrades und Detektorwechseln entstehen zusätzliche benannte Sicherungen.
-Biometrie-Bereinigung entfernt Gesichtsdaten auch aus diesen bekannten Sicherungen;
-fremde Sicherungskopien außerhalb der Sammlung werden nicht gesucht oder verändert.
+Sammlung: `.myfotomanager`, Anwendungssperre `.myfotomanager.lock`. Fremde Sperren
+werden nicht entfernt. Einziger Sicherungsweg ist die Datensicherung
+`.myimporter.backup.NNN` (ZIP im Sammlungsordner): von Hand, täglich beim ersten Öffnen
+(abschaltbar) und automatisch vor Upgrade, Detektorwechsel, „Neu verknüpfen“ und
+„Einträge entfernen“. Ältere Kopien `.myfotomanager.backup` und `.myfotomanager.before-*.bak`
+früherer Versionen entstehen nicht mehr und können von Hand gelöscht werden; die
+Biometrie-Bereinigung entfernt Gesichtsdaten auch aus ihnen und löscht die
+Datensicherungen. Fremde Sicherungskopien außerhalb der Sammlung werden nicht gesucht
+oder verändert.
 
 Rust-Adapter tragen eigene Modellschlüssel. Bestehende Python-Vektoren bleiben
 erhalten; für neue Rust-Vorschläge ist eine lokale Analyse erforderlich. Fotos und
@@ -94,5 +98,6 @@ cargo test --locked
 [ADRs](ADR/README.md) · [Validierung](docs/validierung.md)
 
 Dieses Repository enthält ausschließlich die Rust-Anwendung; der Branch `main` ist der
-stabile Stand. Die frühere Python-Version liegt unverändert im Branch `python-legacy`
-(Stand 2026-11-15) und lokal in `C:\ttt\foto-importer`; sie ist nur Verhaltensreferenz.
+stabile Stand. Die frühere Python-Version liegt nur noch lokal in
+`C:\ttt\foto-importer` (der Branch `python-legacy` wurde gelöscht); sie ist nur
+Verhaltensreferenz.

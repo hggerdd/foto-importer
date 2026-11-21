@@ -221,13 +221,6 @@ impl Collection {
         Ok(marked)
     }
 
-    pub fn backup(&self) -> Result<()> {
-        self.writable()?;
-        let temp = tempfile::NamedTempFile::new_in(&self.root)?;
-        self.db.backup("main", temp.path(), None)?;
-        temp.persist(self.root.join(".myfotomanager.backup"))?;
-        Ok(())
-    }
     pub fn status(&self) -> Result<CollectionStatus> {
         Ok(CollectionStatus {
             photos: self
@@ -399,8 +392,6 @@ impl Collection {
                 "bestand verschoben={moved} mehrdeutig={ambiguous} nicht_gesehen={missing}"
             );
         }
-        control.phase("Schritt 4 von 4 · Sicherung schreiben", "");
-        self.backup()?;
         Ok(format!(
             "{} Dateien · {added} neu · {moved} verschoben{} · {missing} nicht gesehen{}{}",
             total,
@@ -628,8 +619,6 @@ impl Collection {
         let stored = self.store_hashes(&mut pending);
         outcome?;
         stored?;
-        control.phase("Sicherung schreiben", "");
-        self.backup()?;
         if !mismatches.is_empty() {
             bail!(
                 "{} Abweichungen; Vergleichswerte blieben erhalten: {}",
@@ -656,27 +645,6 @@ impl Collection {
         tx.commit()?;
         pending.clear();
         Ok(())
-    }
-    pub fn purge_missing(&mut self, age: i64) -> Result<String> {
-        self.writable()?;
-        if age < 0 {
-            bail!("Scanabstand darf nicht negativ sein");
-        }
-        let tx = self.db.transaction()?;
-        let threshold: i64 =
-            tx.query_row("SELECT coalesce(max(id),0)-? FROM scans", [age], |r| {
-                r.get(0)
-            })?;
-        tx.execute("DELETE FROM meta WHERE file_id IN (SELECT id FROM files WHERE status='missing' AND last_seen_scan<=?)",[threshold])?;
-        let count = tx.execute(
-            "DELETE FROM files WHERE status='missing' AND last_seen_scan<=?",
-            [threshold],
-        )?;
-        tx.commit()?;
-        self.backup()?;
-        Ok(format!(
-            "{count} fehlende Dateieinträge entfernt; Foto-Identitäten bleiben erhalten"
-        ))
     }
     pub fn inventory_report(&self) -> Result<String> {
         let missing = self
@@ -747,7 +715,6 @@ impl Collection {
             [scan],
         )?;
         tx.commit()?;
-        self.backup()?;
         Ok("Verschiebung mit bestehender Foto-Identität zugeordnet".into())
     }
 }

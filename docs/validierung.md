@@ -1,5 +1,9 @@
 # Prüfprotokoll
 
+> Die Abschnitte sind datierte Protokolle. Anzahlen von Regressionen und Tests darin (etwa
+> „51 Regressionen“ unten) gelten nur für ihr Datum und sind historisch; den aktuellen Stand
+> zeigt `cargo test`.
+
 04.–05.11.2026 · Windows · Rust 1.99.1 · synthetische Fotos und temporäre Datenbanken.
 
 | Prüfung | Ergebnis |
