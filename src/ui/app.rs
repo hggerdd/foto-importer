@@ -1639,11 +1639,21 @@ impl PhotoApp {
                 }
                 // Fehlende Zusatzangaben der Personendetails sind kein Fehler für den Nutzer;
                 // die Abschnitte bleiben dann leer und werden mit dem nächsten Stand neu gelesen.
-                Err(_)
+                // Abgelöste (abgebrochene) Lesevorgänge sind normal, alles andere wird geloggt.
+                Err(e)
                     if matches!(
                         running.kind,
                         "person-insights" | "person-duplicates" | "timeline-people"
-                    ) => {}
+                    ) =>
+                {
+                    if !running.task.control.cancel.load(Ordering::Relaxed) {
+                        log::warn!(
+                            target: "personen",
+                            "zusatzangaben_nicht_gelesen art={} fehler={e:#}",
+                            running.kind
+                        );
+                    }
+                }
                 Ok(Outcome::Duplicates(revision, duplicates))
                     if running.collection == self.settings.collection =>
                 {
@@ -2457,7 +2467,10 @@ impl eframe::App for PhotoApp {
             log::info!(target: "job", "beim_beenden_gestoppt art={} name={:?}", task.kind, task.task.label);
             task.task.control.stop();
         }
-        let _ = self.settings.save();
+        // Beim Beenden gibt es keine Oberfläche mehr für einen Hinweis: nur loggen.
+        if let Err(error) = self.settings.save() {
+            log::warn!(target: "start", "einstellungen_nicht_gespeichert beim_beenden fehler={error:#}");
+        }
         log::info!(target: "start", "app_beendet laufzeit_s={}", diag::uptime().as_secs());
         diag::flush(Duration::from_secs(2));
     }

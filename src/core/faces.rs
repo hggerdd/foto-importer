@@ -135,7 +135,11 @@ fn table_state(
     );
     let ids: Vec<i64> = people.iter().map(|p| p.id).collect();
     // Ohne Merkmale: eine Fensterabfrage, keine Vektoren dekodieren (Tabelle bleibt schnell).
-    let portraits = person_portraits(collection, "", &ids).unwrap_or_default();
+    // Fehlende Porträts verhindern die Tabelle nicht, werden aber geloggt.
+    let portraits = person_portraits(collection, "", &ids).unwrap_or_else(|error| {
+        log::warn!(target: "personen", "portraets_nicht_gelesen ansicht=tabelle fehler={error:#}");
+        Default::default()
+    });
     Ok((rows, portraits))
 }
 
@@ -1068,15 +1072,22 @@ pub fn analyze_scoped(
                 }
             }
             if complete {
-                // Eine fehlgeschlagene Nachberechnung bricht die Analyse nicht ab.
-                let _ = upgrade_small_faces(
+                // Eine fehlgeschlagene Nachberechnung bricht die Analyse nicht ab, wird aber
+                // geloggt (ein Abbruch meldet sich gleich danach selbst).
+                if let Err(error) = upgrade_small_faces(
                     collection,
                     &mut models,
                     (photo, &relative, orientation),
                     (&embedder_key, &fingerprint),
                     exiftool,
                     control,
-                );
+                ) && !control.cancel.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    log::warn!(
+                        target: "gesichter",
+                        "nachberechnung_fehlgeschlagen foto={photo} datei={relative:?} fehler={error:#}"
+                    );
+                }
                 control.checkpoint()?;
             }
             done += 1;

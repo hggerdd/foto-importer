@@ -134,7 +134,10 @@ läuft nur bei geöffneter App.
 Neue teure Arbeit an Worker, Abbruch und Fortschritt anbinden; Aufträge über `launch`
 erscheinen damit auch im Diagnose-Log. Eigene Logzeilen immer mit Bereich ohne `::`
 (`target: "…"`), sonst gelten sie als fremd und erscheinen erst ab Warnung. Fehler, die
-nur geschluckt werden, mindestens als Warnung loggen. Neuer Zustand, der nur für
+nicht als Hinweis erscheinen (Hintergrund, Zusatzangaben, Beenden), mindestens als Warnung
+loggen; nichts wird still verworfen. Abbrüche und von Revisionen abgelöste Antworten sind
+keine Fehler. Einstellungen werden über `PhotoApp::save` gespeichert (Hinweis bei Fehler,
+danach `configure_backup`), direkt über `Settings::save` nur beim Beenden (dann Warnung). Neuer Zustand, der nur für
 eine Sammlung gilt, wird in `set_collection` zurückgesetzt. Ansichten wechseln über
 `open_view`, `set_face_mode` und `set_person_mode`, damit die passende Seite gelesen wird
 (`page_mode`). Neue Grenzwerte gehören in

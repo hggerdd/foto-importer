@@ -145,7 +145,7 @@ impl PhotoApp {
                 )
                 .changed()
             {
-                let _ = self.settings.save();
+                self.save();
             }
         });
     }
@@ -179,7 +179,7 @@ impl PhotoApp {
                 )
                 .on_hover_text("Größe der Gesichter. Mitte ist die Standardgröße.");
             if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
-                let _ = self.settings.save();
+                self.save();
             }
         });
     }
