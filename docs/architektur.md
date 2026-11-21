@@ -77,8 +77,14 @@ nutzt eine optionale DNG-Konvertierung ihre eigene Warteschlange.
   `backup.rs` (Datensicherung als ZIP, einziger Sicherungsweg), `missing.rs` (fehlende
   Dateien), `metadata.rs` (ExifTool, Suche), `folders.rs` (Ordnerbaum), `start_view.rs`,
   `thumb_cache.rs`, `local_cache.rs` (lokale Caches), `previews.rs` (Vorschauen).
-* Gesichter: `faces.rs` (Aufträge, Seiten, Zuordnungen), `grouping.rs` (Gruppen),
-  `matching.rs` und `recognition.rs` (Referenzen, Vorschläge, Abgleich, MatchCache),
+* Gesichter: `faces.rs` (Typen, Status, Einstellungen, Personen) mit `faces/analysis.rs`
+  (Analyse, Vektoren, Gruppenvorbereitung), `faces/pages.rs` (Seitenabfragen),
+  `faces/decisions.rs` (benennen, ablehnen, kein Gesicht, löschen, rückgängig) und
+  `faces/portraits.rs`; `grouping.rs` (Gruppen); `matching.rs` (Zuordnung je Foto, Referenzauswahl);
+  `recognition.rs` (Grenzen, Wissenspflege, Referenzauswahl) mit `recognition/references.rs`
+  (Referenzen, Rangfolge), `recognition/name_suggestions.rs` (Vorschläge),
+  `recognition/rematching.rs` (Abgleich), `recognition/cache.rs` (MatchCache) und
+  `recognition/candidates.rs` („Wahrscheinlich X“);
   `inference.rs` und `face_models.rs` (Modelle, ONNX), `onnx_runtime.rs` (Runtime-Download),
   `evaluation.rs` (Schwellenmessung), `maintenance.rs` (Export, Kalibrierung,
   Biometrielöschung, Zusammenführen).
@@ -88,7 +94,9 @@ nutzt eine optionale DNG-Konvertierung ihre eigene Warteschlange.
   `central.rs` mit `central/rels.rs` (zentraler Bestand), `choice_filter.rs` (Tippfilter).
 * Zeitreise: `timeline.rs`, `timeline_export.rs`.
 * `src/ui/`: Darstellung und UI-Zustand (`app/` je Ansicht, Vorschau-Warteschlange,
-  Thema); keine SQL- oder Kopierlogik.
+  Thema); keine SQL- oder Kopierlogik. `app/poll.rs` wertet fertige Aufträge je Bereich
+  aus und startet danach fällige Hintergrundarbeit; die UI-Tests liegen nach Themen in
+  `app/tests/` (gemeinsame Helfer wie `settle_until` in `app/tests/mod.rs`).
 
 Schema, Trigger und Projektionsregeln stammen aus der Referenz. Die vorhandenen
 ADRs sind Constraints, keine Behauptung vollständiger Funktionsparität.

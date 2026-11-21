@@ -336,7 +336,7 @@ Release 19 ms).
 Tests: `tests/face_save_performance.rs` (Vorschläge bitgleich zur bisherigen Abfrage für alle
 Gesichter, Ablehnungen/Foto-Personen, Seiten und Zähler gleich den bisherigen Fensterabfragen,
 Vorschläge nach Bestätigung/Ablehnung/Ignorieren ohne veralteten Zwischenspeicher, Zusatzindizes
-idempotent und schreibgeschützt wirkungslos), `src/ui/app/tests.rs` (Nutzerschreibaufträge nicht als
+idempotent und schreibgeschützt wirkungslos), `src/ui/app/tests/` (Nutzerschreibaufträge nicht als
 Hintergrundauftrag). Nicht geprüft: echte Modelle, echte Sammlungen, Netzlaufwerke (mmap), ein
 Testfall mit absichtlich langem Wartungsauftrag in der Oberfläche (nur der Kern-Abbruch im
 Benchmark), Benchmarks der zentralen Synchronisierung.
@@ -377,7 +377,7 @@ echten Oberfläche wurde nicht gemessen.
 Tests: Kachel-Cache in `src/core/previews.rs` (erstes gleich zweites Ergebnis, Invalidierung durch
 Änderung von Quelle/Ausschnitt, beschädigte Kachel, Original unverändert), Löschen der Kacheln in
 `tests/maintenance.rs`, neuer Zusatzindex im bestehenden Idempotenztest (`tests/face_save_performance.rs`),
-Ausblenden in `src/ui/app/tests.rs`. Nicht geprüft: echte Fotos/RAW, echte Modelle, Netzlaufwerke,
+Ausblenden in `src/ui/app/tests/`. Nicht geprüft: echte Fotos/RAW, echte Modelle, Netzlaufwerke,
 echte Oberfläche mit mehreren Aufträgen nacheinander, Verhalten bei vollem Datenträger.
 
 ## Ordnerbaum aus `folder_counts` (2026-11-17)
@@ -414,7 +414,7 @@ Tests: `tests/folders.rs` (Tabelle gleich Join über `files.dir` und gleich Zäh
 `relpath` nach Einfügen, Metadaten einfügen/ändern/löschen, Verschieben, Fehlen, Löschen,
 Zusammenführen, direktem `relpath`-Update und Neuaufbau einer beschädigten Tabelle; Rückfall
 ohne Tabelle beim lesenden Öffnen, Anlage beim schreibenden Öffnen, Neuaufbau bei fehlendem
-Trigger), `src/ui/app/tests.rs` (Bestandsänderung bricht laufendes Lesen nicht ab, genau ein
+Trigger), `src/ui/app/tests/` (Bestandsänderung bricht laufendes Lesen nicht ab, genau ein
 Nachlesen). Nicht gemessen: kalter Lesestart von `folder_counts` auf `E:\Bilder` (die Sammlung
 wurde nicht schreibend geöffnet), Dauer der Erstbefüllung auf der USB-Festplatte (erwartet in
 der Größenordnung des kalten Scans über `metadata_photos`, einmalig).
@@ -524,7 +524,7 @@ cargo run --release --example person_faces_bench -- <Kopie> --abgleich
 Zählungen, Gruppen, Abgleich und nach erneuter Analyse, Rücknahme; Rangfolge und
 28er-Gruppen der wahrscheinlichen Gesichter mit Ausschlüssen, gleiches Ergebnis vor und
 nach dem Abgleich; Bestätigen und Entfernen auf der Personenseite) und in
-`src/ui/app/tests.rs` die Karten beider Seiten. Nicht geprüft: Sichtprüfung in der laufenden
+`src/ui/app/tests/` die Karten beider Seiten. Nicht geprüft: Sichtprüfung in der laufenden
 App, Zeiten auf der USB-Festplatte selbst.
 
 ### Zwei Abschnitte „am ehesten X“ und „eher jemand anderes“ (2026-11-21)
@@ -561,7 +561,7 @@ Bestandslauf ordnet sie damit über Datei-ID und Größe den alten Zeilen zu. Ni
 der Bestandslauf selbst auf `E:\Bilder` (Sammlung blieb unverändert). Regressionen in
 `tests/missing_files.rs` (Umbenennung mit Datei-ID und ohne über Name/Größe/Zeit,
 mehrdeutige Fälle, Metadatenblock mit fehlender und mit unlesbarer Datei, Entfernen und
-Neu-Verknüpfen) und in `src/ui/app/tests.rs` (nicht verbundene Quelle beim Start, Dialog
+Neu-Verknüpfen) und in `src/ui/app/tests/` (nicht verbundene Quelle beim Start, Dialog
 „Fehlende Dateien“). Der Gesichtslauf mit fehlender Datei ist ohne Modelle nicht offline
 getestet.
 
@@ -621,7 +621,7 @@ gelesen von `E:\Bilder`, Cache auf der lokalen SSD, ein Thread: 2012er JPEGs ohn
 die ganze App gegen `E:\Bilder` (wird dort nicht gestartet). Regressionen:
 `core::start_view` (Wiederverwendung nur bei gleichem Stand, gleicher Suche und gleicher
 erster Seite; Filter auf `meta` und Gesichter nie), `core::thumb_cache` (Schlüssel folgt dem
-Original, kaputte Einträge, Aufräumen nur eigener Dateien), `src/ui/app/tests.rs` (Seite vor
+Original, kaputte Einträge, Aufräumen nur eigener Dateien), `src/ui/app/tests/` (Seite vor
 Zählung, Startansicht vor jedem Lesen, Personen erst nach der Sammlung).
 
 ## Zeitreise und Personengraph (2026-11-21)
