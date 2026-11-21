@@ -53,7 +53,7 @@ fn undo_rejects_later_user_decision() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn complete_link_groups_never_exceed_fourteen() -> anyhow::Result<()> {
+fn complete_link_groups_never_exceed_group_max() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let mut c = Collection::open(temp.path(), true)?;
     seed(&c, 40)?;

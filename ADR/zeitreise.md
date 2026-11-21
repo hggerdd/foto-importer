@@ -52,7 +52,8 @@ Konzept und offene Ideen: [docs/konzept-zeitreise.md](../docs/konzept-zeitreise.
 
 ## Grenzen
 
-Nur mit synthetischen Daten gemessen. Die Gesichtsgröße nutzt die Bildmaße aus den Metadaten
+Auswahl, Vorschlagswert und Export sind nur mit synthetischen Daten geprüft; an einer echten
+Sammlung gemessen sind allein die Ladezeiten (oben). Die Gesichtsgröße nutzt die Bildmaße aus den Metadaten
 und ist bei RAW mit eingebetteter Vorschau ungenau. Nicht umgesetzt: Datumskorrektur,
 Ereignismarken, Vorher/Nachher, Familienvergleich, Kontaktbogen als Bildschirmansicht.
 

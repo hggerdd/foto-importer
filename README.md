@@ -1,7 +1,7 @@
 # Foto-Importer · Rust
 
 Native lokale Fotoverwaltung in `C:\ttt\foto-importer-rust`, portiert aus
-[Python-Referenz 32fbe476](https://github.com/hggerdd/foto-importer/tree/32fbe4761b47f637a79505d783c94a2969ebc599).
+der Python-Referenz (Stand 32fbe476, nur noch lokal in `C:\ttt\foto-importer`).
 Die zentralen Abläufe sind nativ implementiert und mit Regressionen abgesichert.
 Vollständige Gleichwertigkeit für jede reale Kamera-/Modellkonstellation ist damit
 noch nicht nachgewiesen. Der genaue Stand steht in der [Funktionsmatrix](docs/paritaet.md).
@@ -98,5 +98,6 @@ cargo test --locked
 [ADRs](ADR/README.md) · [Validierung](docs/validierung.md)
 
 Dieses Repository enthält ausschließlich die Rust-Anwendung; der Branch `main` ist der
-stabile Stand. Die frühere Python-Version liegt unverändert im Branch `python-legacy`
-(Stand 2026-11-15) und lokal in `C:\ttt\foto-importer`; sie ist nur Verhaltensreferenz.
+stabile Stand. Die frühere Python-Version liegt nur noch lokal in
+`C:\ttt\foto-importer` (der Branch `python-legacy` wurde gelöscht); sie ist nur
+Verhaltensreferenz.

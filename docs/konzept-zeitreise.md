@@ -1,4 +1,7 @@
-# Konzept: Seite „06 Zeitreise“ (Personen über die Zeit verfolgen)
+# Konzept: Zeitreise (Personen über die Zeit verfolgen)
+
+> Die Zeitreise ist keine eigene Seite („06“) mehr, sondern die Ansicht „Zeitreise“ der
+> gewählten Person unter „Personen“ (siehe [ADR Zeitreise](../ADR/zeitreise.md)).
 
 Status: teilweise umgesetzt (Stufen 1 und 2, Teile von 3, 4, 6 und 7; Details im Abschnitt "Umsetzungsstand"), Entscheidung in [ADR 0069](../ADR/zeitreise.md).
 Stand 2026-11-13. Abweichungen und offene Punkte stehen im Abschnitt "Umsetzungsstand" am Ende.
@@ -116,7 +119,7 @@ Qualität berechnet. Er dient nur zum Vorschlagen des schönsten Gesichts je Zei
 ## Vorschlag für die Umsetzung in Stufen
 
 1. Kern: Abfrage, Zeitreise-Wert, Teilindex, Tests mit synthetischen Daten.
-2. Seite 06 mit Zeitstrahl, Dichtekurve, Detailansicht beim Klick.
+2. Ansicht mit Zeitstrahl, Dichtekurve, Detailansicht beim Klick.
 3. Altersleiste und Kontaktbogen nach Jahr.
 4. Zeitraffer mit Ausrichtung.
 5. Vorher/Nachher und Familienvergleich.
@@ -131,7 +134,7 @@ Sichtprüfung per Fensteraufnahme.
 - Stufe 1 Kern (`src/core/timeline.rs`): Abfrage, Datumsquelle/-qualität, Gesichtsgröße in
   Pixeln, Frontalität, Zeitreise-Wert, Schwellen (`config.rs`), Abschnitte Jahr/Monat/Altersjahr,
   bestes Gesicht, Dichte, Lücken, Teilindex `ix_faces_timeline` (additiv, kein Schema 7).
-- Umgesetzt und getestet: Seite "06 Zeitreise" mit Zeitstrahl, Dichtekurve, Detail,
+- Umgesetzt und getestet: Ansicht "Zeitreise" mit Zeitstrahl, Dichtekurve, Detail,
   Achse Datum oder Alter (Altersleiste als Umschaltung der Achse), Festnageln und Ausblenden,
   Reiter "Lücken", Reiter "Zeitraffer & Export" (Abspielen in der Oberfläche; Export als
   PNG-Collage, PNG-Kontaktbogen, Zeitraffer als GIF oder PNG-Bildfolge, nur neue Dateien;

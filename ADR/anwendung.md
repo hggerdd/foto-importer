@@ -82,8 +82,8 @@
   `diagnostic_log`, Standard an, wirkt sofort); Ordner `%APPDATA%\FotoImporter\logs` neben
   der Einstellungsdatei, nie in einer Sammlung. Aufrufer nutzen die `log`-Makros mit
   ausdrücklichem Bereich (`target: "job"`) oder `core::diag::span` für Zeiten. `log` ist
-  schon über eframe im Baum; Schreiber und Rotation sind eigener Code (`core::diag`, rund 350
-  Zeilen), weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
+  schon über eframe im Baum; Schreiber und Rotation sind eigener, kleiner Code (`core::diag`),
+  weil `tracing`/`tracing-appender` keine größenbasierte Rotation mit
   Gesamtgrenze bieten und `file-rotate` mehr Abhängigkeiten bringt als es spart.
   Formatiert wird auf dem aufrufenden Thread, geschrieben auf einem eigenen Thread über eine
   begrenzte Warteschlange (`DIAG_QUEUE`); ist sie voll, gehen Zeilen verloren und werden
