@@ -2,7 +2,7 @@ use super::{
     collection::Collection,
     faces, inference,
     jobs::Control,
-    matching,
+    recognition,
     previews::{self, PreviewRequest},
 };
 use anyhow::{Context, Result, bail};
@@ -161,7 +161,7 @@ pub fn calibrate(collection: &Collection, control: &Control) -> Result<serde_jso
                 similarities.push((row.get::<_, i64>(0)?, score));
             }
         }
-        if let Some((person, score)) = matching::top_three(similarities.into_iter())
+        if let Some((person, score)) = recognition::top3_means(similarities)
             .into_iter()
             .max_by(|a, b| a.1.total_cmp(&b.1))
         {

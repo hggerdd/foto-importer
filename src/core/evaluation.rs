@@ -6,6 +6,7 @@ use super::{
     collection::Collection,
     faces::{decode, setting},
     inference::cosine,
+    recognition::top3_means,
 };
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,21 +43,12 @@ type Outcome = (f32, f32, Option<f32>);
 
 /// Personenscores eines Vektors; `skip` ist das abgefragte Gesicht.
 fn scores(query: &[f32], skip: i64, references: &[Entry]) -> BTreeMap<i64, f32> {
-    let mut best: BTreeMap<i64, Vec<f32>> = BTreeMap::new();
-    for (id, person, vector) in references {
-        if *id == skip {
-            continue;
-        }
-        if let Some(score) = cosine(query, vector) {
-            let list = best.entry(*person).or_default();
-            list.push(score);
-            list.sort_by(|a, b| b.total_cmp(a));
-            list.truncate(3);
-        }
-    }
-    best.into_iter()
-        .map(|(p, s)| (p, s.iter().sum::<f32>() / s.len() as f32))
-        .collect()
+    top3_means(
+        references
+            .iter()
+            .filter(|(id, _, _)| *id != skip)
+            .filter_map(|(_, person, vector)| cosine(query, vector).map(|s| (*person, s))),
+    )
 }
 
 pub fn evaluate(

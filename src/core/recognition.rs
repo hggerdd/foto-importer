@@ -56,6 +56,22 @@ impl Top3 {
         self.values[..self.len].iter().sum::<f32>() / self.len as f32
     }
 }
+/// Mittel der bis zu drei größten Werte (absteigend summiert), `None` ohne Werte. Die eine
+/// Definition des Personenscores: Abgleich, Auswertung, Validierung und Dublettenprüfung
+/// rechnen alle hierüber.
+pub(crate) fn top3_mean(values: impl IntoIterator<Item = f32>) -> Option<f32> {
+    let mut top = Top3::default();
+    values.into_iter().for_each(|v| top.push(v));
+    (top.len > 0).then(|| top.mean())
+}
+/// [`top3_mean`] je Schlüssel, etwa Personen-ID zu Kosinuswerten.
+pub(crate) fn top3_means<K: Ord>(scores: impl IntoIterator<Item = (K, f32)>) -> BTreeMap<K, f32> {
+    let mut map: BTreeMap<K, Top3> = BTreeMap::new();
+    for (key, score) in scores {
+        map.entry(key).or_default().push(score);
+    }
+    map.into_iter().map(|(k, t)| (k, t.mean())).collect()
+}
 impl References {
     pub fn load(collection: &Collection, key: &str) -> Result<Self> {
         let (entries, people) = Self::load_entries(collection, key)?;
@@ -1735,6 +1751,68 @@ mod tests {
         }
         assert_eq!(&top.values[..top.len], &[0.9, 0.9, 0.7]);
         assert_eq!(top.mean().to_bits(), ((0.9f32 + 0.9 + 0.7) / 3.0).to_bits());
+    }
+
+    /// Die früheren Kopien (sortieren, auf drei kürzen, summieren) und die gemeinsame
+    /// Funktion ergeben auf Zufallsdaten bitgleiche Werte, auch bei Gleichständen.
+    #[test]
+    fn shared_top_three_matches_the_former_copies_bit_for_bit() {
+        fn sorted(values: &[f32]) -> Option<f32> {
+            let mut v = values.to_vec();
+            v.sort_by(|a, b| b.total_cmp(a));
+            v.truncate(3);
+            (!v.is_empty()).then(|| v.iter().sum::<f32>() / v.len() as f32)
+        }
+        fn threshold(values: &[f32]) -> Option<f32> {
+            let mut top = [f32::NEG_INFINITY; 3];
+            for value in values {
+                if *value > top[2] {
+                    top[2] = *value;
+                    top.sort_by(|x, y| y.total_cmp(x));
+                }
+            }
+            let used = values.len().min(3);
+            (used > 0).then(|| top[..used].iter().sum::<f32>() / used as f32)
+        }
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for round in 0..2000 {
+            let len = (next() % 12) as usize;
+            let values: Vec<f32> = (0..len)
+                .map(|_| {
+                    // Grobe Stufen erzeugen Gleichstände; `+ 0.0` vermeidet `-0.0`, das die
+                    // `>`-Kopie anders einsortierte als `total_cmp` (Kosinuswerte sind praktisch
+                    // nie exakt null).
+                    let v = (next() >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0;
+                    if round % 2 == 0 {
+                        (v * 8.0).round() / 8.0 + 0.0
+                    } else {
+                        v
+                    }
+                })
+                .collect();
+            let shared = top3_mean(values.iter().copied()).map(f32::to_bits);
+            assert_eq!(shared, sorted(&values).map(f32::to_bits), "Runde {round}");
+            assert_eq!(
+                shared,
+                threshold(&values).map(f32::to_bits),
+                "Runde {round}"
+            );
+            let keyed: Vec<(i64, f32)> = values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| ((i % 3) as i64, *v))
+                .collect();
+            for (key, mean) in top3_means(keyed.iter().copied()) {
+                let own: Vec<f32> = keyed.iter().filter(|e| e.0 == key).map(|e| e.1).collect();
+                assert_eq!(Some(mean.to_bits()), sorted(&own).map(f32::to_bits));
+            }
+        }
     }
 
     #[test]

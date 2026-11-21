@@ -44,21 +44,6 @@ fn median(values: &mut [f32]) -> Option<f32> {
     })
 }
 
-/// Mittel der bis zu drei größten Werte.
-fn top3_mean(values: impl Iterator<Item = f32>) -> Option<f32> {
-    let mut top = [f32::NEG_INFINITY; 3];
-    let mut len = 0;
-    for value in values {
-        len += 1;
-        if value > top[2] {
-            top[2] = value;
-            top.sort_by(|x, y| y.total_cmp(x));
-        }
-    }
-    let used = len.min(3);
-    (used > 0).then(|| top[..used].iter().sum::<f32>() / used as f32)
-}
-
 /// Ähnlichkeit zweier Personen aus ihren normierten Referenzvektoren (siehe Moduldoku).
 /// `None`, wenn eine Seite keine vergleichbaren Vektoren hat.
 pub fn similarity(a: &[Vec<f32>], b: &[Vec<f32>]) -> Option<f32> {
@@ -86,9 +71,11 @@ pub fn similarity(a: &[Vec<f32>], b: &[Vec<f32>]) -> Option<f32> {
         .collect();
     let mut values: Vec<f32> = scores
         .iter()
-        .filter_map(|row| top3_mean(row.iter().copied()))
+        .filter_map(|row| recognition::top3_mean(row.iter().copied()))
         .collect();
-    values.extend((0..b.len()).filter_map(|j| top3_mean(scores.iter().map(|row| row[j]))));
+    values.extend(
+        (0..b.len()).filter_map(|j| recognition::top3_mean(scores.iter().map(|row| row[j]))),
+    );
     median(&mut values)
 }
 
@@ -236,9 +223,9 @@ mod tests {
         assert_eq!(median(&mut [3.0, 1.0, 2.0]), Some(2.0));
         assert_eq!(median(&mut [4.0, 1.0, 2.0, 3.0]), Some(2.5));
         assert_eq!(median(&mut []), None);
-        let best = top3_mean([0.1, 0.9, 0.5, 0.7].into_iter()).expect("Wert");
+        let best = recognition::top3_mean([0.1, 0.9, 0.5, 0.7]).expect("Wert");
         assert!((best - 0.7).abs() < 1e-6);
-        assert_eq!(top3_mean([0.4].into_iter()), Some(0.4));
-        assert_eq!(top3_mean(std::iter::empty()), None);
+        assert_eq!(recognition::top3_mean([0.4]), Some(0.4));
+        assert_eq!(recognition::top3_mean(std::iter::empty()), None);
     }
 }
