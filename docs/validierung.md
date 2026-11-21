@@ -674,3 +674,14 @@ Abgleich (Zuordnung `auto`, Stapel 512); Median aus 3 Runden, Windows, Release.
 Bestand und Metadaten ersetzen nur den bisherigen Zähler. Die Analyse feuert keinen
 Revisionstrigger (Gesichter ohne Person); ihr Unterschied liegt in der Streuung. Der Abgleich
 zahlt rund 14 µs je geänderter Zuordnung; echte Läufe schreiben nur geänderte Vorschläge.
+
+## Referenzgrenze je Person (2026-11-21)
+
+`cargo run --release --example reference_limit_eval -- E:\Bilder --check` (nur lesend; SFace,
+17.023 bestätigte Gesichter, 50 Personen, feste Testmenge 2.931 Gesichter, 12.390 offene
+Gesichter). `--check`: Die im Speicher wiederholte Auswahl mit der alten Grenze 100 gleicht für
+alle 50 Personen genau `training_set` (auch nach der Beschleunigung von
+`matching::select_references`: Merker statt `contains`, Jahresfächer). Ergebnisse und gewählte
+Grenze: [Gesichtserkennung](../ADR/gesichtserkennung.md). Die Größe der Auswahl ist danach
+nicht mehr quadratisch teuer: alle 50 Personen in 0,9 s (Release).
+

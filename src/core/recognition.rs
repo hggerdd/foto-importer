@@ -122,6 +122,46 @@ pub fn apply_knowledge(collection: &mut Collection, control: &Control) -> Result
 pub fn maintain(collection: &mut Collection, control: &Control) -> Result<String> {
     rebuild(collection, control, false)
 }
+/// Schlüssel in `face_settings`: nach welcher Regel (`config::REFERENCE_POLICY`) die Referenzen
+/// eines Modells zuletzt ausgewählt wurden.
+fn policy_key(embedder: &str) -> String {
+    format!("rust.reference_policy:{embedder}")
+}
+/// Beim Öffnen mit Schreibrecht: Wurden die Referenzen eines Modells nach einer älteren Regel
+/// ausgewählt (andere oder fehlende `config::REFERENCE_POLICY`), werden alle Personen mit
+/// Referenzauswahl als geändert markiert und der Abgleich vorgemerkt. Die nächste Wartung
+/// wählt dann neu aus; Pins, Ausschlüsse und Zuordnungen bleiben unberührt.
+pub(crate) fn renew_outdated_references(db: &rusqlite::Connection) -> Result<()> {
+    let embedders: Vec<String> = db
+        .prepare("SELECT DISTINCT embedder_id FROM training_set")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let current = serde_json::to_string(crate::config::REFERENCE_POLICY)?;
+    for key in embedders {
+        let stored: Option<String> = db
+            .query_row(
+                "SELECT value FROM face_settings WHERE key=?",
+                [policy_key(&key)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if stored.as_deref() == Some(current.as_str()) {
+            continue;
+        }
+        db.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            db.execute(
+                "INSERT OR IGNORE INTO face_reference_dirty SELECT DISTINCT embedder_id,person_id FROM training_set WHERE embedder_id=? AND person_id IS NOT NULL",
+                [&key],
+            )?;
+            db.execute("INSERT INTO face_maintenance VALUES(?,0,1) ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[&key])?;
+            faces::save_setting(db, &policy_key(&key), crate::config::REFERENCE_POLICY)
+        })();
+        db.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
+        result?;
+    }
+    Ok(())
+}
 pub(super) fn applied_key(embedder: &str) -> String {
     format!("rust.recognition_applied:{embedder}")
 }
@@ -166,10 +206,18 @@ fn select_references(
     control.progress(0, people.len());
     for (index, person) in people.iter().enumerate() {
         control.checkpoint()?;
-        let mut statement=collection.db.prepare("SELECT f.id,f.quality,coalesce(f.captured_at,''),e.vec,EXISTS(SELECT 1 FROM training_set t WHERE t.face_id=f.id AND t.embedder_id=? AND t.pinned=1) FROM faces f JOIN face_embeddings e ON e.face_id=f.id WHERE e.embedder_id=? AND f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5 AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=e.embedder_id) AND (f.id IN (SELECT face_id FROM training_set WHERE person_id=? AND embedder_id=? AND pinned=1) OR f.id IN (SELECT id FROM (SELECT id,substr(captured_at,1,4) year,ROW_NUMBER() OVER(PARTITION BY substr(captured_at,1,4) ORDER BY quality DESC,id) rank FROM faces WHERE person_id=? AND assignment='user' AND ignored=0 AND quality>=0.5) ORDER BY rank,year,id LIMIT 2048)) ORDER BY f.id")?;
+        let mut statement=collection.db.prepare("SELECT f.id,f.quality,coalesce(f.captured_at,''),e.vec,EXISTS(SELECT 1 FROM training_set t WHERE t.face_id=f.id AND t.embedder_id=? AND t.pinned=1) FROM faces f JOIN face_embeddings e ON e.face_id=f.id WHERE e.embedder_id=? AND f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5 AND NOT EXISTS(SELECT 1 FROM training_exclusions x WHERE x.face_id=f.id AND x.embedder_id=e.embedder_id) AND (f.id IN (SELECT face_id FROM training_set WHERE person_id=? AND embedder_id=? AND pinned=1) OR f.id IN (SELECT id FROM (SELECT id,substr(captured_at,1,4) year,ROW_NUMBER() OVER(PARTITION BY substr(captured_at,1,4) ORDER BY quality DESC,id) rank FROM faces WHERE person_id=? AND assignment='user' AND ignored=0 AND quality>=0.5) ORDER BY rank,year,id LIMIT ?)) ORDER BY f.id")?;
         let candidates = statement
             .query_map(
-                params![key, key, person.id, person.id, key, person.id],
+                params![
+                    key,
+                    key,
+                    person.id,
+                    person.id,
+                    key,
+                    person.id,
+                    crate::config::REFERENCE_CANDIDATES_MAX as i64
+                ],
                 |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
@@ -192,9 +240,19 @@ fn select_references(
             })
             .collect::<Result<Vec<_>>>()?;
         drop(statement);
+        // Die Auswahlgröße folgt der Zahl aller bestätigten Gesichter mit Merkmalen, nicht
+        // nur der (begrenzten) Kandidaten.
+        let confirmed: usize = collection.db.query_row(
+            "SELECT count(*) FROM faces f JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=? WHERE f.person_id=? AND f.assignment='user' AND f.ignored=0 AND f.quality>=0.5",
+            params![key, person.id],
+            |r| r.get(0),
+        )?;
         let selection = matching::select_references(
             &candidates,
-            100,
+            // Pins sind Nutzerentscheidungen und gehen nie verloren, auch über der Grenze.
+            crate::config::reference_limit(confirmed)
+                .max(candidates.iter().filter(|c| c.pinned).count()),
+            crate::config::reference_validation,
             42,
             option(collection, "rust.duplicate", 0.92)?,
             control,
@@ -237,6 +295,11 @@ fn select_references(
         control.checkpoint()?;
         tx.commit()?;
         control.progress(index + 1, people.len());
+    }
+    // Alle Auswahlen dieses Modells folgen jetzt der geltenden Regel.
+    let policy = policy_key(key);
+    if faces::setting(collection, &policy)?.as_deref() != Some(crate::config::REFERENCE_POLICY) {
+        faces::save_setting(&collection.db, &policy, crate::config::REFERENCE_POLICY)?;
     }
     if reset || !people.is_empty() {
         // Gespeicherter Altwert des entfernten Klassifikators.

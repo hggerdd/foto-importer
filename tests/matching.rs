@@ -35,8 +35,22 @@ fn references_preserve_pins_years_and_reproducible_validation() -> anyhow::Resul
             vector,
         });
     }
-    let a = matching::select_references(&rows, 8, 42, 0.999, &Control::default())?;
-    let b = matching::select_references(&rows, 8, 42, 0.999, &Control::default())?;
+    let a = matching::select_references(
+        &rows,
+        8,
+        |c| ((c as f32 * 0.2).round() as usize).max(2),
+        42,
+        0.999,
+        &Control::default(),
+    )?;
+    let b = matching::select_references(
+        &rows,
+        8,
+        |c| ((c as f32 * 0.2).round() as usize).max(2),
+        42,
+        0.999,
+        &Control::default(),
+    )?;
     assert_eq!(a.references, b.references);
     assert_eq!(a.validation, b.validation);
     assert!(a.references.contains(&1) || a.validation.contains(&1));
@@ -55,5 +69,5 @@ fn over_limit_pins_are_an_explicit_error() {
             vector: vec![1.0, 0.0],
         })
         .collect::<Vec<_>>();
-    assert!(matching::select_references(&rows, 2, 42, 0.92, &Control::default()).is_err());
+    assert!(matching::select_references(&rows, 2, |_| 0, 42, 0.92, &Control::default()).is_err());
 }

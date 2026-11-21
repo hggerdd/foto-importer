@@ -93,9 +93,12 @@ fn time(value: &str) -> Option<chrono::NaiveDateTime> {
         .get(..19)
         .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y:%m:%d %H:%M:%S").ok())
 }
+/// Wählt bis zu `limit` Gesichter aus `rows`; davon hält `validation(Anzahl ausgewählt)` als
+/// Validierung zurück (höchstens alle bis auf eines).
 pub fn select_references(
     rows: &[Candidate],
     limit: usize,
+    validation: impl Fn(usize) -> usize,
     seed: u64,
     duplicate: f32,
     control: &Control,
@@ -200,11 +203,22 @@ pub fn select_references(
     for i in &chosen {
         update(*i, &mut distances);
     }
-    let year = |i: usize| rows[i].captured.get(..4).unwrap_or("").to_string();
-    let years: BTreeSet<_> = keep.iter().map(|i| year(*i)).collect();
-    let quota = (limit / years.len().max(1)).max(1);
-    let pick = |options: Vec<usize>, chosen: &[usize], distances: &[f32]| {
-        options.into_iter().max_by(|a, b| {
+    // Merker statt `chosen.contains` und Jahresfächer statt Filtern über alle Kandidaten: Die
+    // Auswahl bleibt dieselbe (die Wahl ist eine strenge Ordnung mit der ID als letztem
+    // Kriterium, also unabhängig von der Reihenfolge der Optionen), kostet bei mehreren hundert
+    // Referenzen aber nicht mehr quadratisch viele Vergleiche je Schritt.
+    let mut taken = vec![false; n];
+    for i in &chosen {
+        taken[*i] = true;
+    }
+    let year = |i: usize| rows[i].captured.get(..4).unwrap_or("");
+    let mut by_year: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
+    for i in &keep {
+        by_year.entry(year(*i)).or_default().push(*i);
+    }
+    let quota = (limit / by_year.len().max(1)).max(1);
+    let pick = |options: &mut dyn Iterator<Item = usize>, chosen: &[usize], distances: &[f32]| {
+        options.max_by(|a, b| {
             let score = |i: usize| {
                 if chosen.is_empty() {
                     medoid_scores[i]
@@ -218,40 +232,30 @@ pub fn select_references(
         })
     };
     for _ in 0..quota {
-        for y in &years {
+        for options in by_year.values() {
             if chosen.len() >= limit {
                 break;
             }
-            let options = keep
-                .iter()
-                .copied()
-                .filter(|i| !chosen.contains(i) && year(*i) == *y)
-                .collect();
-            if let Some(i) = pick(options, &chosen, &distances) {
+            let mut open = options.iter().copied().filter(|i| !taken[*i]);
+            if let Some(i) = pick(&mut open, &chosen, &distances) {
                 chosen.push(i);
+                taken[i] = true;
                 update(i, &mut distances);
             }
         }
+        control.checkpoint()?;
     }
     while chosen.len() < limit.min(keep.len()) {
-        let options = keep
-            .iter()
-            .copied()
-            .filter(|i| !chosen.contains(i))
-            .collect();
-        let Some(i) = pick(options, &chosen, &distances) else {
+        let mut open = keep.iter().copied().filter(|i| !taken[*i]);
+        let Some(i) = pick(&mut open, &chosen, &distances) else {
             break;
         };
         chosen.push(i);
+        taken[i] = true;
         update(i, &mut distances);
     }
-    let count = if chosen.len() >= 3 {
-        ((chosen.len() as f32 * 0.2).round() as usize)
-            .max(2)
-            .min(chosen.len() - 1)
-    } else {
-        0
-    };
+    // Nie alle Ausgewählten zurückhalten: mindestens eine Referenz bleibt.
+    let count = validation(chosen.len()).min(chosen.len().saturating_sub(1));
     let mut permutation = chosen.clone();
     permutation.sort_by_key(|i| {
         blake3::hash(format!("{seed}:{}", rows[*i].id).as_bytes())
