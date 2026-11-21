@@ -1,4 +1,6 @@
 //! Zentraler Personenbestand zwischen mehreren Sammlungen (ADR 0062).
+mod common;
+use common::person;
 use foto_importer::core::{
     central::{self, Central, CentralConfig, Side},
     collection::Collection,
@@ -32,12 +34,6 @@ fn setup() -> anyhow::Result<Setup> {
         b,
         cfg,
     })
-}
-fn person(name: &str) -> NewPerson {
-    NewPerson {
-        name: name.into(),
-        ..Default::default()
-    }
 }
 fn open(cfg: &CentralConfig) -> Central {
     Central::open_config(cfg).expect("central")
@@ -407,7 +403,7 @@ fn parallel_writers_lose_nothing() -> anyhow::Result<()> {
 }
 
 #[test]
-fn thousands_of_people_sync_quickly() -> anyhow::Result<()> {
+fn thousands_of_people_sync_completely() -> anyhow::Result<()> {
     let mut s = setup()?;
     {
         let tx = s.a.db.transaction()?;
@@ -425,6 +421,7 @@ fn thousands_of_people_sync_quickly() -> anyhow::Result<()> {
     assert_eq!(report.created_central, 3000);
     let report = central::sync(&mut s.b, &mut open(&s.cfg))?;
     assert_eq!(report.missing.len(), 3000);
-    assert!(started.elapsed().as_secs() < 60);
+    // Nur Messwert: eine Zeitgrenze flackert unter Last und gehört nicht in `cargo test`.
+    eprintln!("3000 Personen hoch und herunter: {:?}", started.elapsed());
     Ok(())
 }

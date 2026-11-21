@@ -52,7 +52,7 @@ impl PhotoApp {
         self.backups.loading = true;
         let revision = self.backups.revision;
         let root = PathBuf::from(&self.settings.collection);
-        self.launch("Sicherungen lesen", false, "backup-list", move |_| {
+        self.launch("Sicherungen lesen", false, JobKind::BackupList, move |_| {
             Ok(Outcome::Backups(
                 revision,
                 backup::list(&root).map_err(|e| format!("{e:#}")),
@@ -69,7 +69,7 @@ impl PhotoApp {
         self.launch(
             "Datensicherung erstellen",
             false,
-            "backup",
+            JobKind::Backup,
             move |control| {
                 Ok(Outcome::BackupCreated(
                     backup::create(&root, &plan, "manuell", &control)?.summary(),
@@ -94,7 +94,7 @@ impl PhotoApp {
             || self
                 .tasks
                 .iter()
-                .any(|t| matches!(t.kind, "search" | "counts"))
+                .any(|t| matches!(t.kind, JobKind::Search | JobKind::Counts))
         {
             return;
         }
@@ -108,7 +108,7 @@ impl PhotoApp {
         self.launch(
             "Tägliche Datensicherung",
             false,
-            "backup-daily",
+            JobKind::BackupDaily,
             move |control| {
                 let created = backup::automatic(&root, "täglich", &control)?;
                 Ok(Outcome::DailyBackup(collection, today, created.summary()))
@@ -119,7 +119,7 @@ impl PhotoApp {
     pub(super) fn backup_running(&self) -> bool {
         self.tasks
             .iter()
-            .any(|t| matches!(t.kind, "backup" | "backup-daily"))
+            .any(|t| matches!(t.kind, JobKind::Backup | JobKind::BackupDaily))
     }
 
     /// Karte „Datensicherung“ in den Einstellungen.
@@ -161,7 +161,7 @@ impl PhotoApp {
             let running = self
                 .tasks
                 .iter()
-                .find(|t| matches!(t.kind, "backup" | "backup-daily"))
+                .find(|t| matches!(t.kind, JobKind::Backup | JobKind::BackupDaily))
                 .map(|t| (t.task.control.clone(), t.task.control.snapshot()));
             match running {
                 Some((control, progress)) => {

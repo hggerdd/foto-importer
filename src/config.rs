@@ -91,6 +91,10 @@ pub const MATCH_CACHE_MAX_BYTES: usize = 768 * 1024 * 1024;
 pub const PERSON_CANDIDATE_MIN: f32 = 0.40;
 /// Höchstens so viele Threads rechnen im Abgleich Personenwerte (auf dem Wartungs-Worker).
 pub const MATCH_THREADS: usize = 4;
+/// So lange gilt die Prüfung „Laufzeit und Modellgewichte vorhanden“ der Ansicht „Gesichter“,
+/// bevor sie die Dateien erneut ansieht (sonst nur bei geänderten Einstellungen oder nach
+/// Installation/Download); vorher lief sie in jedem Frame.
+pub const SETUP_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// Anzeigedauer eines normalen Hinweises; Fehler bleiben bis zum Schließen.
 pub const NOTICE_SECONDS: std::time::Duration = std::time::Duration::from_secs(15);
 /// Gruppen je Seite in den Gesichtsreitern.

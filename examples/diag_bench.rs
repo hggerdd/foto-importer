@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     let enabled = per_call(count, |n| {
         on.write(
             log::Level::Info,
-            "ui.frame",
+            "frame",
             &format_args!(
                 "langsam dauer_ms={:.1} update_ms={:.1} ansicht=faces/unknown texturen={n}",
                 73.4, 12.0

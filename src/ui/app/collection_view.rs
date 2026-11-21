@@ -221,7 +221,7 @@ impl PhotoApp {
                     .max(page + 1 + more)
             }
             .max(1);
-            let loading = self.tasks.iter().any(|task| task.kind == "search");
+            let loading = self.tasks.iter().any(|task| task.kind == JobKind::Search);
             let refreshing = self.page_from_snapshot || !self.counts_fresh;
             ui.label(
                 RichText::new(if refreshing && self.page.total == 0 {
@@ -235,7 +235,7 @@ impl PhotoApp {
                 && self
                     .tasks
                     .iter()
-                    .any(|task| matches!(task.kind, "search" | "counts"))
+                    .any(|task| matches!(task.kind, JobKind::Search | JobKind::Counts))
             {
                 ui.label(
                     RichText::new("wird aktualisiert …")
@@ -337,7 +337,7 @@ impl PhotoApp {
             if ui.button("Letzte Änderungen anzeigen").clicked() {
                 let root = self.settings.collection.clone();
                 self.collection_dialog = None;
-                self.launch("Bestandsbericht lesen", false, "report", move |_| {
+                self.launch("Bestandsbericht lesen", false, JobKind::Report, move |_| {
                     let collection = Collection::open(Path::new(&root), false)?;
                     Ok(Outcome::Report(collection.inventory_report()?))
                 });
@@ -583,7 +583,8 @@ impl PhotoApp {
         }
     }
     fn photo_gallery(&mut self, ui: &mut egui::Ui) {
-        if self.page.photos.is_empty() && self.tasks.iter().any(|task| task.kind == "search") {
+        if self.page.photos.is_empty() && self.tasks.iter().any(|task| task.kind == JobKind::Search)
+        {
             self.empty(
                 ui,
                 "Sammlung wird gelesen …",
@@ -965,15 +966,12 @@ impl PhotoApp {
                                 .add_enabled(!self.busy(), egui::Button::new(label))
                                 .clicked()
                             {
-                                let root = self.settings.collection.clone();
                                 let id = face.id;
                                 self.undo.clear();
-                                self.launch(
+                                self.launch_write(
                                     "Referenzentscheidung speichern",
-                                    true,
-                                    "mutation",
-                                    move |_| {
-                                        let c = Collection::open(Path::new(&root), true)?;
+                                    JobKind::Mutation,
+                                    move |c, _| {
                                         crate::core::maintenance::reference_action(&c, id, action)?;
                                         Ok(Outcome::Done("Referenzentscheidung gespeichert".into()))
                                     },
@@ -988,15 +986,17 @@ impl PhotoApp {
                     .on_hover_text("Nur diese Fehldetektion löschen, Original bleibt erhalten")
                     .clicked()
                 {
-                    let root = self.settings.collection.clone();
                     let id = face.id;
                     let photo = face.photo;
                     self.undo.clear();
-                    self.launch("Fehldetektion löschen", true, "mutation", move |_| {
-                        let mut c = Collection::open(Path::new(&root), true)?;
-                        faces::delete_face(&mut c, photo, id)?;
-                        Ok(Outcome::Done("Fehldetektion gelöscht".into()))
-                    });
+                    self.launch_write(
+                        "Fehldetektion löschen",
+                        JobKind::Mutation,
+                        move |mut c, _| {
+                            faces::delete_face(&mut c, photo, id)?;
+                            Ok(Outcome::Done("Fehldetektion gelöscht".into()))
+                        },
+                    );
                 }
             });
         }

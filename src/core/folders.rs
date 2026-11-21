@@ -1,12 +1,12 @@
-//! Folder tree of a collection (ADR-0057, ADR-0067).
+//! Ordnerbaum einer Sammlung (ADR-0057, ADR-0067).
 //!
-//! The complete overview (every folder with the number of photos below it) is read in one pass
-//! and kept in memory; expanding and collapsing happens without database access.
+//! Die ganze Übersicht (jeder Ordner mit der Zahl der Fotos darunter) wird in einem Durchgang
+//! gelesen und im Speicher gehalten; Auf- und Zuklappen braucht keinen Datenbankzugriff.
 
 use super::collection::Collection;
 use anyhow::Result;
 
-/// One folder with the photos in it and all folders below it.
+/// Ein Ordner mit seinen Fotos und allen Ordnern darunter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Node {
     name: String,
@@ -15,14 +15,15 @@ struct Node {
     children: Vec<Node>,
 }
 
-/// Photos per directory (`""` is the collection root), one row per photo (preferred variant,
-/// no sidecars). The whole overview is read at once, because the number of directories is
-/// small compared to the number of photos.
+/// Fotos je Verzeichnis (`""` ist der Sammlungsordner), eine Zeile je Foto (bevorzugte
+/// Variante, keine Begleitdateien). Die ganze Übersicht wird auf einmal gelesen, weil es im
+/// Vergleich zu den Fotos wenige Verzeichnisse gibt.
 ///
-/// Normally this reads the additive summary table `folder_counts` (one row per folder, kept up
-/// to date by triggers on `metadata_photos`; see `migrations::FOLDER_COUNTS`): a few pages
-/// instead of thousands of scattered ones on a slow disk. A collection that was never opened
-/// for writing by this version has no such table; then [`scan_directories`] counts directly.
+/// Normalerweise liest das die zusätzliche Summentabelle `folder_counts` (eine Zeile je Ordner,
+/// von Triggern auf `metadata_photos` aktuell gehalten; siehe `migrations::FOLDER_COUNTS`):
+/// wenige Seiten statt tausender verstreuter auf einer langsamen Platte. Eine Sammlung, die
+/// diese Version nie schreibend geöffnet hat, hat die Tabelle nicht; dann zählt
+/// [`scan_directories`] direkt.
 pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     let summarized: bool = collection.db.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_counts')",
@@ -36,9 +37,9 @@ pub fn directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     }
 }
 
-/// Counts the photos per directory from the projection itself (fallback and reference for
-/// `folder_counts`). With the covering index `ix_files_dir_cover` (additive, see ADR 0067) the
-/// scan stays inside the index; without it the same result comes from the relative paths in
+/// Zählt die Fotos je Verzeichnis aus der Projektion selbst (Rückfall und Referenz für
+/// `folder_counts`). Mit dem abdeckenden Index `ix_files_dir_cover` (zusätzlich, siehe ADR 0067)
+/// bleibt das Lesen im Index; ohne ihn kommt dasselbe Ergebnis aus den relativen Pfaden in
 /// `metadata_photos`.
 pub fn scan_directories(collection: &Collection) -> Result<Vec<(String, usize)>> {
     let covered: bool = collection.db.query_row(
@@ -65,7 +66,8 @@ fn query(collection: &Collection, sql: &str) -> Result<Vec<(String, usize)>> {
     Ok(out)
 }
 
-/// EXPLAIN QUERY PLAN lines of the directory query on the covering index (regression test).
+/// Zeilen von EXPLAIN QUERY PLAN der Verzeichnisabfrage auf dem abdeckenden Index
+/// (Regressionstest).
 pub fn plan(collection: &Collection) -> Result<Vec<String>> {
     let mut statement = collection.db.prepare(
         "EXPLAIN QUERY PLAN SELECT f.dir,count(*) FROM files f INDEXED BY ix_files_dir_cover
@@ -85,7 +87,7 @@ fn char_class(c: char) -> u8 {
     }
 }
 
-/// Lower-case letter without the common umlaut/accent, so `Ä` sorts next to `a`.
+/// Kleinbuchstabe ohne die üblichen Umlaute/Akzente, damit `Ä` neben `a` einsortiert wird.
 fn base_letter(c: char) -> char {
     match c.to_lowercase().next().unwrap_or(c) {
         'ä' | 'á' | 'à' | 'â' | 'ã' | 'å' => 'a',
@@ -111,8 +113,8 @@ fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
     digits.trim_start_matches('0').to_owned()
 }
 
-/// Order of the Windows Explorer: symbols such as `_` first, then digits (as numbers, so `2`
-/// before `10`), then letters without regard to case.
+/// Reihenfolge des Windows-Explorers: Zeichen wie `_` zuerst, dann Ziffern (als Zahlen, also
+/// `2` vor `10`), dann Buchstaben ohne Rücksicht auf Groß- und Kleinschreibung.
 pub fn explorer_order(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
@@ -183,7 +185,7 @@ fn build(directories: &[(String, usize)]) -> Vec<Node> {
     finish("", root)
 }
 
-/// One visible line of the tree, in display order.
+/// Eine sichtbare Zeile des Baums, in Anzeigereihenfolge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Row {
     Node {
@@ -202,10 +204,10 @@ pub enum Row {
     },
 }
 
-/// Folder overview and expansion state, independent of the UI toolkit. The complete tree is
-/// read in one worker request and kept in memory; expanding and collapsing never touches the
-/// database. After a change of the collection the old tree stays visible until the new one
-/// arrives.
+/// Ordnerübersicht und Aufklappzustand, unabhängig vom UI-Toolkit. Der ganze Baum wird in
+/// einem Worker-Auftrag gelesen und im Speicher gehalten; Auf- und Zuklappen berührt nie die
+/// Datenbank. Nach einer Änderung der Sammlung bleibt der alte Baum sichtbar, bis der neue
+/// da ist.
 #[derive(Clone, Debug, Default)]
 pub struct FolderTree {
     nodes: Option<Vec<Node>>,
@@ -216,13 +218,13 @@ pub struct FolderTree {
 }
 
 impl FolderTree {
-    /// Contents changed: read again, but keep what is shown and what the user expanded.
+    /// Inhalt geändert: neu lesen, aber Angezeigtes und Aufgeklapptes behalten.
     pub fn reset(&mut self) {
         self.stale = true;
         self.failed = false;
     }
 
-    /// Expands the ancestors of `folder` so that the selected folder is reachable.
+    /// Klappt die Vorfahren von `folder` auf, damit der gewählte Ordner erreichbar ist.
     pub fn reveal(&mut self, folder: &str) {
         let mut end = 0;
         for part in folder.split('/') {
@@ -251,12 +253,12 @@ impl FolderTree {
         self.expanded.insert(path.to_owned());
     }
 
-    /// True if a worker should read the overview now.
+    /// Soll ein Worker die Übersicht jetzt lesen?
     pub fn needs_load(&self) -> bool {
         (self.nodes.is_none() || self.stale) && !self.loading && !self.failed
     }
 
-    /// Marks the read as handed to a worker.
+    /// Merkt, dass das Lesen an einen Worker übergeben ist.
     pub fn begin(&mut self) {
         self.loading = true;
         self.stale = false;
@@ -266,21 +268,21 @@ impl FolderTree {
         self.loading
     }
 
-    /// A read finished. Its result is shown even if the contents changed meanwhile (nothing
-    /// newer exists); a change marked by [`reset`](Self::reset) during the read keeps the tree
-    /// stale, so exactly one follow-up read starts.
+    /// Ein Lesen ist fertig. Sein Ergebnis wird gezeigt, auch wenn sich der Inhalt inzwischen
+    /// geändert hat (Neueres gibt es nicht); eine während des Lesens mit [`reset`](Self::reset)
+    /// gemerkte Änderung lässt den Baum veraltet, sodass genau ein weiteres Lesen startet.
     pub fn apply(&mut self, directories: &[(String, usize)]) {
         self.nodes = Some(build(directories));
         self.loading = false;
         self.failed = false;
     }
 
-    /// A tree is shown and a read to refresh it is running.
+    /// Ein Baum wird gezeigt, und ein Lesen zum Auffrischen läuft.
     pub fn is_refreshing(&self) -> bool {
         self.nodes.is_some() && self.loading
     }
 
-    /// A worker failed: do not retry in a loop.
+    /// Ein Worker ist gescheitert: nicht in einer Schleife wiederholen.
     pub fn fail(&mut self) {
         self.loading = false;
         self.failed = true;
@@ -294,7 +296,7 @@ impl FolderTree {
         self.failed
     }
 
-    /// Number of folders in the tree (all levels).
+    /// Zahl der Ordner im Baum (alle Ebenen).
     pub fn folder_count(&self) -> usize {
         fn count(nodes: &[Node]) -> usize {
             nodes.iter().map(|n| 1 + count(&n.children)).sum()
@@ -302,7 +304,8 @@ impl FolderTree {
         self.nodes.as_deref().map_or(0, count)
     }
 
-    /// Visible rows below the root, depth first. Only expanded folders show their children.
+    /// Sichtbare Zeilen unter der Wurzel, Tiefe zuerst. Nur aufgeklappte Ordner zeigen ihre
+    /// Unterordner.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         match &self.nodes {

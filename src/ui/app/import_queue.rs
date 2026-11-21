@@ -200,7 +200,7 @@ impl PhotoApp {
     pub(super) fn start_next_import(&mut self) {
         if self.closing
             || self.imports.iter().any(|b| b.state == BatchState::Running)
-            || self.tasks.iter().any(|t| t.kind == "copy")
+            || self.tasks.iter().any(|t| t.kind == JobKind::Copy)
         {
             return;
         }
@@ -238,7 +238,7 @@ impl PhotoApp {
         let converter = batch.converter.clone();
         let skip = batch.skip;
         let exiftool = batch.exiftool.clone();
-        self.launch(&label, true, "copy", move |control| {
+        self.launch(&label, true, JobKind::Copy, move |control| {
             let mut report = crate::core::import_service::execute(
                 &files,
                 &target,
@@ -297,7 +297,7 @@ impl PhotoApp {
             || self
                 .tasks
                 .iter()
-                .any(|t| t.kind == "index-new" || t.write && !low_priority(t.kind))
+                .any(|t| t.kind == JobKind::IndexNew || t.write && !low_priority(t.kind))
         {
             return;
         }
@@ -320,7 +320,7 @@ impl PhotoApp {
         self.launch(
             "Neue Dateien in die Sammlung aufnehmen",
             true,
-            "index-new",
+            JobKind::IndexNew,
             move |control| {
                 Ok(Outcome::Indexed(
                     crate::core::import_service::index_new_files(Path::new(&root), &control)?,

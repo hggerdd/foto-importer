@@ -24,7 +24,7 @@ impl PhotoApp {
         self.tasks.iter().any(|t| {
             t.write
                 && !low_priority(t.kind)
-                && !matches!(t.kind, "copy" | "naming")
+                && !matches!(t.kind, JobKind::Copy | JobKind::Naming)
                 && t.collection == self.settings.collection
         })
     }
@@ -33,7 +33,7 @@ impl PhotoApp {
     pub(super) fn naming_pending(&self) -> bool {
         self.tasks
             .iter()
-            .any(|t| t.kind == "naming" && t.collection == self.settings.collection)
+            .any(|t| t.kind == JobKind::Naming && t.collection == self.settings.collection)
     }
 
     /// Merkt einen Schreibauftrag vor und blendet `hide` sofort aus der angezeigten Seite aus.
@@ -43,7 +43,7 @@ impl PhotoApp {
         hide: Vec<i64>,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
-        self.launch_hiding(label, true, "naming", hide, work);
+        self.launch_hiding(label, true, JobKind::Naming, hide, work);
         self.hide_pending_faces();
     }
 

@@ -1,26 +1,15 @@
 //! Rückfragen zu wahrscheinlich fehlenden Eltern (ADR 0061): reine Funktion und
 //! Anwendung auf eine Sammlung.
+mod common;
+use common::{collection_with_people as collection, parent};
 use foto_importer::core::{
     collection::Collection,
     gaps::{self, Answer, Decisions, Suggestion, SuggestionKind},
     relations::{self, Edge, Role, canonical},
 };
 
-fn parent(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Parent, b)
-}
-
 fn ask(edges: &[Edge]) -> Vec<Suggestion> {
     gaps::suggestions(edges, &Decisions::default())
-}
-
-fn collection(people: i64) -> anyhow::Result<(tempfile::TempDir, Collection)> {
-    let temp = tempfile::tempdir()?;
-    let c = Collection::open(temp.path(), true)?;
-    for id in 1..=people {
-        c.db.execute("INSERT INTO persons(id) VALUES(?)", [id])?;
-    }
-    Ok((temp, c))
 }
 
 #[test]

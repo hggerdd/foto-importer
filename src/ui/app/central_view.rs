@@ -328,14 +328,11 @@ impl PhotoApp {
         &mut self,
         work: impl FnOnce(&mut Collection, &mut Central) -> Result<SyncReport> + Send + 'static,
     ) {
-        let root = self.settings.collection.clone();
         let config = self.settings.central();
-        self.launch(
+        self.launch_write(
             "Zentralen Bestand abgleichen",
-            true,
-            "mutation",
-            move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
+            JobKind::Mutation,
+            move |mut c, _| {
                 let mut central = Central::open_config(&config)?;
                 let report = work(&mut c, &mut central)?;
                 Ok(Outcome::Synced(

@@ -1,23 +1,12 @@
 //! Personen ohne Gesichtsbezug manuell anlegen (ADR 0061).
+mod common;
+use common::{collection, person};
 use foto_importer::core::{
     collection::Collection,
     faces::{self, MAX_NAME_CHARS, MAX_NOTE_CHARS, NewPerson},
     relations::{self, Gender, Role},
     relationship_graph,
 };
-
-fn collection() -> anyhow::Result<(tempfile::TempDir, Collection)> {
-    let temp = tempfile::tempdir()?;
-    let c = Collection::open(temp.path(), true)?;
-    Ok((temp, c))
-}
-
-fn person(name: &str) -> NewPerson {
-    NewPerson {
-        name: name.into(),
-        ..Default::default()
-    }
-}
 
 #[test]
 fn a_new_person_appears_everywhere_without_faces() -> anyhow::Result<()> {

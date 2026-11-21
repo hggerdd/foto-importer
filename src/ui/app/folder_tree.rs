@@ -1,5 +1,5 @@
-//! Folder tree side panel of the collection view (ADR-0057). Loading and expansion state live in
-//! `core::folders::FolderTree`; this file only draws rows and starts workers.
+//! Ordnerbaum am Rand der Sammlungsansicht (ADR-0057). Laden und Aufklappzustand liegen in
+//! `core::folders::FolderTree`; diese Datei zeichnet nur Zeilen und startet Worker.
 
 use super::*;
 use crate::core::folders::{self, Row};
@@ -7,7 +7,7 @@ use crate::core::folders::{self, Row};
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT: f32 = 14.0;
 
-/// What a click on a row asks for.
+/// Was ein Klick auf eine Zeile verlangt.
 enum Action {
     Select(Option<String>),
     Toggle(String),
@@ -15,11 +15,11 @@ enum Action {
 }
 
 impl PhotoApp {
-    /// Keeps the tree in step with the collection, the selected folder and running workers.
-    /// Slow work only ever runs on a worker. A change of the contents never stops a running
-    /// read (on a USB disk a cold read takes many seconds and would restart forever); the tree
-    /// is marked stale and read once more after the running read delivered. Answers for another
-    /// collection are dropped.
+    /// Hält den Baum im Einklang mit Sammlung, gewähltem Ordner und laufenden Workern.
+    /// Langsame Arbeit läuft nur auf einem Worker. Eine Inhaltsänderung stoppt nie ein laufendes
+    /// Lesen (auf einer USB-Platte dauert ein kaltes Lesen viele Sekunden und begänne sonst
+    /// endlos neu); der Baum wird als veraltet markiert und nach dem laufenden Lesen noch einmal
+    /// gelesen. Antworten für eine andere Sammlung werden verworfen.
     pub(super) fn sync_folder_tree(&mut self) {
         if self.status.files == 0 {
             return;
@@ -32,7 +32,7 @@ impl PhotoApp {
         if key != self.folder_key {
             if key.0 != self.folder_key.0 {
                 for task in &self.tasks {
-                    if task.kind == "folders" && task.collection != key.0 {
+                    if task.kind == JobKind::Folders && task.collection != key.0 {
                         task.task.control.stop();
                     }
                 }
@@ -51,7 +51,7 @@ impl PhotoApp {
             self.folder_revealed = self.applied.folder.clone();
         }
         if self.folder_tree.is_loading()
-            || self.tasks.iter().any(|task| task.kind == "folders")
+            || self.tasks.iter().any(|task| task.kind == JobKind::Folders)
             || !self.folder_tree.needs_load()
         {
             return;
@@ -61,7 +61,7 @@ impl PhotoApp {
         self.folder_revision += 1;
         let revision = self.folder_revision;
         self.folder_pending = Some(revision);
-        self.launch("Ordner lesen", false, "folders", move |control| {
+        self.launch("Ordner lesen", false, JobKind::Folders, move |control| {
             let result = read_directories(&root, &control).map_err(|e| format!("{e:#}"));
             Ok(Outcome::Folders(revision, result))
         });
@@ -95,7 +95,7 @@ impl PhotoApp {
                         // Mit `folder_counts` ist das Lesen kurz; der Hinweis erscheint nur, wenn
                         // es spürbar dauert (ältere, nur lesend geöffnete Sammlung ohne Tabelle).
                         let slow = self.tasks.iter().any(|task| {
-                            task.kind == "folders"
+                            task.kind == JobKind::Folders
                                 && task.task.started.elapsed() > Duration::from_millis(500)
                         });
                         if self.folder_tree.is_refreshing() && slow {
@@ -203,7 +203,7 @@ impl PhotoApp {
         );
     }
 
-    /// Draggable edge between tree and gallery; the width is clamped and persisted.
+    /// Ziehbare Kante zwischen Baum und Galerie; die Breite wird begrenzt und gespeichert.
     pub(super) fn folder_tree_handle(&mut self, ui: &mut egui::Ui, height: f32) {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(6.0, height), egui::Sense::click_and_drag());
@@ -230,7 +230,7 @@ impl PhotoApp {
     }
 }
 
-/// Worker part of a folder read: open the collection read-only and run the overview query.
+/// Worker-Teil eines Ordnerlesens: Sammlung nur lesend öffnen und die Übersicht abfragen.
 fn read_directories(root: &Path, control: &Control) -> Result<Vec<(String, usize)>> {
     let collection = Collection::open(root, false)?;
     collection.cancel_with(control);
@@ -238,7 +238,7 @@ fn read_directories(root: &Path, control: &Control) -> Result<Vec<(String, usize
     folders::directories(&collection)
 }
 
-/// One tree line. Returns the response of the whole row and whether the click hit the arrow.
+/// Eine Baumzeile. Liefert die Antwort der ganzen Zeile und ob der Klick den Pfeil traf.
 fn tree_row(
     ui: &mut egui::Ui,
     depth: usize,
@@ -285,7 +285,7 @@ fn tree_row(
         visuals.text_color()
     };
     if let Some(open) = expanded {
-        // Drawn as shapes: the bundled fonts have no triangle glyphs.
+        // Als Formen gezeichnet: die mitgelieferten Schriften haben keine Dreieckszeichen.
         let c = arrow_rect.center();
         let points = if open {
             vec![

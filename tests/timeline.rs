@@ -551,7 +551,10 @@ fn contact_sheet_and_relatives_follow_the_data() -> anyhow::Result<()> {
 }
 
 /// Abfrage für eine Person mit 100.000 Gesichtern (Synthetik): Messwert, grobe Obergrenze.
+/// Reine Leistungsmessung, deshalb nicht im normalen `cargo test`; ausführen mit
+/// `cargo test --release --test timeline -- --ignored a_person_with_100000_faces --nocapture`.
 #[test]
+#[ignore = "Leistungsmessung: cargo test --release --test timeline -- --ignored --nocapture"]
 fn a_person_with_100000_faces_loads_and_computes_quickly() -> anyhow::Result<()> {
     let (_t, mut c) = fresh()?;
     person(&c, 1, "Viele", Some("1980"))?;

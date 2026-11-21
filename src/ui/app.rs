@@ -6,6 +6,7 @@ mod faces_view;
 mod folder_tree;
 mod import_queue;
 mod import_view;
+mod job_kind;
 mod missing_view;
 mod optimistic;
 mod people_table;
@@ -38,6 +39,7 @@ use crate::{
 };
 use anyhow::Result;
 use egui::{Color32, RichText};
+use job_kind::JobKind;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -215,25 +217,24 @@ struct Notice {
 struct Running {
     task: Task<Outcome>,
     write: bool,
-    kind: &'static str,
+    kind: JobKind,
     collection: String,
     /// Ansicht, in der der Auftrag gestartet wurde; Meldungen zum Ergebnis gehören dorthin.
     view: View,
     /// Gesichter, die bis zum Ende dieses Auftrags aus den Seiten ausgeblendet bleiben.
     hides: Vec<i64>,
 }
-/// Hintergrundarbeit mit niedriger Priorität: zählt nicht als belegt und weicht jedem
-/// Nutzerschreibauftrag.
-fn low_priority(kind: &str) -> bool {
-    matches!(kind, "maintenance" | "metadata-bg" | "index-new")
+/// Hintergrundarbeit mit niedriger Priorität (siehe `JobKind::low_priority`).
+fn low_priority(kind: JobKind) -> bool {
+    kind.low_priority()
 }
 impl Running {
     fn is_face_matching(&self) -> bool {
-        matches!(self.kind, "maintenance" | "face-knowledge")
+        matches!(self.kind, JobKind::Maintenance | JobKind::FaceKnowledge)
     }
     /// Lässt sich der Auftrag pausieren (statt abbrechen) und später fortsetzen?
     fn can_pause(&self) -> bool {
-        self.is_face_matching() || matches!(self.kind, "metadata-bg" | "index-new")
+        self.is_face_matching() || matches!(self.kind, JobKind::MetadataBg | JobKind::IndexNew)
     }
     /// Explains what the running job leaves for later, so a half-finished index is not a surprise.
     fn catch_up_note(&self) -> Option<&'static str> {
@@ -399,6 +400,9 @@ pub struct PhotoApp {
     /// Abschnitt „Datensicherung“ der Einstellungen.
     backups: backup_view::BackupUi,
     closing: bool,
+    /// Zuletzt geprüfte Einrichtung der Gesichtserkennung (`setup_needed`), damit nicht jeder
+    /// Frame das Dateisystem fragt.
+    setup_files: std::cell::RefCell<Option<recognition_view::SetupFiles>>,
     maintenance_paused: bool,
     /// Hintergrundlauf der Metadaten pausiert (Nutzer) bzw. für diese Sitzung gestoppt (Fehler).
     metadata_paused: bool,
@@ -540,6 +544,7 @@ impl PhotoApp {
             missing: Default::default(),
             backups: Default::default(),
             closing: false,
+            setup_files: Default::default(),
             maintenance_paused: false,
             metadata_paused: false,
             metadata_bg_failed: false,
@@ -648,7 +653,7 @@ impl PhotoApp {
     fn blocking_task(&self) -> Option<&Running> {
         self.tasks.iter().find(|t| {
             t.write
-                && t.kind != "copy"
+                && t.kind != JobKind::Copy
                 && !low_priority(t.kind)
                 && t.collection == self.settings.collection
         })
@@ -667,16 +672,35 @@ impl PhotoApp {
         &mut self,
         label: &str,
         write: bool,
-        kind: &'static str,
+        kind: JobKind,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
         self.launch_hiding(label, write, kind, Vec::new(), work);
+    }
+    /// Schreibauftrag auf der offenen Sammlung: der Worker öffnet sie schreibend und
+    /// übergibt sie `work`. Vorrang und Warteschlange wie bei `launch(label, true, kind, …)`.
+    fn launch_write(
+        &mut self,
+        label: &str,
+        kind: JobKind,
+        work: impl FnOnce(Collection, Control) -> Result<Outcome> + Send + 'static,
+    ) {
+        let work = self.on_collection(work);
+        self.launch(label, true, kind, work);
+    }
+    /// Auftragsrumpf, der zuerst die offene Sammlung schreibend öffnet (für `queue_hiding`).
+    fn on_collection(
+        &self,
+        work: impl FnOnce(Collection, Control) -> Result<Outcome> + Send + 'static,
+    ) -> impl FnOnce(Control) -> Result<Outcome> + Send + 'static {
+        let root = self.settings.collection.clone();
+        move |control| work(Collection::open(Path::new(&root), true)?, control)
     }
     fn launch_hiding(
         &mut self,
         label: &str,
         write: bool,
-        kind: &'static str,
+        kind: JobKind,
         hides: Vec<i64>,
         work: impl FnOnce(Control) -> Result<Outcome> + Send + 'static,
     ) {
@@ -689,7 +713,7 @@ impl PhotoApp {
                 }
             }
         }
-        if !write && kind != "picker" {
+        if !write && kind != JobKind::Picker {
             for task in &self.tasks {
                 if task.kind == kind {
                     task.task.control.stop();
@@ -709,28 +733,32 @@ impl PhotoApp {
                     // Nutzeraktionen (Benennen, Rücknahme, Einzeländerung) warten nicht auf
                     // laufende Lesevorgänge: nur lange Hintergrundaufträge geben nach (ADR 0066).
                     // Die tägliche Sicherung schreibt nicht in die Sammlung, gibt aber ebenso nach.
-                    background: write && !matches!(kind, "naming" | "undo" | "mutation")
-                        || kind == "backup-daily",
+                    background: write
+                        && !matches!(kind, JobKind::Naming | JobKind::Undo | JobKind::Mutation)
+                        || kind == JobKind::BackupDaily,
                     ..Default::default()
                 },
                 move |control| {
                     // Import und Aufnahme neuer Dateien wählen ihre Spur selbst: die Aufnahme
                     // schreibt in den Zielordner, nicht unbedingt in die offene Sammlung.
-                    let _slot = if write && !matches!(kind, "copy" | "index-new") {
+                    let _slot = if write && !matches!(kind, JobKind::Copy | JobKind::IndexNew) {
                         let resolved = Path::new(&writer_root).canonicalize()?;
                         Some(control.lane(&format!(
                             "writer:{}",
                             files::fold(&files::normalize(&resolved))
                         ))?)
-                    } else if !write && kind != "picker" {
-                        Some(control.lane(kind)?)
+                    } else if !write && kind != JobKind::Picker {
+                        Some(control.lane(kind.as_str())?)
                     } else {
                         None
                     };
                     let _foreground = if !write
                         && !matches!(
                             kind,
-                            "picker" | "dngupdates" | "runtime-download" | "backup-daily"
+                            JobKind::Picker
+                                | JobKind::DngUpdates
+                                | JobKind::RuntimeDownload
+                                | JobKind::BackupDaily
                         ) {
                         Some(crate::core::jobs::foreground())
                     } else {
@@ -803,7 +831,7 @@ impl PhotoApp {
         true
     }
     fn check_dng(&mut self) {
-        if self.tasks.iter().any(|t| t.kind == "dngupdates") {
+        if self.tasks.iter().any(|t| t.kind == JobKind::DngUpdates) {
             return;
         }
         let cache = self.settings.dng_update.clone();
@@ -821,7 +849,7 @@ impl PhotoApp {
         self.launch(
             "DNG-Converter-Version prüfen",
             false,
-            "dngupdates",
+            JobKind::DngUpdates,
             move |_| {
                 let installed = crate::core::dng_updates::installed(Path::new(&converter));
                 Ok(Outcome::DngUpdate(
@@ -833,19 +861,24 @@ impl PhotoApp {
         );
     }
     fn pick(&mut self, pick: Pick) {
-        if self.tasks.iter().any(|t| t.kind == "picker") {
+        if self.tasks.iter().any(|t| t.kind == JobKind::Picker) {
             return;
         }
-        self.launch("Ordner oder Werkzeug wählen", false, "picker", move |_| {
-            let dialog = rfd::FileDialog::new();
-            let path = match pick {
-                Pick::Source | Pick::Target | Pick::Collection | Pick::Models => {
-                    dialog.pick_folder()
-                }
-                _ => dialog.pick_file(),
-            };
-            Ok(Outcome::Pick(pick, path))
-        });
+        self.launch(
+            "Ordner oder Werkzeug wählen",
+            false,
+            JobKind::Picker,
+            move |_| {
+                let dialog = rfd::FileDialog::new();
+                let path = match pick {
+                    Pick::Source | Pick::Target | Pick::Collection | Pick::Models => {
+                        dialog.pick_folder()
+                    }
+                    _ => dialog.pick_file(),
+                };
+                Ok(Outcome::Pick(pick, path))
+            },
+        );
     }
     /// Liest die Quelle ausdrücklich (Nutzer): Ist sie nicht erreichbar, ist das ein Fehler.
     fn begin_scan(&mut self) {
@@ -860,7 +893,7 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.source);
         let metadata = self.settings.metadata_date;
         for task in &self.tasks {
-            if task.kind == "scan" {
+            if task.kind == JobKind::Scan {
                 task.task.control.stop();
             }
         }
@@ -869,7 +902,7 @@ impl PhotoApp {
         self.focused.clear();
         self.thumbnails.clear();
         self.save();
-        self.launch("Quelle einlesen", false, "scan", move |control| {
+        self.launch("Quelle einlesen", false, JobKind::Scan, move |control| {
             if quiet && !root.is_dir() {
                 return Ok(Outcome::SourceOffline(
                     revision,
@@ -894,25 +927,30 @@ impl PhotoApp {
         self.queried = filters.clone();
         // Eine laufende Zählung gehört zur alten Suche.
         for task in &self.tasks {
-            if task.kind == "counts" {
+            if task.kind == JobKind::Counts {
                 task.task.control.stop();
             }
         }
         let root = PathBuf::from(&self.settings.collection);
         let known = self.known_counts.clone();
-        self.launch("Sammlung durchsuchen", false, "search", move |control| {
-            let c = Collection::open(&root, false)?;
-            c.cancel_with(&control);
-            let detector = faces::active_detector_key(&c)?.unwrap_or_default();
-            // Erst die Seite (kalt auf der USB-Platte rund 1 s); die Zählungen lesen alle
-            // Treffer und kommen danach, außer eine bekannte Zählung gilt noch.
-            control.phase("seite", "");
-            let (stamp, photos) = start_view::page(&c, &filters, &detector)?;
-            let counts = known
-                .filter(|known| known.reusable(stamp.as_ref(), &filters, &photos))
-                .map(|known| known.counts);
-            Ok(Outcome::Search(revision, stamp, photos, counts, filters))
-        });
+        self.launch(
+            "Sammlung durchsuchen",
+            false,
+            JobKind::Search,
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                let detector = faces::active_detector_key(&c)?.unwrap_or_default();
+                // Erst die Seite (kalt auf der USB-Platte rund 1 s); die Zählungen lesen alle
+                // Treffer und kommen danach, außer eine bekannte Zählung gilt noch.
+                control.phase("seite", "");
+                let (stamp, photos) = start_view::page(&c, &filters, &detector)?;
+                let counts = known
+                    .filter(|known| known.reusable(stamp.as_ref(), &filters, &photos))
+                    .map(|known| known.counts);
+                Ok(Outcome::Search(revision, stamp, photos, counts, filters))
+            },
+        );
     }
     /// Zählt die gezeigte Suche (Gesamtzahl, Kameras, Bestand) auf einem Worker. Die erste
     /// Seite ohne Filter wird mit den Zählungen als Startansicht lokal gespeichert.
@@ -921,7 +959,7 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.collection);
         let collection = self.settings.collection.clone();
         let cache = self.cache_dir.clone();
-        self.launch("Sammlung zählen", false, "counts", move |control| {
+        self.launch("Sammlung zählen", false, JobKind::Counts, move |control| {
             let c = Collection::open(&root, false)?;
             c.cancel_with(&control);
             let detector = faces::active_detector_key(&c)?.unwrap_or_default();
@@ -1025,7 +1063,7 @@ impl PhotoApp {
             // z. B. die vom Start: nicht abbrechen und von vorn beginnen.
             View::Collection
                 if self.tasks.iter().any(|t| {
-                    t.kind == "search"
+                    t.kind == JobKind::Search
                         && t.collection == self.settings.collection
                         && !t.task.control.cancel.load(Ordering::Relaxed)
                 }) => {}
@@ -1220,7 +1258,7 @@ impl PhotoApp {
         self.launch(
             "Personen und Gesichter lesen",
             false,
-            "faces",
+            JobKind::Faces,
             move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
@@ -1271,14 +1309,11 @@ impl PhotoApp {
         {
             return;
         }
-        let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
-        self.launch(
+        self.launch_write(
             "Metadaten im Hintergrund lesen",
-            true,
-            "metadata-bg",
-            move |control| {
-                let mut c = Collection::open(Path::new(&root), true)?;
+            JobKind::MetadataBg,
+            move |mut c, control| {
                 Ok(Outcome::Done(metadata::enrich_background(
                     &mut c, &exiftool, &control,
                 )?))
@@ -1293,14 +1328,16 @@ impl PhotoApp {
         if self.busy() || self.settings.collection.is_empty() {
             return;
         }
-        let root = self.settings.collection.clone();
         let exiftool = self.settings.exiftool.clone();
-        self.launch("Metadaten lesen", true, "mutation", move |control| {
-            let mut c = Collection::open(Path::new(&root), true)?;
-            Ok(Outcome::Done(metadata::enrich_photo(
-                &mut c, &exiftool, &control, photo,
-            )?))
-        });
+        self.launch_write(
+            "Metadaten lesen",
+            JobKind::Mutation,
+            move |mut c, control| {
+                Ok(Outcome::Done(metadata::enrich_photo(
+                    &mut c, &exiftool, &control, photo,
+                )?))
+            },
+        );
     }
     fn collection_action(&mut self, action: &str) {
         if self.busy() || self.settings.collection.is_empty() {
@@ -1338,12 +1375,11 @@ impl PhotoApp {
             _ => "Sammlung öffnen",
         };
         let kind = match action.as_str() {
-            "analyze" | "automatic" | "nightly" => "face-analysis",
-            "knowledge" => "face-knowledge",
-            _ => "mutation",
+            "analyze" | "automatic" | "nightly" => JobKind::FaceAnalysis,
+            "knowledge" => JobKind::FaceKnowledge,
+            _ => JobKind::Mutation,
         };
-        self.launch(label, true, kind, move |control| {
-            let mut c = Collection::open(Path::new(&settings.collection), true)?;
+        self.launch_write(label, kind, move |mut c, control| {
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
                 "confirm_missing" => c.quick_scan(true, &control)?,
@@ -1412,17 +1448,22 @@ impl PhotoApp {
         let root = PathBuf::from(&self.settings.collection);
         let id = photo.id;
         self.selected_photo = Some(photo);
-        self.launch("Bilddetails lesen", false, "detail", move |control| {
-            let c = Collection::open(&root, false)?;
-            c.cancel_with(&control);
-            c.db.execute_batch("BEGIN")?;
-            Ok(Outcome::Detail(
-                revision,
-                serde_json::to_string_pretty(&metadata::detail(&c, id)?)?,
-                faces::photo_faces(&c, id)?,
-                faces::photo_analysis_done(&c, id)?,
-            ))
-        });
+        self.launch(
+            "Bilddetails lesen",
+            false,
+            JobKind::Detail,
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                c.db.execute_batch("BEGIN")?;
+                Ok(Outcome::Detail(
+                    revision,
+                    serde_json::to_string_pretty(&metadata::detail(&c, id)?)?,
+                    faces::photo_faces(&c, id)?,
+                    faces::photo_analysis_done(&c, id)?,
+                ))
+            },
+        );
     }
     /// Öffnet den Dialog für genau dieses Gesicht. Er hängt an keiner Ansicht; Vorschläge
     /// liest ein Worker, gültig nur für den zuletzt geöffneten Dialog.
@@ -1435,15 +1476,20 @@ impl PhotoApp {
         self.name_person = None;
         self.name_suggestions.clear();
         self.name_portraits.clear();
-        self.launch("Namensvorschläge lesen", false, "suggestions", move |_| {
-            let c = Collection::open(Path::new(&root), false)?;
-            let key = faces::setting(&c, faces::EMBEDDER_KEY)?.unwrap_or_default();
-            Ok(Outcome::Suggestions(
-                revision,
-                id,
-                faces::suggestions(&c, id, &key)?,
-            ))
-        });
+        self.launch(
+            "Namensvorschläge lesen",
+            false,
+            JobKind::Suggestions,
+            move |_| {
+                let c = Collection::open(Path::new(&root), false)?;
+                let key = faces::setting(&c, faces::EMBEDDER_KEY)?.unwrap_or_default();
+                Ok(Outcome::Suggestions(
+                    revision,
+                    id,
+                    faces::suggestions(&c, id, &key)?,
+                ))
+            },
+        );
     }
     /// Ergebnis eines Auftrags, dessen Revision nicht mehr gilt: es wird verworfen.
     fn stale(&self, outcome: &Outcome, running: &Running) -> bool {
@@ -1571,7 +1617,7 @@ impl PhotoApp {
             self.notice_origin = Some(running.view);
             // Die Einrichtung geht nur nach einer erfolgreich geladenen Laufzeit weiter.
             let chained =
-                running.kind == "runtime-download" && std::mem::take(&mut self.setup_chain);
+                running.kind == JobKind::RuntimeDownload && std::mem::take(&mut self.setup_chain);
             let result = match result {
                 Ok(Outcome::Synced(inner, note)) => {
                     if running.collection == self.settings.collection {
@@ -1595,7 +1641,7 @@ impl PhotoApp {
             };
             // Meldungen eines Imports nennen Zielordner und Tage.
             let mut index_later = false;
-            let label = if running.kind == "copy" {
+            let label = if running.kind == JobKind::Copy {
                 let cancelled = running.task.control.cancel.load(Ordering::Relaxed);
                 self.finish_import(&result, cancelled)
                     .map(|(label, later)| {
@@ -1607,12 +1653,12 @@ impl PhotoApp {
             }
             .unwrap_or_else(|| running.task.label.clone());
             match result {
-                Err(e) if running.kind == "index-new" => {
+                Err(e) if running.kind == JobKind::IndexNew => {
                     let cancelled = running.task.control.cancel.load(Ordering::Relaxed);
                     self.index_failed_or_paused(e, cancelled);
                 }
                 Ok(Outcome::Indexed(found)) => self.index_finished(found),
-                Err(e) if running.kind == "metadata-bg" => {
+                Err(e) if running.kind == JobKind::MetadataBg => {
                     // Abbruch durch einen Nutzerauftrag ist kein Fehler: der Lauf setzt später
                     // fort. Jeder andere Fehler (z. B. ExifTool fehlt) stoppt ihn für die
                     // Sitzung, damit nichts in einer Schleife neu startet.
@@ -1629,7 +1675,7 @@ impl PhotoApp {
                         self.requery_collection();
                     }
                 }
-                Err(e) if running.kind == "timeline" => {
+                Err(e) if running.kind == JobKind::Timeline => {
                     if !running.task.control.cancel.load(Ordering::Relaxed) {
                         self.time_ui.failed(format!("{e:#}"));
                     }
@@ -1647,7 +1693,9 @@ impl PhotoApp {
                 Err(e)
                     if matches!(
                         running.kind,
-                        "person-insights" | "person-duplicates" | "timeline-people"
+                        JobKind::PersonInsights
+                            | JobKind::PersonDuplicates
+                            | JobKind::TimelinePeople
                     ) =>
                 {
                     if !running.task.control.cancel.load(Ordering::Relaxed) {
@@ -1670,8 +1718,8 @@ impl PhotoApp {
                 }
                 // Ein neueres Lesen der Sicherungen hat dieses abgelöst; Fehler beim Lesen selbst
                 // kommen als `Outcome::Backups`.
-                Err(_) if running.kind == "backup-list" => {}
-                Err(e) if running.kind == "backup-daily" => {
+                Err(_) if running.kind == JobKind::BackupList => {}
+                Err(e) if running.kind == JobKind::BackupDaily => {
                     // Abbruch (Nutzer, Programmende) ist kein Fehler; die Sicherung folgt beim
                     // nächsten Öffnen. Ein Fehler erscheint als Hinweis.
                     if running.task.control.cancel.load(Ordering::Relaxed) {
@@ -1680,7 +1728,7 @@ impl PhotoApp {
                         self.message(format!("Tägliche Datensicherung: {e:#}"), true);
                     }
                 }
-                Err(_) if running.kind == "folders" => {
+                Err(_) if running.kind == JobKind::Folders => {
                     // Der Worker liefert Fehler als `Outcome::Folders`; hier landet nur ein
                     // unerwartetes Ende. Nur das erwartete Lesen der aktuellen Sammlung zählt.
                     if running.collection == self.settings.collection
@@ -1691,14 +1739,14 @@ impl PhotoApp {
                 }
                 Err(e) => {
                     // Misslungene Benennung: die Gesichter erscheinen beim Neulesen wieder.
-                    if running.kind == "naming"
+                    if running.kind == JobKind::Naming
                         && running.collection == self.settings.collection
                         && !self.closing
                         && !self.naming_pending()
                     {
                         self.refresh_faces();
                     }
-                    if (running.is_face_matching() || running.kind == "face-analysis")
+                    if (running.is_face_matching() || running.kind == JobKind::FaceAnalysis)
                         && running.collection == self.settings.collection
                     {
                         if running.is_face_matching()
@@ -1914,10 +1962,12 @@ impl PhotoApp {
                     self.detail_analysis_done = Some(analysed);
                 }
                 Ok(Outcome::Done(message)) => {
-                    if running.kind == "undo" && running.collection == self.settings.collection {
+                    if running.kind == JobKind::Undo
+                        && running.collection == self.settings.collection
+                    {
                         self.undo.pop();
                     }
-                    let background = running.kind == "metadata-bg";
+                    let background = running.kind == JobKind::MetadataBg;
                     if !background {
                         self.message(message, false);
                     }
@@ -2140,7 +2190,7 @@ impl PhotoApp {
             && !self
                 .tasks
                 .iter()
-                .any(|task| matches!(task.kind, "search" | "counts"))
+                .any(|task| matches!(task.kind, JobKind::Search | JobKind::Counts))
         {
             self.refresh_faces();
         }
@@ -2165,19 +2215,18 @@ impl PhotoApp {
             && self.imports_pending() == 0
             && !self.index_due()
             && self.face_page.status.pending > 0
-            && !self
-                .tasks
-                .iter()
-                .any(|t| matches!(t.kind, "maintenance" | "metadata-bg" | "faces"))
+            && !self.tasks.iter().any(|t| {
+                matches!(
+                    t.kind,
+                    JobKind::Maintenance | JobKind::MetadataBg | JobKind::Faces
+                )
+            })
             && !self.settings.collection.is_empty()
         {
-            let root = self.settings.collection.clone();
-            self.launch(
+            self.launch_write(
                 "Erkennungswissen im Hintergrund aktualisieren",
-                true,
-                "maintenance",
-                move |control| {
-                    let mut c = Collection::open(Path::new(&root), true)?;
+                JobKind::Maintenance,
+                move |mut c, control| {
                     Ok(Outcome::Done(crate::core::recognition::maintain(
                         &mut c, &control,
                     )?))
@@ -2318,8 +2367,8 @@ impl PhotoApp {
                             {
                                 if can_pause {
                                     match running.kind {
-                                        "metadata-bg" => self.metadata_paused = true,
-                                        "index-new" => self.index_paused = true,
+                                        JobKind::MetadataBg => self.metadata_paused = true,
+                                        JobKind::IndexNew => self.index_paused = true,
                                         _ => self.maintenance_paused = true,
                                     }
                                 }
@@ -2518,7 +2567,7 @@ impl PhotoApp {
         let (slow, summary) = self.frame_meter.record(now, seconds * 1000.0);
         if let Some(note) = slow {
             log::info!(
-                target: "ui.frame",
+                target: "frame",
                 "langsam dauer_ms={:.1} update_ms={:.1} ansicht={} texturen={} auftraege={} laufend={}",
                 seconds * 1000.0,
                 note.update_ms,
@@ -2530,7 +2579,7 @@ impl PhotoApp {
         }
         if let Some(s) = summary {
             log::info!(
-                target: "ui.frame",
+                target: "frame",
                 "zusammenfassung frames={} avg_ms={:.1} p95_ms={:.1} max_ms={:.1} langsam={} texturen={} fenster_s={:.1}",
                 s.frames,
                 s.avg_ms,

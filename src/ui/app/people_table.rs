@@ -559,7 +559,7 @@ impl PhotoApp {
     fn people_table(&mut self, ui: &mut egui::Ui) -> usize {
         let width = ui.available_width();
         if self.face_page.rows.is_empty() {
-            if self.tasks.iter().any(|task| task.kind == "faces") {
+            if self.tasks.iter().any(|task| task.kind == JobKind::Faces) {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Personen werden gelesen …");
@@ -1086,7 +1086,7 @@ impl PhotoApp {
         self.launch(
             "Personendetails lesen",
             false,
-            "person-insights",
+            JobKind::PersonInsights,
             move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
@@ -1393,11 +1393,9 @@ impl PhotoApp {
             if edit.note != base.note {
                 attrs.insert("note".to_string(), edit.note.trim().to_string());
             }
-            let root = self.settings.collection.clone();
             let person_id = person.id;
             self.undo.clear();
-            self.launch("Person speichern", true, "mutation", move |_| {
-                let c = Collection::open(Path::new(&root), true)?;
+            self.launch_write("Person speichern", JobKind::Mutation, move |c, _| {
                 crate::core::maintenance::set_person(&c, person_id, &attrs)?;
                 Ok(Outcome::Done("Person gespeichert".into()))
             });
@@ -1453,15 +1451,13 @@ impl PhotoApp {
                     .add_enabled(!busy, egui::Button::new("Ja, zusammenführen"))
                     .clicked()
                 {
-                    let root = self.settings.collection.clone();
                     let source = person.id;
                     self.undo.clear();
                     self.people_ui.merge_confirm = false;
                     self.people_ui.merge_target = None;
                     self.relation_from = Some(target);
                     let config = self.settings.central();
-                    self.launch("Personen zusammenführen", true, "mutation", move |_| {
-                        let mut c = Collection::open(Path::new(&root), true)?;
+                    self.launch_write("Personen zusammenführen", JobKind::Mutation, move |mut c, _| {
                         let note =
                             crate::core::central::merge_people_synced(&mut c, &config, source, target)?;
                         Ok(Outcome::Synced(
@@ -1526,7 +1522,7 @@ impl PhotoApp {
         self.launch(
             "Ähnliche Personen suchen",
             false,
-            "person-duplicates",
+            JobKind::PersonDuplicates,
             move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
@@ -1665,12 +1661,14 @@ impl PhotoApp {
         }
         if let Some((a, b)) = decline {
             self.people_ui.declined_now.insert((a, b));
-            let root = self.settings.collection.clone();
-            self.launch("Als verschieden merken", true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                duplicates::decline(&mut c, a, b)?;
-                Ok(Outcome::Done("Gemerkt: zwei verschiedene Personen".into()))
-            });
+            self.launch_write(
+                "Als verschieden merken",
+                JobKind::Mutation,
+                move |mut c, _| {
+                    duplicates::decline(&mut c, a, b)?;
+                    Ok(Outcome::Done("Gemerkt: zwei verschiedene Personen".into()))
+                },
+            );
         }
         if let Some(people) = photos {
             self.filters = Search {
@@ -1773,13 +1771,15 @@ impl PhotoApp {
             self.people_ui.scroll_to = Some(person);
         }
         if let Some((suggestion, answer)) = answered {
-            let root = self.settings.collection.clone();
             self.undo.clear();
-            self.launch("Rückfrage beantworten", true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                gaps::apply(&mut c, &suggestion, answer)?;
-                Ok(Outcome::Done("Antwort gespeichert".into()))
-            });
+            self.launch_write(
+                "Rückfrage beantworten",
+                JobKind::Mutation,
+                move |mut c, _| {
+                    gaps::apply(&mut c, &suggestion, answer)?;
+                    Ok(Outcome::Done("Antwort gespeichert".into()))
+                },
+            );
         }
     }
 

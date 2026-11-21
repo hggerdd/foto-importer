@@ -1,3 +1,4 @@
+mod common;
 use foto_importer::core::{
     collection::Collection,
     jobs::Control,
@@ -38,11 +39,7 @@ fn sample() -> anyhow::Result<(tempfile::TempDir, Collection, Vec<i64>)> {
         (photos[1], 3, "user", 1),
     ];
     for (photo, person, assignment, retained) in faces {
-        collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
-             VALUES(?,'a.jpg','det',?,?,?,0.1,0.1,0.5,0.5)",
-            rusqlite::params![photo, person, assignment, retained],
-        )?;
+        common::assigned_face(&collection, photo, person, assignment, retained)?;
     }
     Ok((root, collection, photos))
 }

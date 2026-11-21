@@ -363,7 +363,7 @@ impl PhotoApp {
             return;
         }
         // Eine Berechnung würde einen laufenden Ladeauftrag ersetzen: erst danach rechnen.
-        if self.time_ui.need_compute && !self.tasks.iter().any(|t| t.kind == "timeline") {
+        if self.time_ui.need_compute && !self.tasks.iter().any(|t| t.kind == JobKind::Timeline) {
             self.launch_time_compute(min_px);
         }
     }
@@ -371,7 +371,8 @@ impl PhotoApp {
     /// Liest die Personenliste (kleine Tabellen, kalt auf der USB-Platte rund 0,15 s) und legt
     /// sie für den nächsten Start im lokalen Cache ab.
     fn sync_time_people(&mut self) {
-        if !self.time_ui.need_people || self.tasks.iter().any(|t| t.kind == "timeline-people") {
+        if !self.time_ui.need_people || self.tasks.iter().any(|t| t.kind == JobKind::TimelinePeople)
+        {
             return;
         }
         self.time_ui.need_people = false;
@@ -382,7 +383,7 @@ impl PhotoApp {
         self.launch(
             "Personen für die Zeitreise lesen",
             false,
-            "timeline-people",
+            JobKind::TimelinePeople,
             move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
@@ -403,26 +404,31 @@ impl PhotoApp {
         }
         let params = self.time_ui.params(min_px);
         let root = PathBuf::from(&self.settings.collection);
-        self.launch("Zeitreise lesen", false, "timeline", move |control| {
-            let c = Collection::open(&root, false)?;
-            c.cancel_with(&control);
-            control.phase("Gesichter der Person lesen", "");
-            let data = timeline::load_person(&c, person)?;
-            control.checkpoint()?;
-            control.phase("Zeitreise berechnen", "");
-            let params = Params {
-                birth: data.birth,
-                decisions: data.decisions.clone(),
-                ..params
-            };
-            let computed = timeline::compute(&data.raw, &params);
-            Ok(Outcome::Time(TimeOutcome::Loaded(Box::new(Loaded {
-                revision,
-                person,
-                data: data.into(),
-                computed,
-            }))))
-        });
+        self.launch(
+            "Zeitreise lesen",
+            false,
+            JobKind::Timeline,
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                control.phase("Gesichter der Person lesen", "");
+                let data = timeline::load_person(&c, person)?;
+                control.checkpoint()?;
+                control.phase("Zeitreise berechnen", "");
+                let params = Params {
+                    birth: data.birth,
+                    decisions: data.decisions.clone(),
+                    ..params
+                };
+                let computed = timeline::compute(&data.raw, &params);
+                Ok(Outcome::Time(TimeOutcome::Loaded(Box::new(Loaded {
+                    revision,
+                    person,
+                    data: data.into(),
+                    computed,
+                }))))
+            },
+        );
     }
 
     /// Rechnet die geladenen Gesichter mit den aktuellen Einstellungen neu (ohne Datenbank).
@@ -434,13 +440,18 @@ impl PhotoApp {
         self.time_ui.revision += 1;
         let revision = self.time_ui.revision;
         let params = self.time_ui.params(min_px);
-        self.launch("Zeitreise berechnen", false, "timeline", move |control| {
-            control.checkpoint()?;
-            Ok(Outcome::Time(TimeOutcome::Computed {
-                revision,
-                computed: timeline::compute(&raw, &params),
-            }))
-        });
+        self.launch(
+            "Zeitreise berechnen",
+            false,
+            JobKind::Timeline,
+            move |control| {
+                control.checkpoint()?;
+                Ok(Outcome::Time(TimeOutcome::Computed {
+                    revision,
+                    computed: timeline::compute(&raw, &params),
+                }))
+            },
+        );
     }
 
     /// Öffnet die Zeitreise für diese Person; geladen wird auf einem Worker.
@@ -573,9 +584,7 @@ impl PhotoApp {
         let Some(person) = self.time_ui.loaded_person else {
             return;
         };
-        let root = PathBuf::from(&self.settings.collection);
-        self.launch("Zeitreise speichern", true, "mutation", move |_| {
-            let c = Collection::open(&root, true)?;
+        self.launch_write("Zeitreise speichern", JobKind::Mutation, move |c, _| {
             match decision {
                 Decision::Pin(key, face) => timeline::pin(&c, person, &key, Some(face))?,
                 Decision::Unpin(key) => timeline::pin(&c, person, &key, None)?,
@@ -716,7 +725,7 @@ impl PhotoApp {
         if compute {
             self.time_ui.need_compute = true;
         }
-        let working = self.tasks.iter().any(|t| t.kind == "timeline");
+        let working = self.tasks.iter().any(|t| t.kind == JobKind::Timeline);
         ui.horizontal_wrapped(|ui| {
             if working {
                 ui.spinner();
@@ -1148,7 +1157,7 @@ impl PhotoApp {
     }
 
     fn start_export(&mut self, computed: &Computed, kind: Export) {
-        if self.tasks.iter().any(|t| t.kind == "timeline-export") {
+        if self.tasks.iter().any(|t| t.kind == JobKind::TimelineExport) {
             return;
         }
         let tiles = self.lapse_tiles(computed);
@@ -1182,7 +1191,7 @@ impl PhotoApp {
         self.launch(
             "Zeitreise exportieren",
             false,
-            "timeline-export",
+            JobKind::TimelineExport,
             move |control| {
                 let Some(dir) = rfd::FileDialog::new()
                     .set_title("Ordner für den Export wählen")
@@ -1299,7 +1308,7 @@ impl PhotoApp {
             .size(theme::MIN_TEXT)
             .color(theme::MUTED),
         );
-        let busy = self.tasks.iter().any(|t| t.kind == "timeline-export");
+        let busy = self.tasks.iter().any(|t| t.kind == JobKind::TimelineExport);
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(!busy, |ui| {
                 for (kind, label) in [
@@ -1492,7 +1501,7 @@ mod tests {
         let labels: Vec<&str> = app
             .tasks
             .iter()
-            .filter(|t| t.kind == "timeline")
+            .filter(|t| t.kind == JobKind::Timeline)
             .map(|t| t.task.label.as_str())
             .collect();
         assert_eq!(labels, ["Zeitreise berechnen"], "keine Datenbankabfrage");
@@ -1519,7 +1528,7 @@ mod tests {
         let labels: Vec<&str> = app
             .tasks
             .iter()
-            .filter(|t| t.kind == "timeline")
+            .filter(|t| t.kind == JobKind::Timeline)
             .map(|t| t.task.label.as_str())
             .collect();
         assert_eq!(labels, ["Zeitreise lesen"]);

@@ -151,7 +151,6 @@ impl PhotoApp {
                         !busy && !self.name_input.trim().is_empty(),
                     ) || submit && !busy
                     {
-                        let root = self.settings.collection.clone();
                         let name = self.name_input.clone();
                         let person = self.name_person;
                         let config = self.settings.central();
@@ -159,8 +158,7 @@ impl PhotoApp {
                         // Der Dialog schließt sofort; das Gesicht verschwindet aus der Seite,
                         // geschrieben wird dahinter (wie bei Gruppenkarten).
                         submitted = true;
-                        self.queue_hiding("Gesicht benennen", hidden, move |_| {
-                            let mut c = Collection::open(Path::new(&root), true)?;
+                        let work = self.on_collection(move |mut c, _| {
                             let (undo, note) = crate::core::central::name_group_synced(
                                 &mut c,
                                 &config,
@@ -172,6 +170,7 @@ impl PhotoApp {
                             )?;
                             Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
                         });
+                        self.queue_hiding("Gesicht benennen", hidden, work);
                     }
                 });
             if !open || submitted {

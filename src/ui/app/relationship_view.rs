@@ -277,7 +277,7 @@ impl PhotoApp {
         self.launch(
             "Personengraph berechnen",
             false,
-            "relationship-graph",
+            JobKind::RelationshipGraph,
             move |control| {
                 let collection = Collection::open(Path::new(&root), false)?;
                 collection.cancel_with(&control);
@@ -306,7 +306,7 @@ impl PhotoApp {
         let loading = self
             .tasks
             .iter()
-            .any(|task| task.kind == "relationship-graph");
+            .any(|task| task.kind == JobKind::RelationshipGraph);
         let Some(network) = self.relationship_graph.data.take() else {
             if loading {
                 ui.horizontal(|ui| {

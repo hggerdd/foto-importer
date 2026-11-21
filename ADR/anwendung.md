@@ -54,12 +54,19 @@
   Feld stehen, erscheint als Fehlerhinweis der Einstellungen und wird nicht gespeichert.
   Folgen nur bei echter Änderung: ein neuer ExifTool-Pfad gibt dem gestoppten
   Hintergrundlauf eine neue Chance, ein neuer Converter liest dessen Version neu, nur eine
-  geänderte Modellauswahl schreibt in die Sammlung.
+  geänderte Modellauswahl schreibt in die Sammlung. Die Arbeitsplatzdatei wird bewusst auf
+  dem UI-Thread geschrieben (atomar mit `sync_all`, nur bei solchen Einzelereignissen, nie je
+  Frame): gemessen 2026-11-21 mit `examples/settings_save_bench.rs` (Debug-Build, lokale SSD,
+  200 Läufe) Median 2 ms, Maximum 7 ms. Liegt `%APPDATA%` auf einem langsamen oder
+  Netzlaufwerk, gehört das Speichern auf einen Worker.
 - **Gesichtserkennung einrichten:** Ein Knopf startet nacheinander die vorhandenen
   Aufträge „Laufzeit herunterladen“ (falls die Laufzeit fehlt) und „Modellgewichte
   installieren“ (falls die Standardgewichte fehlen). Der zweite Schritt beginnt nur nach
   erfolgreichem ersten; Fehler oder „Abbrechen“ beenden die Kette. Ist beides vorhanden,
-  steht dort „eingerichtet“.
+  steht dort „eingerichtet“. Ob Laufzeit und Gewichte da sind, fragt die Ansicht „Gesichter“
+  nicht in jedem Frame ab: Das Ergebnis gilt bis zu `SETUP_CHECK_INTERVAL` (5 s) und wird
+  sofort neu geprüft, wenn sich Pfade oder Modellwahl ändern oder eine Installation bzw. ein
+  Download endet.
 - **Navigation:** links fest, Hauptpunkte Importieren, Sammlung, Gesichter, Personen; unten
   abgesetzt Aufgaben und Einstellungen (`NAV_MAIN`, `NAV_BOTTOM`). Die Zeitreise ist kein
   Hauptpunkt, sondern eine Ansicht der gewählten Person (siehe [Personen](personen.md)).
@@ -102,11 +109,12 @@
   Format je Zeile: `2026-11-19 18:25:03.123 INFO  job ende art=faces dauer_ms=73.4 …`
   (Ortszeit, Stufe, Bereich, Schlüssel=Wert, Texte in Anführungszeichen, Zeilenumbrüche als
   „ | “). Fremde Crates nur ab Warnung. Inhalt: Sitzungsbeginn mit Version, Build und
-  Einstellungen; Startphasen (Einstellungen, App-Aufbau, erster Frame); jeder Frame ab
-  `DIAG_SLOW_FRAME_MS` (50 ms, gemessen von eframe: Aufbau, Tessellierung, Zeichnen) mit
-  Ansicht, hochgeladenen Texturen und übernommenen Aufträgen; alle `DIAG_FRAME_SUMMARY`
-  (10 s) eine Zusammenfassung (Frames, Mittel, p95, Maximum, langsame), nur solange gezeichnet
-  wird; Start und Ende jedes Auftrags aus `launch` mit Art, Dauer, Ergebnis (ok, verworfen
+  Einstellungen; Startphasen (Einstellungen, App-Aufbau, erster Frame); im Bereich `frame`
+  jeder Frame ab `DIAG_SLOW_FRAME_MS` (50 ms, gemessen von eframe: Aufbau, Tessellierung,
+  Zeichnen) mit Ansicht, hochgeladenen Texturen und übernommenen Aufträgen; alle
+  `DIAG_FRAME_SUMMARY` (10 s) eine Zusammenfassung (Frames, Mittel, p95, Maximum, langsame),
+  nur solange gezeichnet wird; im Bereich `job` Start und Ende jedes Auftrags aus `launch`
+  mit Art (`JobKind`, Namen wie `mutation`, `faces`, `metadata-bg`), Dauer, Ergebnis (ok, verworfen
   wegen Revision, abgebrochen, Fehler mit Text), Fortschritt, Phasenzeiten und Anzahlen;
   Abgleich (MatchCache bereit/vollständig), langsame oder fehlerhafte Vorschauen,
   Datenbank-Öffnen ab `DIAG_SLOW_DB_OPEN_MS` oder mit Fehler, Migrationen; jeder Hinweis

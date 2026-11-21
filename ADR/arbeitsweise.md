@@ -32,5 +32,10 @@ benannt; es gibt keine zugesicherte Präzision.
 
 ## Beim Ändern beachten
 
-Für jeden behobenen Fehler eine Regression ergänzen. Zahlen in ADRs und Doku nur aus
+Für jeden behobenen Fehler eine Regression ergänzen. Neue Arbeit, die Originale liest
+(Metadaten, Analyse, Vorschauen, Bestandspflege), in `tests/originals_untouched.rs` aufnehmen:
+Der Test prüft Hash, Größe und Änderungszeit jedes Originals vor und nach dem Lauf. Wiederholte
+Testbausteine liegen in `tests/common`; UI-Tests warten nur über `settle_until` (Frist statt
+Rundenzahl). Reine Zeitmessungen sind `#[ignore]` oder Beispiele, keine Grenzwerte in
+`cargo test`. Zahlen in ADRs und Doku nur aus
 nachvollziehbaren Messungen übernehmen.

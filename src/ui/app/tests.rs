@@ -12,13 +12,7 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
     app.view = View::Faces;
     app.face_index = 3;
     app.refresh_faces();
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     assert!(app.tasks.is_empty());
     assert_eq!(app.face_index, 0);
     assert!(app.face_page.groups.is_empty());
@@ -42,13 +36,7 @@ fn other_views_read_people_without_face_groups_and_keep_the_page() -> anyhow::Re
     app.view = View::Collection;
     app.face_index = 3;
     app.refresh_faces();
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     assert!(app.tasks.is_empty());
     assert_eq!(app.face_index, 3);
     assert_eq!(app.face_page.people.len(), 1);
@@ -68,13 +56,7 @@ fn opening_the_collection_keeps_a_running_search() -> anyhow::Result<()> {
     let revision = app.query_revision;
     app.open_view(View::Collection);
     assert_eq!(app.query_revision, revision);
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     app.open_view(View::Collection);
     assert_eq!(app.query_revision, revision + 1);
     Ok(())
@@ -87,19 +69,56 @@ fn add_photo(c: &Collection, id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Großzügige Frist der Warte-Helfer: unter Last (parallele Tests, langsame Platte) lieber
+/// länger warten als flackern. Im Normalfall endet das Warten nach wenigen Millisekunden.
+const SETTLE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Einziger Warte-Helfer der UI-Tests: ruft `step` (z. B. `poll`) wiederholt auf, bis `done`
+/// gilt, höchstens bis `SETTLE_DEADLINE`. Scheitert mit `what`, wenn die Frist abläuft.
+fn settle_until(
+    app: &mut PhotoApp,
+    what: &str,
+    mut step: impl FnMut(&mut PhotoApp),
+    mut done: impl FnMut(&PhotoApp) -> bool,
+) {
+    let deadline = std::time::Instant::now() + SETTLE_DEADLINE;
+    loop {
+        step(app);
+        if done(app) {
+            return;
+        }
+        let running: Vec<_> = app.tasks.iter().map(|t| t.kind.as_str()).collect();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}: nach {SETTLE_DEADLINE:?} nicht erreicht, laufend {running:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Wartet, bis kein Auftrag mehr läuft.
+fn settle_tasks(app: &mut PhotoApp, ctx: &egui::Context) {
+    settle_until(
+        app,
+        "alle Aufträge fertig",
+        |app| app.poll(ctx),
+        |app| app.tasks.is_empty(),
+    );
+}
+
 /// Wartet auf alle Aufträge und liefert die Arten, die dabei liefen.
 fn settle_kinds(ctx: &egui::Context, app: &mut PhotoApp) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
-    for _ in 0..3000 {
-        seen.extend(app.tasks.iter().map(|t| t.kind));
-        app.poll(ctx);
-        seen.extend(app.tasks.iter().map(|t| t.kind));
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(app.tasks.is_empty());
+    settle_until(
+        app,
+        "alle Aufträge fertig",
+        |app| {
+            seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
+            app.poll(ctx);
+            seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
+        },
+        |app| app.tasks.is_empty(),
+    );
     seen
 }
 
@@ -229,17 +248,7 @@ fn folder_tree_loads_completely_on_a_worker_and_reveals_the_selection() -> anyho
     app.status.files = 3;
     app.status.photos = 3;
     app.applied.folder = Some("2024/05".into());
-    let settle = |app: &mut PhotoApp| {
-        for _ in 0..2000 {
-            app.sync_folder_tree();
-            app.poll(&ctx);
-            if app.tasks.is_empty() && !app.folder_tree.needs_load() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    };
-    settle(&mut app);
+    settle_folders(&mut app, &ctx);
     let names = |app: &PhotoApp| {
         app.folder_tree
             .rows()
@@ -278,14 +287,15 @@ fn folder_app(ctx: &egui::Context, dirs: &[&str]) -> anyhow::Result<(tempfile::T
 }
 
 fn settle_folders(app: &mut PhotoApp, ctx: &egui::Context) {
-    for _ in 0..2000 {
-        app.sync_folder_tree();
-        app.poll(ctx);
-        if app.tasks.is_empty() && !app.folder_tree.needs_load() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_until(
+        app,
+        "Ordnerbaum gelesen",
+        |app| {
+            app.sync_folder_tree();
+            app.poll(ctx);
+        },
+        |app| app.tasks.is_empty() && !app.folder_tree.needs_load(),
+    );
 }
 
 fn folder_names(app: &PhotoApp) -> Vec<String> {
@@ -310,7 +320,11 @@ fn a_content_change_during_a_folder_read_does_not_restart_it() -> anyhow::Result
         app.status.photos += change;
         app.sync_folder_tree();
     }
-    let running: Vec<_> = app.tasks.iter().filter(|t| t.kind == "folders").collect();
+    let running: Vec<_> = app
+        .tasks
+        .iter()
+        .filter(|t| t.kind == JobKind::Folders)
+        .collect();
     assert_eq!(running.len(), 1);
     assert!(
         !running[0].task.control.cancel.load(Ordering::Relaxed),
@@ -524,16 +538,16 @@ fn interactive_writes_do_not_yield_to_readers_but_maintenance_does() {
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     let folder = tempfile::tempdir().expect("Ordner");
     app.settings.collection = folder.path().to_string_lossy().into_owned();
-    app.launch("Benennen", true, "naming", |_| {
+    app.launch("Benennen", true, JobKind::Naming, |_| {
         Ok(Outcome::Done(String::new()))
     });
-    app.launch("Wartung", true, "maintenance", |_| {
+    app.launch("Wartung", true, JobKind::Maintenance, |_| {
         Ok(Outcome::Done(String::new()))
     });
     let background = |kind: &str| {
         app.tasks
             .iter()
-            .find(|t| t.kind == kind)
+            .find(|t| t.kind.as_str() == kind)
             .map(|t| t.task.control.background)
     };
     assert_eq!(background("naming"), Some(false));
@@ -545,7 +559,7 @@ fn late_naming_result_from_another_collection_cannot_enter_undo() {
     let creation = eframe::CreationContext::_new_kittest(context.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.collection = "old collection".into();
-    app.launch("Late result", false, "naming", |_| {
+    app.launch("Late result", false, JobKind::Naming, |_| {
         Ok(Outcome::Named(Undo {
             before: Vec::new(),
             after: Vec::new(),
@@ -553,13 +567,7 @@ fn late_naming_result_from_another_collection_cannot_enter_undo() {
         }))
     });
     app.settings.collection = "new collection".into();
-    for _ in 0..1000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(app.tasks.is_empty());
     assert!(app.undo.is_empty());
 }
@@ -959,13 +967,12 @@ fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
     assert_eq!(page_ids(&app), vec![vec![6]]);
     // Nach dem Ende der Aufträge endet das Ausblenden.
     release.store(true, Ordering::Relaxed);
-    for _ in 0..3000 {
-        app.poll(&context);
-        if app.tasks.iter().all(|t| t.kind != "naming") {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_until(
+        &mut app,
+        "Benennungen fertig",
+        |app| app.poll(&context),
+        |app| app.tasks.iter().all(|t| t.kind != JobKind::Naming),
+    );
     assert!(app.hidden_faces().is_empty());
 }
 
@@ -1002,7 +1009,10 @@ fn review_app(root: &Path) -> (egui::Context, PhotoApp) {
     (context, app)
 }
 fn naming_tasks(app: &PhotoApp) -> usize {
-    app.tasks.iter().filter(|t| t.kind == "naming").count()
+    app.tasks
+        .iter()
+        .filter(|t| t.kind == JobKind::Naming)
+        .count()
 }
 
 #[test]
@@ -1258,7 +1268,7 @@ fn ctrl_z_starts_exactly_one_undo_unless_a_text_field_has_focus() -> anyhow::Res
             app.undo_shortcut(ctx);
         });
     };
-    let undos = |app: &PhotoApp| app.tasks.iter().filter(|t| t.kind == "undo").count();
+    let undos = |app: &PhotoApp| app.tasks.iter().filter(|t| t.kind == JobKind::Undo).count();
     // Ein Textfeld mit Fokus behält Strg+Z für sich.
     press(&mut app, true);
     assert_eq!(undos(&app), 0);
@@ -1402,19 +1412,20 @@ fn imports_queued_back_to_back_run_one_after_the_other() -> anyhow::Result<()> {
     assert_eq!(tasks_of(&app, "copy"), 1);
     assert_eq!(app.tasks[0].task.label, "Import „Erster“");
     let mut seen = Vec::new();
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        assert!(tasks_of(&app, "copy") <= 1, "nie zwei Imports gleichzeitig");
-        if let Some(task) = app.tasks.iter().find(|t| t.kind == "copy")
-            && seen.last() != Some(&task.task.label)
-        {
-            seen.push(task.task.label.clone());
-        }
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "alle Imports fertig",
+        |app| {
+            app.poll(&egui::Context::default());
+            assert!(tasks_of(app, "copy") <= 1, "nie zwei Imports gleichzeitig");
+            if let Some(task) = app.tasks.iter().find(|t| t.kind == JobKind::Copy)
+                && seen.last() != Some(&task.task.label)
+            {
+                seen.push(task.task.label.clone());
+            }
+        },
+        |app| app.tasks.is_empty(),
+    );
     assert_eq!(
         seen,
         ["Import „Erster“", "Import „Zweiter“", "Import „Dritter“"]
@@ -1521,7 +1532,13 @@ fn changing_the_strictness_starts_one_write_task() -> anyhow::Result<()> {
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.collection = root.path().to_string_lossy().into_owned();
     app.save_review_threshold(0.65);
-    assert_eq!(app.tasks.iter().filter(|t| t.kind == "mutation").count(), 1);
+    assert_eq!(
+        app.tasks
+            .iter()
+            .filter(|t| t.kind == JobKind::Mutation)
+            .count(),
+        1
+    );
     assert_eq!(
         app.review_draft,
         Some((app.settings.collection.clone(), 0.65))
@@ -1755,19 +1772,13 @@ fn choosing_a_collection_resets_everything_that_belonged_to_the_old_one() -> any
     assert!(!app.maintenance_paused && !app.recognition_tools_open);
     // Antworten für die alte Sammlung sind veraltet; die neue wird auf Workern gelesen.
     assert!(app.query_revision > queries && app.face_revision > pages);
-    let kinds: Vec<&str> = app.tasks.iter().map(|t| t.kind).collect();
+    let kinds: Vec<&str> = app.tasks.iter().map(|t| t.kind.as_str()).collect();
     assert!(
         kinds.contains(&"search") && kinds.contains(&"faces"),
         "{kinds:?}"
     );
     assert!(app.tasks.iter().all(|t| !t.write), "nur gelesen");
-    for _ in 0..3000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(app.tasks.is_empty());
     Ok(())
 }
@@ -1837,11 +1848,14 @@ fn person_views_follow_the_selected_person_and_render_in_both_window_sizes() {
 #[test]
 fn a_running_face_task_is_shown_by_the_footer_in_the_faces_view() {
     let (context, mut app) = review_app(Path::new("tmp/synthetic-review"));
-    app.launch("Fotos lokal analysieren", true, "face-analysis", |_| {
-        Ok(Outcome::Done(String::new()))
-    });
+    app.launch(
+        "Fotos lokal analysieren",
+        true,
+        JobKind::FaceAnalysis,
+        |_| Ok(Outcome::Done(String::new())),
+    );
     let shown = PhotoApp::footer_task(app.view, &app.tasks).map(|t| t.kind);
-    assert_eq!(shown, Some("face-analysis"));
+    assert_eq!(shown, Some(JobKind::FaceAnalysis));
     draw_people(&context, &mut app, egui::vec2(980.0, 680.0));
     // In der Aufgabenansicht steht der Auftrag als Karte da, nicht in der Fußleiste.
     assert!(PhotoApp::footer_task(View::Tasks, &app.tasks).is_none());
@@ -1860,16 +1874,10 @@ fn metadata_app(root: &Path) -> PhotoApp {
     app
 }
 fn tasks_of(app: &PhotoApp, kind: &str) -> usize {
-    app.tasks.iter().filter(|t| t.kind == kind).count()
+    app.tasks.iter().filter(|t| t.kind.as_str() == kind).count()
 }
 fn wait_for_tasks(app: &mut PhotoApp) {
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_tasks(app, &egui::Context::default());
 }
 
 #[test]
@@ -1932,7 +1940,7 @@ fn background_metadata_waits_for_user_writes_and_without_unread_files() -> anyho
     let root = tempfile::tempdir()?;
     drop(Collection::open(root.path(), true)?);
     let mut app = metadata_app(root.path());
-    app.launch("Benennen", true, "mutation", |control| {
+    app.launch("Benennen", true, JobKind::Mutation, |control| {
         while !control.cancel.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -1966,7 +1974,7 @@ fn a_user_write_task_stops_the_background_metadata_run() -> anyhow::Result<()> {
     let mut app = metadata_app(root.path());
     app.start_metadata_background();
     assert!(!app.tasks[0].task.control.cancel.load(Ordering::Relaxed));
-    app.launch("Benennen", true, "mutation", |_| {
+    app.launch("Benennen", true, JobKind::Mutation, |_| {
         Ok(Outcome::Done(String::new()))
     });
     assert!(app.tasks[0].task.control.cancel.load(Ordering::Relaxed));
@@ -2027,7 +2035,7 @@ fn inspector_button_starts_exactly_one_write_task() -> anyhow::Result<()> {
     assert!(
         app.tasks
             .iter()
-            .filter(|t| t.kind == "metadata-bg")
+            .filter(|t| t.kind == JobKind::MetadataBg)
             .all(|t| t.task.control.cancel.load(Ordering::Relaxed))
     );
     Ok(())
@@ -2151,16 +2159,15 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
     app.launch(
         "Laufzeit herunterladen",
         false,
-        "runtime-download",
+        JobKind::RuntimeDownload,
         move |_| Ok(Outcome::RuntimeDownloaded(downloaded)),
     );
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if tasks_of(&app, "runtime-download") == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "Laufzeit heruntergeladen",
+        |app| app.poll(&egui::Context::default()),
+        |app| tasks_of(app, "runtime-download") == 0,
+    );
     assert_eq!(app.settings.onnx_runtime, runtime.to_string_lossy());
     assert!(!app.setup_chain);
     assert_eq!(
@@ -2174,9 +2181,12 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
     wait_for_tasks(&mut app);
     // Ein gescheiterter Download beendet die Kette.
     app.setup_chain = true;
-    app.launch("Laufzeit herunterladen", false, "runtime-download", |_| {
-        anyhow::bail!("kein Netz")
-    });
+    app.launch(
+        "Laufzeit herunterladen",
+        false,
+        JobKind::RuntimeDownload,
+        |_| anyhow::bail!("kein Netz"),
+    );
     wait_for_tasks(&mut app);
     assert!(!app.setup_chain);
     assert_eq!(tasks_of(&app, "model-install"), 0);
@@ -2346,7 +2356,7 @@ fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view(
     assert!(app.selected_photo.is_none(), "Sammlung nie geöffnet");
     // Der Rechtsklick wählt die Kachel nicht ab.
     assert!(app.drafts.values().all(|d| d.excluded.is_empty()));
-    assert!(app.tasks.iter().any(|t| t.kind == "suggestions"));
+    assert!(app.tasks.iter().any(|t| t.kind == JobKind::Suggestions));
     wait_for_tasks(&mut app);
     // Name eintragen und übernehmen: nur dieses Gesicht, der Dialog schließt sofort.
     app.name_input = "Bert".into();
@@ -2446,7 +2456,7 @@ fn a_folder_without_collection_asks_before_anything_is_written() -> anyhow::Resu
 
     assert_eq!(app.settings.collection, "tmp/old-collection");
     assert_eq!(app.new_collection_prompt.as_deref(), Some(chosen.as_str()));
-    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    assert!(!app.tasks.iter().any(|t| t.kind == JobKind::Scan));
     // Ein neues Fenster misst sich im ersten Bild nur aus und erscheint im zweiten.
     drawn_texts(&context, &mut app, Vec::new());
     let texts = drawn_texts(&context, &mut app, Vec::new());
@@ -2484,13 +2494,7 @@ fn confirming_the_new_collection_switches_to_it() -> anyhow::Result<()> {
     app.confirm_new_collection();
     assert_eq!(app.settings.collection, chosen);
     assert_eq!(app.new_collection_prompt, None);
-    for _ in 0..5000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(folder.path().join(".myfotomanager").is_file());
     Ok(())
 }
@@ -2506,13 +2510,7 @@ fn an_existing_collection_opens_without_asking() -> anyhow::Result<()> {
     app.choose_collection(chosen.clone());
     assert_eq!(app.new_collection_prompt, None);
     assert_eq!(app.settings.collection, chosen);
-    for _ in 0..5000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     Ok(())
 }
 
@@ -2542,7 +2540,7 @@ fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Res
         );
         assert!(!folder.join(".myfotomanager").exists(), "{folder:?}");
     }
-    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    assert!(!app.tasks.iter().any(|t| t.kind == JobKind::Scan));
     assert!(std::fs::read_dir(&card)?.next().is_none());
     // Der Ordner um die Quelle (Sammlung mit Zwischenordner wie `__einzuordnen`) ist erlaubt.
     app.notice = None;
@@ -2566,29 +2564,30 @@ fn imports_only_copy_and_the_collection_follows_after_the_last_import() -> anyho
     queue_days(&mut app, &["2026-11-01"], "Erster");
     queue_days(&mut app, &["2026-11-02"], "Zweiter");
     let mut checked_between = false;
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if tasks_of(&app, "index-new") > 0 {
-            assert_eq!(app.imports_pending(), 0, "Aufnahme erst nach allen Imports");
-        }
-        if app.imports[0].state == import_queue::BatchState::Done
-            && app.imports_pending() > 0
-            && !checked_between
-        {
-            // Der erste Import ist fertig: das Ziel ist gemerkt, der Index noch unverändert.
-            checked_between = true;
-            assert_eq!(app.settings.index_pending.len(), 1);
-            assert_eq!(indexed_files(target.path())?, 0);
-            assert!(app.notice.as_ref().is_some_and(|n| {
-                n.text
-                    .contains("wird nach den Imports in die Sammlung aufgenommen")
-            }));
-        }
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "Imports und Aufnahme fertig",
+        |app| {
+            app.poll(&egui::Context::default());
+            if tasks_of(app, "index-new") > 0 {
+                assert_eq!(app.imports_pending(), 0, "Aufnahme erst nach allen Imports");
+            }
+            if app.imports[0].state == import_queue::BatchState::Done
+                && app.imports_pending() > 0
+                && !checked_between
+            {
+                // Der erste Import ist fertig: das Ziel ist gemerkt, der Index noch unverändert.
+                checked_between = true;
+                assert_eq!(app.settings.index_pending.len(), 1);
+                assert_eq!(indexed_files(target.path()).expect("Index lesen"), 0);
+                assert!(app.notice.as_ref().is_some_and(|n| {
+                    n.text
+                        .contains("wird nach den Imports in die Sammlung aufgenommen")
+                }));
+            }
+        },
+        |app| app.tasks.is_empty(),
+    );
     assert!(checked_between);
     use import_queue::BatchState::*;
     assert_eq!(batch_states(&app), [Done, Done]);
@@ -2664,7 +2663,7 @@ fn a_new_import_stops_the_index_update_which_resumes_afterwards() -> anyhow::Res
     assert!(
         app.tasks
             .iter()
-            .any(|t| t.kind == "index-new" && t.task.control.cancel.load(Ordering::Relaxed)),
+            .any(|t| t.kind == JobKind::IndexNew && t.task.control.cancel.load(Ordering::Relaxed)),
         "Import geht vor"
     );
     assert_eq!(batch_states(&app), [import_queue::BatchState::Running]);
@@ -2842,7 +2841,9 @@ fn connect_mode_adds_the_chosen_relation_through_the_normal_path() -> anyhow::Re
     let button = text_centre(&output, "Anna ist Mutter von Bernd").expect("Eintrag im Menü");
     click_at(&context, &mut app, button);
     assert!(
-        app.tasks.iter().any(|t| t.kind == "mutation" && t.write),
+        app.tasks
+            .iter()
+            .any(|t| t.kind == JobKind::Mutation && t.write),
         "dieselbe Schreibaufgabe wie in der Übersicht"
     );
     wait_for_tasks(&mut app);
@@ -3202,7 +3203,7 @@ fn person_faces_page_confirms_probable_and_removes_only_deselected_faces() -> an
     assert_eq!(page_ids(&app), vec![vec![3]]);
     app.set_person_face_mode("person-confirmed");
     assert_eq!(app.page_mode(), "person-confirmed");
-    app.tasks.retain(|t| t.kind == "naming");
+    app.tasks.retain(|t| t.kind == JobKind::Naming);
     let confirmed = |id| Face {
         assignment: Some("user".into()),
         ..review_face(id, 1.0)
@@ -3341,5 +3342,27 @@ fn the_missing_files_dialog_lists_folders_and_removes_after_confirmation() -> an
     let c = Collection::open(root.path(), false)?;
     assert_eq!(c.status()?.missing, 0);
     assert_eq!(c.status()?.files, 3, "vorhandene Dateien bleiben");
+    Ok(())
+}
+
+#[test]
+fn the_setup_check_is_cached_and_repeated_when_the_paths_change() -> anyhow::Result<()> {
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    let dir = tempfile::tempdir()?;
+    let runtime = dir.path().join("onnxruntime.dll");
+    app.settings.onnx_runtime = runtime.to_string_lossy().into_owned();
+    let checked = |app: &PhotoApp| app.setup_files.borrow().as_ref().map(|f| f.checked);
+    assert!(app.setup_needed());
+    let first = checked(&app);
+    assert!(first.is_some());
+    // Weitere Frames fragen das Dateisystem nicht erneut.
+    assert!(app.setup_needed());
+    assert_eq!(checked(&app), first);
+    // Ein anderer Pfad wird sofort neu geprüft.
+    app.settings.onnx_runtime = dir.path().join("anders.dll").to_string_lossy().into_owned();
+    assert!(app.setup_needed());
+    assert_ne!(checked(&app), first);
     Ok(())
 }

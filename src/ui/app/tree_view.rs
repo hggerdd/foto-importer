@@ -570,11 +570,9 @@ impl PhotoApp {
     /// „`person` ist `role` von `object`“ mit voller Prüfung im Core, zentral abgeglichen.
     /// Das Ergebnis meldet sich als Hinweis und markiert Graph und Personen als veraltet.
     pub(super) fn save_relation(&mut self, person: i64, role: Role, object: i64) {
-        let root = self.settings.collection.clone();
         self.undo.clear();
         let config = self.settings.central();
-        self.launch("Beziehung speichern", true, "mutation", move |_| {
-            let mut c = Collection::open(Path::new(&root), true)?;
+        self.launch_write("Beziehung speichern", JobKind::Mutation, move |mut c, _| {
             let (_, note) = central::add_relation_synced(&mut c, &config, person, role, object)?;
             Ok(Outcome::Synced(
                 Box::new(Outcome::Done("Beziehung gespeichert".into())),
@@ -695,11 +693,9 @@ impl PhotoApp {
             self.relation_from = select;
         }
         if let Some((subject, role, object)) = action {
-            let root = self.settings.collection.clone();
             self.undo.clear();
             let config = self.settings.central();
-            self.launch("Beziehung entfernen", true, "mutation", move |_| {
-                let c = Collection::open(Path::new(&root), true)?;
+            self.launch_write("Beziehung entfernen", JobKind::Mutation, move |c, _| {
                 let note = central::remove_relation_synced(&c, &config, subject, role, object)?;
                 Ok(Outcome::Synced(
                     Box::new(Outcome::Done("Beziehung entfernt".into())),
@@ -781,11 +777,9 @@ impl PhotoApp {
         }
         let ready = problem.is_none() && !state.new_name.trim().is_empty();
         if theme::primary(ui, "Person anlegen", !busy && ready) {
-            let root = self.settings.collection.clone();
             self.undo.clear();
             let config = self.settings.central();
-            self.launch("Person anlegen", true, "mutation", move |_| {
-                let mut c = Collection::open(Path::new(&root), true)?;
+            self.launch_write("Person anlegen", JobKind::Mutation, move |mut c, _| {
                 let (id, note) = crate::core::central::add_person_synced(&mut c, &config, &new)?;
                 Ok(Outcome::Synced(Box::new(Outcome::PersonAdded(id)), note))
             });
