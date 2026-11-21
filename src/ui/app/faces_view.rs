@@ -293,14 +293,14 @@ impl PhotoApp {
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    self.thumbnails.image(
+                    self.thumbnails.hover_image(
                         ui,
                         PreviewRequest {
                             root: Some(PathBuf::from(&root)),
                             path: Path::new(&root).join(&face.source),
                             orientation: 1,
                             crop: None,
-                            edge: 800,
+                            edge: crate::config::HOVER_PREVIEW_EDGE,
                             generation: 0,
                         },
                         &exiftool,

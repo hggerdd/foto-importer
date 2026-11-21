@@ -77,7 +77,13 @@
   USB-Festplatte, 98 082 Dateien: kalt 16,6 s, warm 0,02 s; nur über `metadata_photos` kalt
   33,7 s — die verstreuten Seitenzugriffe begründen die Tabelle).
 - **Vorschauen:** Dekodierung nur auf Workern (zwei bis vier Threads), nur für sichtbare
-  Kacheln. Der Texturcache ist nach Wurzel, Pfad, Orientierung, Ausschnitt und Kantenlänge
+  Kacheln. Die Warteschlange (`ui::preview_queue`) hat zwei Bahnen: Das Foto unter der Maus
+  geht allen Kacheln vor, eine neue Mausanfrage ersetzt die wartende, und ein eigener
+  Worker (`THUMBNAIL_HOVER_WORKERS`) nimmt nur Mausanfragen, damit das Foto nie hinter einer
+  laufenden Kachelrunde wartet. Wartende Kacheln, die zuletzt gezeichnet wurden, kommen
+  zuerst; was `THUMBNAIL_STALE_FRAMES` Frames nicht gezeichnet wurde (weggescrollt, Maus
+  weiter), fällt heraus und wird beim nächsten Zeichnen neu angefragt. Die Zeit von der
+  Mausanfrage bis zur Textur steht als `vorschau maus gezeigt` im Diagnose-Log. Der Texturcache ist nach Wurzel, Pfad, Orientierung, Ausschnitt und Kantenlänge
   verschlüsselt, begrenzt auf 192 MiB und 512 Einträge, und räumt nichts, was im aktuellen
   oder vorigen Bild gezeichnet wurde. Vorschauen sind keine RAW-Entwicklung.
 - **Lokaler Vorschau-Cache** (`core::thumb_cache`): Ganze Vorschauen der Galerie (400) und
