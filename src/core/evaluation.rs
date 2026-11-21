@@ -114,7 +114,7 @@ type Raw = (i64, i64, Vec<u8>);
 
 /// Liest Referenzen und Abfragen für den eingestellten Embedder (nur lesend).
 pub fn load(collection: &Collection) -> Result<(Vec<Entry>, Vec<Entry>)> {
-    let Some(key) = setting(collection, "rust.embedder_key")? else {
+    let Some(key) = setting(collection, super::faces::EMBEDDER_KEY)? else {
         bail!("Kein Embedder in der Sammlung eingestellt (rust.embedder_key)");
     };
     let rows = |sql: &str| -> Result<Vec<Entry>> {

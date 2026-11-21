@@ -39,7 +39,7 @@ fn generated_path(root: &Path, path: &Path) -> Result<()> {
 pub fn export(collection: &Collection, exiftool: &str, control: &Control) -> Result<String> {
     collection.writable()?;
     let key =
-        faces::setting(collection, "rust.embedder_key")?.context("Kein aktiver Rust-Modellraum")?;
+        faces::setting(collection, faces::EMBEDDER_KEY)?.context("Kein aktiver Rust-Modellraum")?;
     let root = collection.root.join(".myfotomanager_faces");
     generated_path(&collection.root, &root)?;
     std::fs::create_dir_all(&root)?;
@@ -134,7 +134,7 @@ pub fn export(collection: &Collection, exiftool: &str, control: &Control) -> Res
 
 pub fn calibrate(collection: &Collection, control: &Control) -> Result<serde_json::Value> {
     let key =
-        faces::setting(collection, "rust.embedder_key")?.context("Kein aktiver Modellraum")?;
+        faces::setting(collection, faces::EMBEDDER_KEY)?.context("Kein aktiver Modellraum")?;
     let validations=collection.db.prepare("SELECT t.face_id,t.person_id,e.vec FROM training_set t JOIN faces f ON f.id=t.face_id JOIN face_embeddings e ON e.face_id=t.face_id AND e.embedder_id=t.embedder_id WHERE t.embedder_id=? AND t.split='val' AND f.assignment='user' AND f.ignored=0")?.query_map([&key],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,Vec<u8>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let people: usize = collection.db.query_row(
         "SELECT count(DISTINCT person_id) FROM training_set WHERE embedder_id=? AND split='ref'",
@@ -340,7 +340,7 @@ pub fn set_person(
 pub fn reference_action(collection: &Collection, face: i64, action: &str) -> Result<()> {
     collection.writable()?;
     let key =
-        faces::setting(collection, "rust.embedder_key")?.context("Kein aktiver Modellraum")?;
+        faces::setting(collection, faces::EMBEDDER_KEY)?.context("Kein aktiver Modellraum")?;
     let person:Option<i64>=collection.db.query_row("SELECT person_id FROM faces WHERE id=? AND assignment='user' AND ignored=0 AND quality>=0.5",[face],|r|r.get(0)).optional()?.flatten();
     let person = person.context("Nur geeignete bestätigte Gesichter können Referenzen sein")?;
     collection.db.execute_batch("BEGIN IMMEDIATE")?;

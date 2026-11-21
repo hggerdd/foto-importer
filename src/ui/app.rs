@@ -1433,7 +1433,7 @@ impl PhotoApp {
         self.name_portraits.clear();
         self.launch("Namensvorschläge lesen", false, "suggestions", move |_| {
             let c = Collection::open(Path::new(&root), false)?;
-            let key = faces::setting(&c, "rust.embedder_key")?.unwrap_or_default();
+            let key = faces::setting(&c, faces::EMBEDDER_KEY)?.unwrap_or_default();
             Ok(Outcome::Suggestions(
                 revision,
                 id,

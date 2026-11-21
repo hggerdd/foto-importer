@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
     };
     let matching = args.iter().any(|a| a == "--abgleich");
     let mut collection = Collection::open(Path::new(root), matching)?;
-    let key = faces::setting(&collection, "rust.embedder_key")?.unwrap_or_default();
+    let key = faces::setting(&collection, faces::EMBEDDER_KEY)?.unwrap_or_default();
     let people = faces::people(&collection)?;
     let person = match args.get(1).and_then(|a| a.parse::<i64>().ok()) {
         Some(id) => id,

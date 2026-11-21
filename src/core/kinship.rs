@@ -6,15 +6,8 @@
 //! Schritte abwärts), Verschwägerung über genau einen Partnerschritt und
 //! Stiefgeschwister über Elternpartner. Reine Funktionen ohne Datenbankzugriff.
 use super::relations::{Edge, Gender, Kind, Role};
+use crate::config::{KINSHIP_AFFINITY_MAX_STEPS, KINSHIP_MAX_GENERATIONS, KINSHIP_MAX_PER_GROUP};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-/// Höchstzahl Generationen je Richtung (aufwärts zum gemeinsamen Vorfahren und abwärts).
-/// Cousins bis zum 7. Grades sind damit auffindbar.
-pub const MAX_GENERATIONS: u8 = 8;
-/// Höchstzahl Einträge je Gruppe in [`Family::relatives_of`]; der Rest steht in `more`.
-pub const MAX_PER_GROUP: usize = 100;
-/// Verschwägerung wird nur über nahe Blutsverwandte berechnet (Summe der Schritte).
-const AFFINITY_MAX_STEPS: u8 = 4;
 
 /// Berechnete Beziehung "a ist <Relation> von b". Nichts davon wird gespeichert.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -401,7 +394,7 @@ pub struct Member {
 pub struct Group {
     pub title: String,
     pub members: Vec<Member>,
-    /// Weitere Treffer, die wegen [`MAX_PER_GROUP`] nicht aufgeführt sind.
+    /// Weitere Treffer, die wegen [`KINSHIP_MAX_PER_GROUP`] nicht aufgeführt sind.
     pub more: usize,
 }
 
@@ -504,7 +497,7 @@ pub struct OverviewItem {
 pub struct OverviewGroup {
     pub title: String,
     pub items: Vec<OverviewItem>,
-    /// Weitere berechnete Treffer, die wegen [`MAX_PER_GROUP`] fehlen.
+    /// Weitere berechnete Treffer, die wegen [`KINSHIP_MAX_PER_GROUP`] fehlen.
     pub more: usize,
 }
 
@@ -644,14 +637,14 @@ impl Family {
             .collect()
     }
 
-    /// Vorfahren bis [`MAX_GENERATIONS`] (kürzester Weg), die Person selbst bei 0.
+    /// Vorfahren bis [`KINSHIP_MAX_GENERATIONS`] (kürzester Weg), die Person selbst bei 0.
     fn ancestry(&self, person: i64) -> Ancestry {
         let mut seen: Ancestry = BTreeMap::new();
         seen.insert(person, (0, person));
         let mut open = VecDeque::from([person]);
         while let Some(next) = open.pop_front() {
             let depth = seen[&next].0;
-            if depth >= MAX_GENERATIONS {
+            if depth >= KINSHIP_MAX_GENERATIONS {
                 continue;
             }
             for &p in self.parents_of(next) {
@@ -806,7 +799,7 @@ impl Family {
                     },
                 mut path,
             }) = self.blood(a, p)
-                && a_gen + p_gen <= AFFINITY_MAX_STEPS
+                && a_gen + p_gen <= KINSHIP_AFFINITY_MAX_STEPS
             {
                 path.push(b);
                 offer(
@@ -828,7 +821,7 @@ impl Family {
                     },
                 path,
             }) = self.blood(p, b)
-                && p_gen + b_gen <= AFFINITY_MAX_STEPS
+                && p_gen + b_gen <= KINSHIP_AFFINITY_MAX_STEPS
             {
                 let mut full = vec![a];
                 full.extend(path);
@@ -921,13 +914,13 @@ impl Family {
         let mut out = BTreeSet::new();
         for x in self.ancestry(person).into_keys() {
             out.insert(x);
-            out.extend(self.descendants(x, MAX_GENERATIONS).into_keys());
+            out.extend(self.descendants(x, KINSHIP_MAX_GENERATIONS).into_keys());
         }
         out
     }
 
     /// Alle Verwandten einer Person, gruppiert und sortiert; je Gruppe höchstens
-    /// [`MAX_PER_GROUP`] Einträge (Rest in `more`). Nichts davon ist gespeichert.
+    /// [`KINSHIP_MAX_PER_GROUP`] Einträge (Rest in `more`). Nichts davon ist gespeichert.
     pub fn relatives_of(&self, person: i64) -> Vec<Group> {
         let mut groups: BTreeMap<String, (Order, Vec<Member>)> = BTreeMap::new();
         for other in self.candidates(person) {
@@ -948,8 +941,8 @@ impl Family {
             .into_iter()
             .map(|(title, (_, mut members))| {
                 members.sort_by_key(|m| m.person);
-                let more = members.len().saturating_sub(MAX_PER_GROUP);
-                members.truncate(MAX_PER_GROUP);
+                let more = members.len().saturating_sub(KINSHIP_MAX_PER_GROUP);
+                members.truncate(KINSHIP_MAX_PER_GROUP);
                 Group {
                     title,
                     members,

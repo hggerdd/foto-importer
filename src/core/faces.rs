@@ -157,6 +157,9 @@ fn tree_state(
     Ok((edges, family, questions))
 }
 
+/// Schlüssel in `face_settings`: der aktive Modellraum (Embedder) der Sammlung.
+pub const EMBEDDER_KEY: &str = "rust.embedder_key";
+
 pub fn setting(collection: &Collection, key: &str) -> Result<Option<String>> {
     let raw: Option<String> = collection
         .db
@@ -243,7 +246,7 @@ pub fn status(collection: &Collection) -> Result<Status> {
         ..Default::default()
     };
     status.detector = active_detector_key(collection)?.unwrap_or_default();
-    status.embedder = setting(collection, "rust.embedder_key")?.unwrap_or_default();
+    status.embedder = setting(collection, EMBEDDER_KEY)?.unwrap_or_default();
     let limits = super::recognition::Limits::load(collection)?;
     status.review_threshold = limits.review;
     status.review_margin = limits.margin;
@@ -900,7 +903,7 @@ pub fn analyze_scoped(
         )?;
     }
     save_setting(&collection.db, "rust.detector_key", &detector_key)?;
-    save_setting(&collection.db, "rust.embedder_key", &embedder_key)?;
+    save_setting(&collection.db, EMBEDDER_KEY, &embedder_key)?;
     save_setting(&collection.db, "active_detector", detector)?;
     save_setting(&collection.db, "active_embedder", embedder)?;
     let order = super::scope::analysis_order(collection, scope)?;
@@ -943,7 +946,7 @@ pub fn analyze_scoped(
                     for detection in &detections {
                         control.checkpoint()?;
                         let quality = detection.embedding_quality();
-                        if quality < 0.5 {
+                        if quality < crate::config::FACE_QUALITY_MIN {
                             embedded.push((quality, None));
                             continue;
                         }
@@ -967,7 +970,7 @@ pub fn analyze_scoped(
                             &collection.safe_path(&relative)?,
                             exiftool,
                             orientation,
-                            HIRES_EDGE,
+                            crate::config::FACE_HIRES_EDGE,
                             control,
                         )
                     {
@@ -1134,11 +1137,9 @@ fn analysis_rows(collection: &Collection, ids: &[i64]) -> Result<Vec<AnalysisRow
     rows.sort_by_key(|r| rank.get(&r.0).copied().unwrap_or(usize::MAX));
     Ok(rows)
 }
-/// Längere Bildkante für die Nachberechnung kleiner, klar erkannter Gesichter.
-const HIRES_EDGE: u32 = 3200;
 
 fn is_small_but_clear(detection: &inference::Detection) -> bool {
-    detection.score >= 0.8 && detection.embedding_quality() < 0.5
+    detection.score >= 0.8 && detection.embedding_quality() < crate::config::FACE_QUALITY_MIN
 }
 /// Größe und Namensmerkmale aus dem höher aufgelösten Bild; `None`, wenn das
 /// Gesicht auch dort zu klein oder nicht berechenbar ist.
@@ -1150,7 +1151,7 @@ fn embed_hires(
 ) -> Option<(f32, Vec<f32>)> {
     let scaled = detection.scaled(factor);
     let quality = scaled.embedding_quality();
-    if quality < 0.5 {
+    if quality < crate::config::FACE_QUALITY_MIN {
         return None;
     }
     models
@@ -1201,7 +1202,7 @@ fn upgrade_small_faces(
         &collection.safe_path(relative)?,
         exiftool,
         orientation,
-        HIRES_EDGE,
+        crate::config::FACE_HIRES_EDGE,
         control,
     )?;
     let long = hi.width().max(hi.height()) as f32;
@@ -1291,7 +1292,7 @@ pub fn prepare_groups(collection: &mut Collection, key: &str, control: &Control)
                         && decode(v)
                             .ok()
                             .and_then(|v| inference::cosine(&vector, &v))
-                            .is_some_and(|s| s >= 0.6)
+                            .is_some_and(|s| s >= crate::config::GROUP_JOIN_MIN)
                 }) {
                     matched = Some(group);
                     break;
@@ -1508,7 +1509,7 @@ pub fn mark_not_face(collection: &mut Collection, ids: &[i64]) -> Result<Undo> {
 /// Begrenzt auf wenige Schritte; was liegen bleibt, erledigt die Hintergrundwartung.
 /// Gruppen sind abgeleitet, ein Fehler hier darf die gespeicherte Entscheidung nicht gefährden.
 fn regroup_released(collection: &mut Collection, ids: &[i64]) {
-    let Ok(Some(key)) = setting(collection, "rust.embedder_key") else {
+    let Ok(Some(key)) = setting(collection, EMBEDDER_KEY) else {
         return;
     };
     let marks = vec!["?"; ids.len()].join(",");

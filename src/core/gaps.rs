@@ -11,8 +11,6 @@ use super::relations::{self, Edge, Kind, Role, validate_add};
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Höchstzahl gleichzeitig angezeigter Rückfragen.
-pub const MAX_SUGGESTIONS: usize = 30;
 const SETTING_KEY: &str = "family.declined_parents";
 const FRIENDS_KEY: &str = "family.declined_friends";
 
@@ -236,7 +234,7 @@ pub fn suggestions(edges: &[Edge], decisions: &Decisions) -> Vec<Suggestion> {
     out.sort_by(|x, y| {
         (x.kind, &x.targets, &x.candidates).cmp(&(y.kind, &y.targets, &y.candidates))
     });
-    out.truncate(MAX_SUGGESTIONS);
+    out.truncate(crate::config::GAPS_MAX_SUGGESTIONS);
     out
 }
 

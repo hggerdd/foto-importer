@@ -130,7 +130,7 @@ pub fn decline(collection: &mut Collection, a: i64, b: i64) -> Result<()> {
 
 /// Offene Rückfragen der Sammlung; ohne Gesichtsmodell keine.
 pub fn load(collection: &Collection) -> Result<Vec<Candidate>> {
-    let key = faces::setting(collection, "rust.embedder_key")?.unwrap_or_default();
+    let key = faces::setting(collection, faces::EMBEDDER_KEY)?.unwrap_or_default();
     if key.is_empty() {
         return Ok(Vec::new());
     }

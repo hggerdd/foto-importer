@@ -382,7 +382,7 @@ fn scored(
 }
 
 fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
-    let model = faces::setting(collection, "rust.embedder_key")?.unwrap_or_default();
+    let model = faces::setting(collection, faces::EMBEDDER_KEY)?.unwrap_or_default();
     let name = format!(
         "rust.thresholds.{model}.{}",
         name.strip_prefix("rust.").unwrap_or(name)
@@ -460,7 +460,7 @@ pub fn set_review_threshold(collection: &mut Collection, value: f32) -> Result<(
         );
     }
     let key =
-        faces::setting(collection, "rust.embedder_key")?.context("Zuerst Fotos analysieren")?;
+        faces::setting(collection, faces::EMBEDDER_KEY)?.context("Zuerst Fotos analysieren")?;
     let tx = collection.db.transaction()?;
     tx.execute(
         "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
@@ -484,7 +484,7 @@ fn rebuild(collection: &mut Collection, control: &Control, reset: bool) -> Resul
     collection.writable()?;
     control.set_face_phase(super::jobs::FacePhase::References);
     let key =
-        faces::setting(collection, "rust.embedder_key")?.context("Zuerst Fotos analysieren")?;
+        faces::setting(collection, faces::EMBEDDER_KEY)?.context("Zuerst Fotos analysieren")?;
     // Offene Gesichter zuerst gruppieren: Abgelehnte und neu analysierte Gesichter sollen
     // nach Sekunden unter „Benennen“ stehen, nicht erst nach dem vollen Abgleich.
     while faces::prepare_groups(collection, &key, control)? > 0 {}

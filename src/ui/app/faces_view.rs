@@ -659,7 +659,7 @@ impl PhotoApp {
                             ui.label(RichText::new("Ähnlichste Personen:").small().weak());
                             for (index, (person, name, score)) in proposals.items.iter().enumerate()
                             {
-                                let detail = format!("{score:.2}").replace('.', ",");
+                                let detail = crate::core::progress::decimal(*score, 2);
                                 let hint =
                                     top.then(|| format!("Taste {} (oberste Gruppe)", index + 1));
                                 if Self::suggestion_chip(
@@ -1199,7 +1199,7 @@ fn similarity_text(scores: impl Iterator<Item = f32>) -> Option<String> {
                 (low.min(score), high.max(score))
             }))
         })?;
-    let decimal = |value: f32| format!("{value:.2}").replace('.', ",");
+    let decimal = |value: f32| crate::core::progress::decimal(value, 2);
     let (low, high) = (decimal(low), decimal(high));
     Some(if low == high {
         format!("Ähnlichkeit {low}")

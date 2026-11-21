@@ -2,7 +2,7 @@
 //! Anwendung auf eine Sammlung.
 use foto_importer::core::{
     collection::Collection,
-    gaps::{self, Answer, Decisions, MAX_SUGGESTIONS, Suggestion, SuggestionKind},
+    gaps::{self, Answer, Decisions, Suggestion, SuggestionKind},
     relations::{self, Edge, Role, canonical},
 };
 
@@ -186,7 +186,7 @@ fn contradictions_are_never_suggested() {
 #[test]
 fn questions_are_bounded_and_ordered() {
     let mut edges = Vec::new();
-    for k in 0..(MAX_SUGGESTIONS as i64 + 10) {
+    for k in 0..(foto_importer::config::GAPS_MAX_SUGGESTIONS as i64 + 10) {
         let base = 1000 + k * 10;
         edges.extend([
             parent(base, base + 3),
@@ -195,7 +195,7 @@ fn questions_are_bounded_and_ordered() {
         ]);
     }
     let found = ask(&edges);
-    assert_eq!(found.len(), MAX_SUGGESTIONS);
+    assert_eq!(found.len(), foto_importer::config::GAPS_MAX_SUGGESTIONS);
     let targets: Vec<_> = found.iter().map(|s| s.targets[0]).collect();
     let mut sorted = targets.clone();
     sorted.sort();

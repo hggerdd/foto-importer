@@ -21,7 +21,7 @@ impl PhotoApp {
         self.hover_preview_footer(ui);
         self.face_toolbar(ui);
         let hint = if self.person_face_mode == "probable" {
-            let minimum = format!("{:.2}", config::PERSON_CANDIDATE_MIN).replace('.', ",");
+            let minimum = crate::core::progress::decimal(config::PERSON_CANDIDATE_MIN, 2);
             format!(
                 "Unbestätigte Gesichter, nach Ähnlichkeit zu {0} geordnet, wahrscheinlichste zuerst \
                  (ab {minimum}); darunter die, die einer anderen Person noch ähnlicher sind als \
@@ -208,7 +208,7 @@ pub(super) fn better_note(better: Option<&(i64, f32)>, people: &[faces::Person])
     Some(format!(
         "eher: {} ({})",
         person_name(people, *person),
-        format!("{score:.2}").replace('.', ",")
+        crate::core::progress::decimal(*score, 2)
     ))
 }
 

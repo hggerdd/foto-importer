@@ -1603,7 +1603,7 @@ impl PhotoApp {
                 });
                 ui.label(muted(format!(
                     "Ähnlichkeit {}",
-                    format!("{:.2}", d.similarity).replace('.', ",")
+                    crate::core::progress::decimal(d.similarity, 2)
                 )));
                 ui.horizontal_wrapped(|ui| {
                     if ui
