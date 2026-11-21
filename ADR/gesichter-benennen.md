@@ -109,7 +109,9 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   Kantenlänge, Ausrichtung). Sie werden nie ersetzt, vom Indizieren übersprungen und von
   „Biometrie entfernen“ gelöscht.
 - **Vorschau unter der Maus:** Das ganze Foto zum Gesicht unter dem Zeiger, abschaltbar,
-  höchstens eine Vorschau gleichzeitig.
+  höchstens eine Vorschau gleichzeitig. Sie hat Vorrang vor allen Kacheln der Seite und
+  nutzt die Kantenlänge des Inspektors (`HOVER_PREVIEW_EDGE` = 960), damit der lokale
+  Vorschau-Cache greift (siehe [Sammlungsansicht](sammlungsansicht.md)).
 - **Kopf der Ansicht:** eine Statuszeile mit höchstens einer Hauptaktion
   (`recognition_view::status_line`, reine Funktion): was gerade läuft, sonst „Einrichten …“
   bei fehlender Laufzeit oder fehlenden Modellen, „N von M Fotos analysiert“ mit „Fotos

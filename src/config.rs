@@ -41,6 +41,15 @@ pub const START_VIEW_MAX_BYTES: u64 = 1024 * 1024;
 pub const LOCAL_CACHE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
 pub const THUMBNAIL_WORKERS: usize = 4;
+/// Zusätzliche Vorschau-Arbeiter nur für das Foto unter der Maus: Es wartet nie hinter einer
+/// laufenden Kachelrunde (eine DNG-Vorschau kostet auf der USB-Platte 1,5 bis 2 s).
+pub const THUMBNAIL_HOVER_WORKERS: usize = 1;
+/// Wartende Vorschauaufträge, die so viele Frames nicht mehr gezeichnet wurden (weggescrollt,
+/// Maus weiter), werden verworfen.
+pub const THUMBNAIL_STALE_FRAMES: u64 = 2;
+/// Kantenlänge des Fotos unter der Maus; dieselbe wie im Bildinspektor, damit der lokale
+/// Vorschau-Cache (`THUMB_CACHE_EDGES`) greift.
+pub const HOVER_PREVIEW_EDGE: u32 = 960;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
 pub const GROUP_MAX: usize = 28;
 /// So viele Gesichter einer Gruppe fließen in ihren gemeinsamen Namensvorschlag ein.

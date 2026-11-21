@@ -4,9 +4,10 @@ use crate::{
         jobs::Control,
         previews::{self, Preview, PreviewRequest},
     },
+    ui::preview_queue::{PreviewQueue, Priority},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -79,40 +80,72 @@ fn log_preview(
     }
 }
 
+type Job = (PreviewRequest, String);
+type Done = (String, u64, std::time::Duration, anyhow::Result<Preview>);
+
+/// Wartender oder laufender Auftrag der Oberfläche: wann zuerst angefragt und mit welchem
+/// Vorrang (für die Latenz des Fotos unter der Maus im Diagnose-Log).
+struct Pending {
+    since: std::time::Instant,
+    priority: Priority,
+    path: std::path::PathBuf,
+}
+
+/// Foto unter der Maus: Zeit von der ersten Anfrage bis zur fertigen Textur (gezeigt im
+/// nächsten Frame), davon Dekodierung bzw. Cachelesen und Warten.
+fn log_hover(
+    path: &std::path::Path,
+    total: std::time::Duration,
+    decode: std::time::Duration,
+    ok: bool,
+) {
+    let millis = crate::core::diag::millis;
+    log::info!(
+        target: "vorschau",
+        "maus gezeigt datei={:?} dauer_ms={:.1} dekodieren_ms={:.1} warten_ms={:.1} ergebnis={}",
+        path.display().to_string(),
+        millis(total),
+        millis(decode),
+        millis(total.saturating_sub(decode)),
+        if ok { "ok" } else { "fehler" }
+    );
+}
+
 pub struct Thumbnails {
-    requests: mpsc::SyncSender<(String, PreviewRequest, String)>,
-    results: mpsc::Receiver<(String, u64, anyhow::Result<Preview>)>,
+    queue: Arc<PreviewQueue<Job>>,
+    results: mpsc::Receiver<Done>,
     cache: HashMap<String, Entry>,
-    pending: HashSet<String>,
+    pending: HashMap<String, Pending>,
     generation: Arc<AtomicU64>,
     tick: u64,
     bytes: usize,
 }
+impl Drop for Thumbnails {
+    fn drop(&mut self) {
+        self.queue.close();
+    }
+}
 impl Thumbnails {
     pub fn new(ctx: egui::Context) -> Self {
         // Mehrere Arbeiter dekodieren Fotos gleichzeitig (ein Foto kostet 100 bis 300 ms, eine
-        // Seite zeigt Dutzende Gesichter, ADR 0068); die Anfragewarteschlange bleibt kurz, damit
-        // sichtbare Kacheln Vorrang vor längst weggescrollten behalten.
+        // Seite zeigt Dutzende Gesichter, ADR 0068); die Kachelbahn bleibt kurz, damit
+        // sichtbare Kacheln Vorrang vor längst weggescrollten behalten. Dazu kommen reservierte
+        // Arbeiter nur für das Foto unter der Maus.
         let workers = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
             .clamp(2, config::THUMBNAIL_WORKERS);
-        let (tx, rx) = mpsc::sync_channel::<(String, PreviewRequest, String)>(workers);
-        let (out, input) = mpsc::sync_channel(workers * 2);
+        let queue: Arc<PreviewQueue<Job>> =
+            Arc::new(PreviewQueue::new(workers, config::THUMBNAIL_STALE_FRAMES));
+        let (out, input) = mpsc::sync_channel(workers * 2 + config::THUMBNAIL_HOVER_WORKERS);
         let generation = Arc::new(AtomicU64::new(0));
-        let rx = Arc::new(std::sync::Mutex::new(rx));
-        for _ in 0..workers {
-            let (rx, out, ctx) = (rx.clone(), out.clone(), ctx.clone());
+        for index in 0..workers + config::THUMBNAIL_HOVER_WORKERS {
+            let hover_only = index >= workers;
+            let (queue, out, ctx) = (queue.clone(), out.clone(), ctx.clone());
             let worker_generation = generation.clone();
             std::thread::spawn(move || {
-                loop {
-                    let next = match rx.lock() {
-                        Ok(queue) => queue.recv(),
-                        Err(_) => break,
-                    };
-                    let Ok((key, request, exiftool)) = next else {
-                        break;
-                    };
+                while let Some((key, (request, exiftool), _)) = queue.pop(hover_only) {
                     if request.generation != worker_generation.load(Ordering::Relaxed) {
+                        // Die Oberfläche hat ihren Stand vergessen (`clear`); nichts melden.
                         continue;
                     }
                     let _foreground = crate::core::jobs::foreground();
@@ -120,10 +153,14 @@ impl Thumbnails {
                     let started = std::time::Instant::now();
                     let path = crate::core::diag::enabled().then(|| request.path.clone());
                     let result = previews::cached_preview(request, &exiftool, &Control::default());
+                    let elapsed = started.elapsed();
                     if let Some(path) = path {
-                        log_preview(&path, started.elapsed(), &result);
+                        log_preview(&path, elapsed, &result);
                     }
-                    if out.send((key, request_generation, result)).is_err() {
+                    if out
+                        .send((key, request_generation, elapsed, result))
+                        .is_err()
+                    {
                         break;
                     }
                     ctx.request_repaint();
@@ -131,17 +168,50 @@ impl Thumbnails {
             });
         }
         Self {
-            requests: tx,
+            queue,
             results: input,
             cache: HashMap::new(),
-            pending: HashSet::new(),
+            pending: HashMap::new(),
             generation,
             tick: 0,
             bytes: 0,
         }
     }
+    /// Fordert eine Vorschau an oder hält eine wartende Anfrage am Leben (sie wurde in diesem
+    /// Frame gezeichnet). Eine Mausanfrage holt eine schon wartende Kachel nach vorn.
+    fn request(
+        &mut self,
+        key: String,
+        request: PreviewRequest,
+        exiftool: &str,
+        priority: Priority,
+    ) {
+        if let Some(pending) = self.pending.get_mut(&key) {
+            if priority == Priority::Hover && pending.priority == Priority::Tile {
+                pending.priority = Priority::Hover;
+                self.queue.promote(&key);
+            }
+            self.queue.touch(&key);
+            return;
+        }
+        let path = request.path.clone();
+        if self
+            .queue
+            .push(key.clone(), (request, exiftool.to_string()), priority)
+        {
+            self.pending.insert(
+                key,
+                Pending {
+                    since: std::time::Instant::now(),
+                    priority,
+                    path,
+                },
+            );
+        }
+    }
     pub fn clear(&mut self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
+        self.queue.clear();
         self.cache.clear();
         self.pending.clear();
         self.bytes = 0;
@@ -154,10 +224,24 @@ impl Thumbnails {
     /// Übernimmt fertige Vorschauen; liefert die Zahl hochgeladener Texturen.
     pub fn poll(&mut self, ctx: &egui::Context) -> usize {
         let mut uploaded = 0;
-        while let Ok((key, generation, result)) = self.results.try_recv() {
+        self.queue.set_frame(ctx.cumulative_frame_nr());
+        for key in self.queue.take_dropped() {
             self.pending.remove(&key);
+        }
+        while let Ok((key, generation, decode, result)) = self.results.try_recv() {
+            let pending = self.pending.remove(&key);
             if generation != self.generation.load(Ordering::Relaxed) {
                 continue;
+            }
+            if let Some(pending) = pending.filter(|p| p.priority == Priority::Hover)
+                && crate::core::diag::enabled()
+            {
+                log_hover(
+                    &pending.path,
+                    pending.since.elapsed(),
+                    decode,
+                    result.is_ok(),
+                );
             }
             let (texture, bytes, error) = match result {
                 Ok(p) => {
@@ -211,22 +295,36 @@ impl Thumbnails {
             entry.frame = ctx.cumulative_frame_nr();
             return entry.texture.as_ref().map(|t| (t.id(), t.size_vec2()));
         }
-        if !self.pending.contains(&key)
-            && self
-                .requests
-                .try_send((key.clone(), request, exiftool.to_string()))
-                .is_ok()
-        {
-            self.pending.insert(key);
-        }
+        self.request(key, request, exiftool, Priority::Tile);
         None
     }
     pub fn image(
         &mut self,
         ui: &mut egui::Ui,
+        request: PreviewRequest,
+        exiftool: &str,
+        size: egui::Vec2,
+    ) -> egui::Response {
+        self.image_with(ui, request, exiftool, size, Priority::Tile)
+    }
+    /// Wie [`Self::image`] für das Foto unter der Maus: geht allen wartenden Kacheln vor und
+    /// ersetzt eine noch wartende frühere Mausanfrage.
+    pub fn hover_image(
+        &mut self,
+        ui: &mut egui::Ui,
+        request: PreviewRequest,
+        exiftool: &str,
+        size: egui::Vec2,
+    ) -> egui::Response {
+        self.image_with(ui, request, exiftool, size, Priority::Hover)
+    }
+    fn image_with(
+        &mut self,
+        ui: &mut egui::Ui,
         mut request: PreviewRequest,
         exiftool: &str,
         size: egui::Vec2,
+        priority: Priority,
     ) -> egui::Response {
         self.tick += 1;
         request.generation = self.generation.load(Ordering::Relaxed);
@@ -287,14 +385,7 @@ impl Thumbnails {
                     egui::FontId::proportional(12.0),
                     egui::Color32::GRAY,
                 );
-                if !self.pending.contains(&key)
-                    && self
-                        .requests
-                        .try_send((key.clone(), request, exiftool.to_string()))
-                        .is_ok()
-                {
-                    self.pending.insert(key);
-                }
+                self.request(key, request, exiftool, priority);
             }
         }
         response
