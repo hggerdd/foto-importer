@@ -110,6 +110,9 @@ pub struct FacePage {
     /// Reiter „probable“: beste andere Person (ID, Personenscore) je Gesicht der Seite aus dem
     /// zweiten Abschnitt. Gruppen mischen die Abschnitte nie.
     pub better: BTreeMap<i64, (i64, f32)>,
+    /// Datenstand, zu dem die Seite gelesen wurde (`core::revision`; `None` ohne Revision).
+    /// Caches der Oberfläche, die aus denselben Daten entstehen, prüfen sich daran.
+    pub revisions: Option<super::revision::Revisions>,
 }
 
 /// Tabellenzeilen und Porträts für den Reiter „persons“, sonst leer.
@@ -651,6 +654,7 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            revisions: None,
         });
     }
     if mode == "unknown" && status.embedder.is_empty() {
@@ -671,6 +675,7 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            revisions: None,
         });
     }
     if mode == "unsuitable" {
@@ -800,6 +805,7 @@ pub fn page_with(
         faces_total,
         probable_others,
         better,
+        revisions: None,
     })
 }
 

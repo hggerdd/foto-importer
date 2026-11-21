@@ -121,6 +121,8 @@ pub struct PersonData {
     pub birth: Option<Birth>,
     pub decisions: Decisions,
     pub relatives: Vec<(i64, &'static str)>,
+    /// Datenstand derselben Lesetransaktion (`core::revision`).
+    pub revisions: Option<super::revision::Revisions>,
 }
 
 /// Liest Gesichter, Geburt, Entscheidungen und Verwandte einer Person in einer
@@ -134,6 +136,7 @@ pub fn load_person(collection: &Collection, person: i64) -> Result<PersonData> {
             birth: birth(collection, person)?,
             decisions: load_decisions(collection, person)?,
             relatives: relatives(&super::relations::load_family(collection)?, person),
+            revisions: super::revision::read(&collection.db)?,
         })
     })();
     collection.db.execute_batch("ROLLBACK")?;

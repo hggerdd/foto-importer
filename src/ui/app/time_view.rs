@@ -8,6 +8,7 @@ use super::*;
 use crate::core::timeline_export;
 use crate::core::{
     faces::Person,
+    revision::{Domain, Key, Revisions},
     timeline::{
         self, Axis, Birth, Computed, DateQuality, Decisions, Grain, Params, PersonData, Section,
         Thresholds, TimeFace,
@@ -27,12 +28,21 @@ pub(super) enum Tab {
     Lapse,
 }
 
-/// Gelesene Daten einer Person; bleiben je Person im Speicher, bis sich der Bestand ändert.
+/// Bereiche der Datenrevision, aus denen die Zeitreise liest: Zuordnungen und Entscheidungen
+/// (Gesichter, `face_settings`) sowie Personen, Geburtsangaben und Verwandte. Metadaten
+/// (`files`) gehören nicht dazu: ein Hintergrundlauf der Metadaten soll die gezeigte Person
+/// nicht laufend neu lesen.
+const DOMAINS: &[Domain] = &[Domain::Faces, Domain::People];
+
+/// Gelesene Daten einer Person; bleiben je Person im Speicher, solange der Datenstand
+/// (`key`) der zuletzt gesehene ist.
 #[derive(Clone)]
 pub(super) struct PersonCache {
     raw: Arc<Vec<TimeFace>>,
     birth: Option<Birth>,
     decisions: Decisions,
+    /// Datenstand beim Lesen; `None` ohne Revision (dann nie gemerkt).
+    key: Option<Key>,
 }
 
 impl From<PersonData> for PersonCache {
@@ -41,6 +51,7 @@ impl From<PersonData> for PersonCache {
             raw: Arc::new(data.raw),
             birth: data.birth,
             decisions: data.decisions,
+            key: data.revisions.map(|r| r.key(DOMAINS)),
         }
     }
 }
@@ -48,8 +59,6 @@ impl From<PersonData> for PersonCache {
 /// Ergebnis des Ladeauftrags: Gesichter der gewählten Person und die erste Berechnung.
 pub(super) struct Loaded {
     revision: u64,
-    /// Datenstand (`TimeUi::data_serial`) beim Start; nur dann darf das Ergebnis in den Cache.
-    serial: u64,
     person: i64,
     data: PersonCache,
     computed: Computed,
@@ -63,8 +72,8 @@ pub(super) enum TimeOutcome {
         revision: u64,
         computed: Computed,
     },
-    /// Eine Nutzerentscheidung ist gespeichert; neu laden.
-    Decided,
+    /// Eine Nutzerentscheidung ist gespeichert; Datenstand nach dem Schreiben.
+    Decided(Option<Revisions>),
     /// Ein Export ist fertig (Pfad) oder wurde im Ordnerdialog abgebrochen.
     Exported(Option<PathBuf>),
 }
@@ -90,10 +99,14 @@ pub(super) struct TimeUi {
     birth: Option<Birth>,
     decisions: Decisions,
     computed: Option<Arc<Computed>>,
-    /// Zuletzt gelesene Personen (neueste hinten), höchstens `TIMELINE_CACHED_PEOPLE`.
+    /// Zuletzt gelesene Personen (neueste hinten), höchstens `TIMELINE_CACHED_PEOPLE`, alle
+    /// zum Datenstand `known`.
     cache: VecDeque<(i64, PersonCache)>,
-    /// Erhöht bei jeder Änderung am Bestand; ältere Ladeergebnisse kommen nicht in den Cache.
-    data_serial: u64,
+    /// Neuester gesehener Datenstand ([`DOMAINS`]); aus Gesichterseite, Ladeaufträgen und
+    /// gespeicherten Entscheidungen.
+    known: Option<Key>,
+    /// Datenstand der gezeigten Person.
+    shown_key: Option<Key>,
     pub axis: Axis,
     pub grain: Option<Grain>,
     include_auto: bool,
@@ -128,7 +141,8 @@ impl Default for TimeUi {
             decisions: Decisions::default(),
             computed: None,
             cache: VecDeque::new(),
-            data_serial: 0,
+            known: None,
+            shown_key: None,
             axis: Axis::Date,
             grain: None,
             include_auto: false,
@@ -185,13 +199,37 @@ impl TimeUi {
     pub(super) fn failed(&mut self, error: String) {
         self.error = error;
     }
-    /// Der Bestand hat sich geändert: Personenliste und gewählte Person neu lesen, gemerkte
-    /// Personen verwerfen. Laufende Ladeaufträge dürfen nicht mehr in den Cache.
-    pub(super) fn invalidate(&mut self) {
-        self.cache.clear();
-        self.data_serial += 1;
-        self.need_load = true;
-        self.need_people = true;
+    /// Ein gelesener Datenstand der Sammlung. Ist er neuer als der bekannte, gelten gemerkte
+    /// Personen und die Personenliste nicht mehr; die gezeigte Person wird neu gelesen (sie
+    /// bleibt bis dahin sichtbar). Ältere oder gleiche Stände ändern nichts.
+    pub(super) fn observe(&mut self, revisions: &Revisions) {
+        self.observe_key(revisions.key(DOMAINS));
+    }
+    fn observe_key(&mut self, key: Key) {
+        if let Some(known) = &self.known
+            && (*known == key || key.older_than(known))
+        {
+            return;
+        }
+        let first = self.known.is_none();
+        self.known = Some(key);
+        let known = self.known.clone();
+        self.cache.retain(|(_, data)| data.key == known);
+        if !first {
+            self.need_people = true;
+        }
+        if self.loaded_person.is_some() && self.shown_key != known {
+            self.need_load = true;
+        }
+    }
+    /// Ist dies der neueste gesehene Datenstand?
+    #[cfg(test)]
+    pub(super) fn knows(&self, revisions: &Revisions) -> bool {
+        self.known.as_ref() == Some(&revisions.key(DOMAINS))
+    }
+    /// Darf ein Ergebnis zu diesem Stand gemerkt werden? Nur zum neuesten bekannten.
+    fn current(&self, key: Option<&Key>) -> bool {
+        key.is_some() && key == self.known.as_ref()
     }
     fn cached(&self, person: i64) -> Option<PersonCache> {
         self.cache
@@ -200,6 +238,9 @@ impl TimeUi {
             .map(|(_, data)| data.clone())
     }
     fn remember(&mut self, person: i64, data: PersonCache) {
+        if !self.current(data.key.as_ref()) {
+            return;
+        }
         self.cache.retain(|(id, _)| *id != person);
         self.cache.push_back((person, data));
         while self.cache.len() > config::TIMELINE_CACHED_PEOPLE {
@@ -209,6 +250,7 @@ impl TimeUi {
     /// Zeigt die Daten dieser Person (Berechnung folgt).
     fn show(&mut self, person: i64, data: PersonCache) {
         self.loaded_person = Some(person);
+        self.shown_key = data.key;
         self.raw = Some(data.raw);
         self.birth = data.birth;
         self.decisions = data.decisions;
@@ -216,6 +258,7 @@ impl TimeUi {
     /// Nichts von einer anderen Person zeigen, solange die gewählte gelesen wird.
     fn clear_shown(&mut self) {
         self.loaded_person = None;
+        self.shown_key = None;
         self.raw = None;
         self.birth = None;
         self.decisions = Decisions::default();
@@ -353,8 +396,11 @@ impl PhotoApp {
     /// Liest die Gesichter nur dieser Person; ersetzt einen laufenden Ladeauftrag.
     fn launch_time_load(&mut self, person: i64, min_px: u32) {
         self.time_ui.revision += 1;
-        let (revision, serial) = (self.time_ui.revision, self.time_ui.data_serial);
-        self.time_ui.clear_shown();
+        let revision = self.time_ui.revision;
+        // Dieselbe Person bleibt sichtbar, bis ihr neuer Stand kommt; eine andere nie.
+        if self.time_ui.loaded_person != Some(person) {
+            self.time_ui.clear_shown();
+        }
         let params = self.time_ui.params(min_px);
         let root = PathBuf::from(&self.settings.collection);
         self.launch("Zeitreise lesen", false, "timeline", move |control| {
@@ -372,7 +418,6 @@ impl PhotoApp {
             let computed = timeline::compute(&data.raw, &params);
             Ok(Outcome::Time(TimeOutcome::Loaded(Box::new(Loaded {
                 revision,
-                serial,
                 person,
                 data: data.into(),
                 computed,
@@ -420,14 +465,21 @@ impl PhotoApp {
             }
             TimeOutcome::Loaded(loaded) => {
                 let loaded = *loaded;
-                // Auch eine überholte Antwort ist für ihre Person richtig: merken.
-                if loaded.serial == ui.data_serial {
-                    ui.remember(loaded.person, loaded.data.clone());
+                let pending = ui.need_load;
+                if let Some(key) = &loaded.data.key {
+                    ui.observe_key(key.clone());
                 }
+                // Auch eine überholte Antwort ist für ihre Person richtig: merken, wenn sie
+                // zum neuesten Datenstand gehört.
+                ui.remember(loaded.person, loaded.data.clone());
                 if loaded.revision != ui.revision {
                     return;
                 }
                 ui.error.clear();
+                // Diese Antwort ersetzt die gezeigte Person. Älter als der inzwischen bekannte
+                // Stand: zeigen, aber gleich neu lesen.
+                ui.need_load =
+                    pending || loaded.data.key.is_some() && !ui.current(loaded.data.key.as_ref());
                 ui.show(loaded.person, loaded.data);
                 ui.axis = loaded.computed.axis;
                 ui.apply(loaded.computed);
@@ -439,7 +491,11 @@ impl PhotoApp {
                 ui.axis = computed.axis;
                 ui.apply(computed);
             }
-            TimeOutcome::Decided => ui.invalidate(),
+            TimeOutcome::Decided(revisions) => match revisions {
+                Some(revisions) => ui.observe(&revisions),
+                // Ohne Revision: nichts gemerkt, die Person neu lesen.
+                None => ui.need_load = true,
+            },
             TimeOutcome::Exported(path) => {
                 let text = path.map_or_else(
                     || "Export abgebrochen.".to_owned(),
@@ -526,7 +582,9 @@ impl PhotoApp {
                 Decision::Hide(face, hidden) => timeline::set_hidden(&c, person, face, hidden)?,
                 Decision::BirthMonth(month) => timeline::set_birth_month(&c, person, month)?,
             }
-            Ok(Outcome::Time(TimeOutcome::Decided))
+            Ok(Outcome::Time(TimeOutcome::Decided(
+                crate::core::revision::read(&c.db)?,
+            )))
         });
     }
 
@@ -1440,10 +1498,24 @@ mod tests {
         assert_eq!(labels, ["Zeitreise berechnen"], "keine Datenbankabfrage");
         settle(&mut app, &ctx);
         assert_eq!(app.time_ui.computed.as_ref().map(|c| c.total), Some(1));
-        // Eine Änderung am Bestand verwirft alles Gemerkte; Anna wird neu gelesen.
-        app.time_ui.invalidate();
+        // Geänderte Metadaten (Bereich `files`) lassen Gemerktes stehen.
+        let changed = |sql: &str| -> anyhow::Result<crate::core::revision::Revisions> {
+            let c = Collection::open(root.path(), true)?;
+            c.db.execute_batch(sql)?;
+            Ok(crate::core::revision::read(&c.db)?.expect("Revision"))
+        };
+        app.time_ui.observe(&changed(
+            "UPDATE meta SET dt_original='2021:06:01 12:00:00' WHERE file_id=2",
+        )?);
+        assert!(app.time_ui.cached(2).is_some());
+        assert!(!app.time_ui.need_load);
+        // Eine geänderte Zuordnung verwirft alles Gemerkte; Anna wird neu gelesen und bleibt
+        // bis dahin sichtbar.
+        app.time_ui
+            .observe(&changed("UPDATE faces SET assignment='auto' WHERE id=2")?);
         assert!(app.time_ui.cached(2).is_none());
         app.sync_time();
+        assert_eq!(app.time_ui.loaded_person, Some(1));
         let labels: Vec<&str> = app
             .tasks
             .iter()
@@ -1453,6 +1525,8 @@ mod tests {
         assert_eq!(labels, ["Zeitreise lesen"]);
         settle(&mut app, &ctx);
         assert_eq!(app.time_ui.loaded_person, Some(1));
+        assert!(!app.time_ui.need_load, "kein zweites Lesen");
+        assert!(app.time_ui.cached(1).is_some());
         Ok(())
     }
 
@@ -1479,27 +1553,39 @@ mod tests {
         assert!(loads >= 1);
         settle(&mut app, &ctx);
         assert_eq!(app.time_ui.loaded_person, Some(2));
-        // Eine verspätete Antwort für Anna wird gemerkt, aber nicht gezeigt.
-        let late = Loaded {
-            revision: first,
-            serial: app.time_ui.data_serial,
+        // Eine verspätete Antwort für Anna zum selben Datenstand wird gemerkt, aber nicht
+        // gezeigt.
+        let now = crate::core::revision::read(&Collection::open(root.path(), false)?.db)?
+            .expect("Revision");
+        let answer = |revision: u64, revisions: &crate::core::revision::Revisions| Loaded {
+            revision,
             person: 1,
-            data: PersonData::default().into(),
+            data: PersonData {
+                revisions: Some(revisions.clone()),
+                ..Default::default()
+            }
+            .into(),
             computed: timeline::compute(&[], &Params::default()),
         };
-        app.accept_time(TimeOutcome::Loaded(Box::new(late)));
+        app.accept_time(TimeOutcome::Loaded(Box::new(answer(first, &now))));
         assert_eq!(app.time_ui.loaded_person, Some(2));
         assert!(app.time_ui.cached(1).is_some());
         // Ergebnisse von vor einer Änderung kommen nicht in den Speicher.
-        app.time_ui.invalidate();
-        let old = Loaded {
+        let newer = crate::core::revision::Revisions {
+            people: now.people + 1,
+            ..now.clone()
+        };
+        app.time_ui.observe(&newer);
+        assert!(app.time_ui.cached(1).is_none());
+        app.accept_time(TimeOutcome::Loaded(Box::new(answer(0, &now))));
+        assert!(app.time_ui.cached(1).is_none());
+        // Ohne Revision wird nichts gemerkt.
+        app.accept_time(TimeOutcome::Loaded(Box::new(Loaded {
             revision: 0,
-            serial: app.time_ui.data_serial - 1,
             person: 1,
             data: PersonData::default().into(),
             computed: timeline::compute(&[], &Params::default()),
-        };
-        app.accept_time(TimeOutcome::Loaded(Box::new(old)));
+        })));
         assert!(app.time_ui.cached(1).is_none());
         Ok(())
     }

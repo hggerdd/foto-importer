@@ -1,4 +1,8 @@
-use super::{collection::Collection, metadata::PHOTO_FORMATS};
+use super::{
+    collection::Collection,
+    metadata::PHOTO_FORMATS,
+    revision::{self, Domain},
+};
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -431,40 +435,18 @@ pub fn network(collection: &Collection) -> Result<Network> {
     })
 }
 
-/// Fingerabdruck aller Daten, aus denen der Graph entsteht: Stand der Sammlung (Identität,
-/// Projektionsrevision für Fotoformate), Personen, Personenangaben, Beziehungen, ihre Typen
-/// und die bestätigten Gesichter (Anzahl und Summen über zwei Teilindizes, ohne die
-/// Gesichtstabelle zu lesen). Gleicher Fingerabdruck heißt: der gespeicherte Graph gilt.
+/// Bereiche, aus denen der Graph entsteht: Fotos (Formate, Projektion), Zuordnungen der
+/// Gesichter und Personen samt Beziehungen.
+const DOMAINS: &[Domain] = &[Domain::Files, Domain::Faces, Domain::People];
+
+/// Fingerabdruck der Daten, aus denen der Graph entsteht: Identität der Sammlung und die
+/// Datenrevision ihrer Bereiche ([`DOMAINS`]). Gleicher Fingerabdruck heißt: der
+/// gespeicherte Graph gilt. Ohne Revision (Schema 6, nur lesend) ist er jedes Mal neu.
 pub fn signature(collection: &Collection) -> Result<String> {
-    let mut hash = blake3::Hasher::new();
-    let stamp = super::start_view::stamp(collection)?;
-    hash.update(format!("{stamp:?}").as_bytes());
-    for sql in [
-        // ix_faces_user_counts: Zuordnungen der Fotozählung.
-        "SELECT count(*),coalesce(sum(id),0),coalesce(sum(id*person_id),0) FROM faces
-         WHERE assignment='user' AND retained=0",
-        // ix_faces_reference: Kandidaten der Porträts.
-        "SELECT count(*),coalesce(sum(id),0),coalesce(sum(id*person_id),0) FROM faces
-         WHERE assignment='user' AND ignored=0",
-    ] {
-        let row: (i64, i64, i64) = collection
-            .db
-            .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-        hash.update(format!("{row:?};").as_bytes());
-    }
-    for table in ["persons", "person_attrs", "relations", "relation_types"] {
-        let mut statement = collection.db.prepare(&format!("SELECT * FROM {table}"))?;
-        let columns = statement.column_count();
-        let mut rows = statement.query([])?;
-        hash.update(table.as_bytes());
-        while let Some(row) = rows.next()? {
-            for i in 0..columns {
-                hash.update(format!("{:?}|", row.get_ref(i)?).as_bytes());
-            }
-            hash.update(b"\n");
-        }
-    }
-    Ok(hash.finalize().to_hex().to_string())
+    Ok(match revision::key(&collection.db, DOMAINS)? {
+        Some(key) => serde_json::to_string(&key)?,
+        None => format!("ohne-revision-{}", uuid::Uuid::new_v4()),
+    })
 }
 
 /// Graph mit dem Fingerabdruck, zu dem er gehört.

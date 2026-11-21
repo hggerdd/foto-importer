@@ -2359,12 +2359,20 @@ fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view(
     assert_eq!(app.naming, None);
     assert_eq!(naming_tasks(&app), 1);
     assert_eq!(page_ids(&app), vec![vec![1, 3]], "sofort aus der Gruppe");
-    app.time_ui.need_load = false;
+    let revisions = |root: &Path| -> anyhow::Result<crate::core::revision::Revisions> {
+        let c = Collection::open(root, false)?;
+        Ok(crate::core::revision::read(&c.db)?.expect("Revision"))
+    };
+    let before = revisions(root.path())?;
+    app.time_ui.observe(&before);
     wait_for_tasks(&mut app);
     assert_eq!(app.undo.len(), 1, "Strg+Z kann die Benennung zurücknehmen");
+    // Die neu gelesene Gesichterseite trägt den neuen Datenstand in die Zeitreise.
+    let after = revisions(root.path())?;
+    assert!(after.faces > before.faces);
     assert!(
-        app.time_ui.need_load,
-        "Zeitreise liest beim nächsten Zeigen neu"
+        app.time_ui.knows(&after),
+        "Zeitreise kennt den Stand nach der Benennung"
     );
     let c = Collection::open(root.path(), false)?;
     let rows = c
