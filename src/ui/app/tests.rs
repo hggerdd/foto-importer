@@ -12,13 +12,7 @@ fn empty_group_page_returns_to_first_page_when_no_groups_remain() -> anyhow::Res
     app.view = View::Faces;
     app.face_index = 3;
     app.refresh_faces();
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     assert!(app.tasks.is_empty());
     assert_eq!(app.face_index, 0);
     assert!(app.face_page.groups.is_empty());
@@ -42,13 +36,7 @@ fn other_views_read_people_without_face_groups_and_keep_the_page() -> anyhow::Re
     app.view = View::Collection;
     app.face_index = 3;
     app.refresh_faces();
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     assert!(app.tasks.is_empty());
     assert_eq!(app.face_index, 3);
     assert_eq!(app.face_page.people.len(), 1);
@@ -68,13 +56,7 @@ fn opening_the_collection_keeps_a_running_search() -> anyhow::Result<()> {
     let revision = app.query_revision;
     app.open_view(View::Collection);
     assert_eq!(app.query_revision, revision);
-    for _ in 0..1000 {
-        app.poll(&ctx);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &ctx);
     app.open_view(View::Collection);
     assert_eq!(app.query_revision, revision + 1);
     Ok(())
@@ -87,19 +69,56 @@ fn add_photo(c: &Collection, id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Großzügige Frist der Warte-Helfer: unter Last (parallele Tests, langsame Platte) lieber
+/// länger warten als flackern. Im Normalfall endet das Warten nach wenigen Millisekunden.
+const SETTLE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Einziger Warte-Helfer der UI-Tests: ruft `step` (z. B. `poll`) wiederholt auf, bis `done`
+/// gilt, höchstens bis `SETTLE_DEADLINE`. Scheitert mit `what`, wenn die Frist abläuft.
+fn settle_until(
+    app: &mut PhotoApp,
+    what: &str,
+    mut step: impl FnMut(&mut PhotoApp),
+    mut done: impl FnMut(&PhotoApp) -> bool,
+) {
+    let deadline = std::time::Instant::now() + SETTLE_DEADLINE;
+    loop {
+        step(app);
+        if done(app) {
+            return;
+        }
+        let running: Vec<_> = app.tasks.iter().map(|t| t.kind.as_str()).collect();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}: nach {SETTLE_DEADLINE:?} nicht erreicht, laufend {running:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Wartet, bis kein Auftrag mehr läuft.
+fn settle_tasks(app: &mut PhotoApp, ctx: &egui::Context) {
+    settle_until(
+        app,
+        "alle Aufträge fertig",
+        |app| app.poll(ctx),
+        |app| app.tasks.is_empty(),
+    );
+}
+
 /// Wartet auf alle Aufträge und liefert die Arten, die dabei liefen.
 fn settle_kinds(ctx: &egui::Context, app: &mut PhotoApp) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
-    for _ in 0..3000 {
-        seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
-        app.poll(ctx);
-        seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(app.tasks.is_empty());
+    settle_until(
+        app,
+        "alle Aufträge fertig",
+        |app| {
+            seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
+            app.poll(ctx);
+            seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
+        },
+        |app| app.tasks.is_empty(),
+    );
     seen
 }
 
@@ -229,17 +248,7 @@ fn folder_tree_loads_completely_on_a_worker_and_reveals_the_selection() -> anyho
     app.status.files = 3;
     app.status.photos = 3;
     app.applied.folder = Some("2024/05".into());
-    let settle = |app: &mut PhotoApp| {
-        for _ in 0..2000 {
-            app.sync_folder_tree();
-            app.poll(&ctx);
-            if app.tasks.is_empty() && !app.folder_tree.needs_load() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    };
-    settle(&mut app);
+    settle_folders(&mut app, &ctx);
     let names = |app: &PhotoApp| {
         app.folder_tree
             .rows()
@@ -278,14 +287,15 @@ fn folder_app(ctx: &egui::Context, dirs: &[&str]) -> anyhow::Result<(tempfile::T
 }
 
 fn settle_folders(app: &mut PhotoApp, ctx: &egui::Context) {
-    for _ in 0..2000 {
-        app.sync_folder_tree();
-        app.poll(ctx);
-        if app.tasks.is_empty() && !app.folder_tree.needs_load() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_until(
+        app,
+        "Ordnerbaum gelesen",
+        |app| {
+            app.sync_folder_tree();
+            app.poll(ctx);
+        },
+        |app| app.tasks.is_empty() && !app.folder_tree.needs_load(),
+    );
 }
 
 fn folder_names(app: &PhotoApp) -> Vec<String> {
@@ -557,13 +567,7 @@ fn late_naming_result_from_another_collection_cannot_enter_undo() {
         }))
     });
     app.settings.collection = "new collection".into();
-    for _ in 0..1000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(app.tasks.is_empty());
     assert!(app.undo.is_empty());
 }
@@ -963,13 +967,12 @@ fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
     assert_eq!(page_ids(&app), vec![vec![6]]);
     // Nach dem Ende der Aufträge endet das Ausblenden.
     release.store(true, Ordering::Relaxed);
-    for _ in 0..3000 {
-        app.poll(&context);
-        if app.tasks.iter().all(|t| t.kind != JobKind::Naming) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_until(
+        &mut app,
+        "Benennungen fertig",
+        |app| app.poll(&context),
+        |app| app.tasks.iter().all(|t| t.kind != JobKind::Naming),
+    );
     assert!(app.hidden_faces().is_empty());
 }
 
@@ -1409,19 +1412,20 @@ fn imports_queued_back_to_back_run_one_after_the_other() -> anyhow::Result<()> {
     assert_eq!(tasks_of(&app, "copy"), 1);
     assert_eq!(app.tasks[0].task.label, "Import „Erster“");
     let mut seen = Vec::new();
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        assert!(tasks_of(&app, "copy") <= 1, "nie zwei Imports gleichzeitig");
-        if let Some(task) = app.tasks.iter().find(|t| t.kind == JobKind::Copy)
-            && seen.last() != Some(&task.task.label)
-        {
-            seen.push(task.task.label.clone());
-        }
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "alle Imports fertig",
+        |app| {
+            app.poll(&egui::Context::default());
+            assert!(tasks_of(app, "copy") <= 1, "nie zwei Imports gleichzeitig");
+            if let Some(task) = app.tasks.iter().find(|t| t.kind == JobKind::Copy)
+                && seen.last() != Some(&task.task.label)
+            {
+                seen.push(task.task.label.clone());
+            }
+        },
+        |app| app.tasks.is_empty(),
+    );
     assert_eq!(
         seen,
         ["Import „Erster“", "Import „Zweiter“", "Import „Dritter“"]
@@ -1774,13 +1778,7 @@ fn choosing_a_collection_resets_everything_that_belonged_to_the_old_one() -> any
         "{kinds:?}"
     );
     assert!(app.tasks.iter().all(|t| !t.write), "nur gelesen");
-    for _ in 0..3000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(app.tasks.is_empty());
     Ok(())
 }
@@ -1879,13 +1877,7 @@ fn tasks_of(app: &PhotoApp, kind: &str) -> usize {
     app.tasks.iter().filter(|t| t.kind.as_str() == kind).count()
 }
 fn wait_for_tasks(app: &mut PhotoApp) {
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_tasks(app, &egui::Context::default());
 }
 
 #[test]
@@ -2170,13 +2162,12 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
         JobKind::RuntimeDownload,
         move |_| Ok(Outcome::RuntimeDownloaded(downloaded)),
     );
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if tasks_of(&app, "runtime-download") == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "Laufzeit heruntergeladen",
+        |app| app.poll(&egui::Context::default()),
+        |app| tasks_of(app, "runtime-download") == 0,
+    );
     assert_eq!(app.settings.onnx_runtime, runtime.to_string_lossy());
     assert!(!app.setup_chain);
     assert_eq!(
@@ -2503,13 +2494,7 @@ fn confirming_the_new_collection_switches_to_it() -> anyhow::Result<()> {
     app.confirm_new_collection();
     assert_eq!(app.settings.collection, chosen);
     assert_eq!(app.new_collection_prompt, None);
-    for _ in 0..5000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     assert!(folder.path().join(".myfotomanager").is_file());
     Ok(())
 }
@@ -2525,13 +2510,7 @@ fn an_existing_collection_opens_without_asking() -> anyhow::Result<()> {
     app.choose_collection(chosen.clone());
     assert_eq!(app.new_collection_prompt, None);
     assert_eq!(app.settings.collection, chosen);
-    for _ in 0..5000 {
-        app.poll(&context);
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle_tasks(&mut app, &context);
     Ok(())
 }
 
@@ -2585,29 +2564,30 @@ fn imports_only_copy_and_the_collection_follows_after_the_last_import() -> anyho
     queue_days(&mut app, &["2026-11-01"], "Erster");
     queue_days(&mut app, &["2026-11-02"], "Zweiter");
     let mut checked_between = false;
-    for _ in 0..3000 {
-        app.poll(&egui::Context::default());
-        if tasks_of(&app, "index-new") > 0 {
-            assert_eq!(app.imports_pending(), 0, "Aufnahme erst nach allen Imports");
-        }
-        if app.imports[0].state == import_queue::BatchState::Done
-            && app.imports_pending() > 0
-            && !checked_between
-        {
-            // Der erste Import ist fertig: das Ziel ist gemerkt, der Index noch unverändert.
-            checked_between = true;
-            assert_eq!(app.settings.index_pending.len(), 1);
-            assert_eq!(indexed_files(target.path())?, 0);
-            assert!(app.notice.as_ref().is_some_and(|n| {
-                n.text
-                    .contains("wird nach den Imports in die Sammlung aufgenommen")
-            }));
-        }
-        if app.tasks.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    settle_until(
+        &mut app,
+        "Imports und Aufnahme fertig",
+        |app| {
+            app.poll(&egui::Context::default());
+            if tasks_of(app, "index-new") > 0 {
+                assert_eq!(app.imports_pending(), 0, "Aufnahme erst nach allen Imports");
+            }
+            if app.imports[0].state == import_queue::BatchState::Done
+                && app.imports_pending() > 0
+                && !checked_between
+            {
+                // Der erste Import ist fertig: das Ziel ist gemerkt, der Index noch unverändert.
+                checked_between = true;
+                assert_eq!(app.settings.index_pending.len(), 1);
+                assert_eq!(indexed_files(target.path()).expect("Index lesen"), 0);
+                assert!(app.notice.as_ref().is_some_and(|n| {
+                    n.text
+                        .contains("wird nach den Imports in die Sammlung aufgenommen")
+                }));
+            }
+        },
+        |app| app.tasks.is_empty(),
+    );
     assert!(checked_between);
     use import_queue::BatchState::*;
     assert_eq!(batch_states(&app), [Done, Done]);
