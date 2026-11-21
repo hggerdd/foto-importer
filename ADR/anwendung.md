@@ -54,7 +54,11 @@
   Feld stehen, erscheint als Fehlerhinweis der Einstellungen und wird nicht gespeichert.
   Folgen nur bei echter Änderung: ein neuer ExifTool-Pfad gibt dem gestoppten
   Hintergrundlauf eine neue Chance, ein neuer Converter liest dessen Version neu, nur eine
-  geänderte Modellauswahl schreibt in die Sammlung.
+  geänderte Modellauswahl schreibt in die Sammlung. Die Arbeitsplatzdatei wird bewusst auf
+  dem UI-Thread geschrieben (atomar mit `sync_all`, nur bei solchen Einzelereignissen, nie je
+  Frame): gemessen 2026-11-21 mit `examples/settings_save_bench.rs` (Debug-Build, lokale SSD,
+  200 Läufe) Median 2 ms, Maximum 7 ms. Liegt `%APPDATA%` auf einem langsamen oder
+  Netzlaufwerk, gehört das Speichern auf einen Worker.
 - **Gesichtserkennung einrichten:** Ein Knopf startet nacheinander die vorhandenen
   Aufträge „Laufzeit herunterladen“ (falls die Laufzeit fehlt) und „Modellgewichte
   installieren“ (falls die Standardgewichte fehlen). Der zweite Schritt beginnt nur nach
