@@ -68,8 +68,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   keiner Ansicht und liest seine Vorschläge mit eigener Revision. „Übernehmen“ setzt nur
   dieses Gesicht auf `user` (eine bestehende Ablehnung dieser Person entfällt), andere
   Gesichter der Gruppe erhalten keine Ablehnung. Der Dialog schließt sofort, das Gesicht
-  verschwindet über `queue_hiding`; danach werden Gesichter, Personen und beim nächsten Zeigen
-  die Zeitreise neu gelesen. Strg+Z nimmt die Benennung zurück. Personentabelle (Zeilen sind
+  verschwindet über `queue_hiding`; danach werden Gesichter und Personen neu gelesen, und die
+  Zeitreise folgt dem neuen Datenstand (siehe [Zeitreise](zeitreise.md)). Strg+Z nimmt die Benennung zurück. Personentabelle (Zeilen sind
   Personen), Vorschlagschips (Klick wählt die Person) und der Graph haben keinen Eintrag.
 - **Bestätigen** setzt ausgewählte Gesichter auf `user`. Abgewählte erhalten eine
   gespeicherte Ablehnung für diese Person (`face_rejections`), die jeder spätere Abgleich

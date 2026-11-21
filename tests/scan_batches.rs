@@ -222,16 +222,18 @@ fn unchanged_rescan_leaves_rows_and_projection_untouched() -> anyhow::Result<()>
     let mut collection = Collection::open(temp.path(), true)?;
     collection.quick_scan(false, &Control::default())?;
     let before = (inventory(&collection)?, projection(&collection)?);
-    let revision: i64 =
-        collection
-            .db
-            .query_row("SELECT revision FROM projection_revision", [], |r| r.get(0))?;
+    let revision: i64 = collection.db.query_row(
+        "SELECT revision FROM data_revision WHERE domain='files'",
+        [],
+        |r| r.get(0),
+    )?;
     collection.quick_scan(false, &Control::default())?;
     assert_eq!(before, (inventory(&collection)?, projection(&collection)?));
-    let after: i64 =
-        collection
-            .db
-            .query_row("SELECT revision FROM projection_revision", [], |r| r.get(0))?;
+    let after: i64 = collection.db.query_row(
+        "SELECT revision FROM data_revision WHERE domain='files'",
+        [],
+        |r| r.get(0),
+    )?;
     assert_eq!(revision, after, "nothing changed, so no projection rebuild");
     let seen: i64 = collection.db.query_row(
         "SELECT count(*) FROM files WHERE last_seen_scan=(SELECT max(id) FROM scans)",

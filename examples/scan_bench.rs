@@ -172,7 +172,6 @@ fn main() -> anyhow::Result<()> {
     for with_triggers in [true, false] {
         let db = rusqlite::Connection::open_in_memory()?;
         db.execute_batch(include_str!("../src/core/schema.sql"))?;
-        db.execute("INSERT INTO projection_revision VALUES(0)", [])?;
         if !with_triggers {
             for name in &triggers {
                 db.execute_batch(&format!("DROP TRIGGER {name}"))?;

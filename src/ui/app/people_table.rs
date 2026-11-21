@@ -10,6 +10,7 @@ use crate::core::{
     people_table::{self as table, Column, PersonRow, SortKey},
     person_insights::{self, Insights},
     relations::{Gender, Role},
+    revision::{Domain, Key},
 };
 use crate::ui::select::{Choice, FilterSelect, person_choices};
 use egui::{Align2, FontId, Pos2, Rect, Sense, Stroke, Vec2};
@@ -19,10 +20,20 @@ const HEADER_HEIGHT: f32 = 36.0;
 const PORTRAIT_COLUMN: f32 = 48.0;
 const PORTRAIT_SIZE: f32 = 30.0;
 
-/// Datenstand, von dem die Rückfragen „dieselbe Person“ abhängen: Sammlung, Personen,
-/// Beziehungen, bestätigte Gesichter, Referenzen und Modell. Ein Wechsel der Ansicht allein
-/// liest nicht neu.
-type DuplicatesKey = (String, usize, usize, usize, usize, usize, String);
+/// Datenstand der geladenen Gesichterseite für einige Bereiche (`core::revision`). Ohne
+/// Revision (Schema 6, nur lesend) gilt jede neu gelesene Seite als neuer Stand
+/// (`face_page_serial`).
+pub(super) type PageKey = (Option<Key>, u64);
+
+/// Datenstand, von dem die Rückfragen „dieselbe Person“ abhängen: Sammlung, Zuordnungen und
+/// Referenzen (`faces`), Personen und Beziehungen (`people`) und Modell. Ein Wechsel der
+/// Ansicht allein liest nicht neu.
+type DuplicatesKey = (String, PageKey, String);
+
+/// Bereiche der Rückfragen „dieselbe Person“.
+const DUPLICATE_DOMAINS: &[Domain] = &[Domain::Faces, Domain::People];
+/// Bereiche der Zusatzangaben (gemeinsame Fotos aus bestätigten Gesichtern und Projektion).
+const INSIGHT_DOMAINS: &[Domain] = &[Domain::Files, Domain::Faces];
 
 /// Was die rechte Spalte zeigt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -73,9 +84,9 @@ pub(super) struct PeopleUi {
     merge_confirm: bool,
     scroll_to: Option<i64>,
     /// Zusatzangaben der gewählten Person (Worker-Ergebnis) und der Stand, für den sie
-    /// angefragt wurden: (Person, `face_page_serial`).
+    /// angefragt wurden: (Person, Datenstand).
     pub(super) insights: Option<Insights>,
-    insights_key: Option<(i64, u64)>,
+    insights_key: Option<(i64, PageKey)>,
     insights_revision: u64,
     /// Rückfragen „Möglicherweise dieselbe Person“ (Worker-Ergebnis) und der Datenstand, für
     /// den sie gelesen wurden.
@@ -374,6 +385,14 @@ fn question_text(
 }
 
 impl PhotoApp {
+    /// Datenstand der geladenen Gesichterseite für diese Bereiche ([`PageKey`]).
+    pub(super) fn page_key(&self, domains: &[Domain]) -> PageKey {
+        match &self.face_page.revisions {
+            Some(revisions) => (Some(revisions.key(domains)), 0),
+            None => (None, self.face_page_serial),
+        }
+    }
+
     /// Zeilenreihenfolge neu berechnen, wenn sich Daten, Sortierung oder Suche ändern.
     fn ensure_people_view(&mut self) {
         let key = (
@@ -1055,8 +1074,9 @@ impl PhotoApp {
 
     /// Liest die Zusatzangaben der Person auf einem Worker, einmal je Person und Datenstand.
     fn ensure_insights(&mut self, person: i64) {
-        let key = (person, self.face_page_serial);
-        if self.people_ui.insights_key == Some(key) || self.settings.collection.is_empty() {
+        let key = (person, self.page_key(INSIGHT_DOMAINS));
+        if self.people_ui.insights_key.as_ref() == Some(&key) || self.settings.collection.is_empty()
+        {
             return;
         }
         self.people_ui.insights_key = Some(key);
@@ -1491,15 +1511,10 @@ impl PhotoApp {
         if self.settings.collection.is_empty() || self.face_page.people.len() < 2 {
             return;
         }
-        let status = &self.face_page.status;
         let key: DuplicatesKey = (
             self.settings.collection.clone(),
-            self.face_page.people.len(),
-            self.face_page.relations.len(),
-            status.confirmed,
-            status.references,
-            status.dirty_people,
-            status.embedder.clone(),
+            self.page_key(DUPLICATE_DOMAINS),
+            self.face_page.status.embedder.clone(),
         );
         if self.people_ui.duplicates_key.as_ref() == Some(&key) {
             return;

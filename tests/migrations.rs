@@ -57,6 +57,8 @@ fn historical(version: i64, partial: bool) -> anyhow::Result<tempfile::TempDir> 
         }
     }
     if version >= 4 {
+        // Bis Schema 6 zählte projection_revision; data_revision kam mit Schema 7.
+        db.execute_batch("DROP TABLE data_revision; CREATE TABLE projection_revision(revision INTEGER NOT NULL); INSERT INTO projection_revision VALUES(3);")?;
         db.execute_batch("DROP INDEX ix_group_page; CREATE INDEX ix_group_page ON face_group_catalog(embedder_id,group_id) WHERE members>0;")?;
     }
     if partial {
@@ -73,7 +75,16 @@ fn upgrade_versions_one_through_five_preserves_source_ids_and_labels() -> anyhow
         let c = Collection::open(folder.path(), true)?;
         assert_eq!(
             c.db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
-            6
+            foto_importer::core::migrations::SCHEMA_VERSION
+        );
+        assert!(foto_importer::core::revision::read(&c.db)?.is_some());
+        assert_eq!(
+            c.db.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='projection_revision'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            0
         );
         assert_eq!(
             c.db.query_row("SELECT photo_id FROM files WHERE id=91", [], |r| r

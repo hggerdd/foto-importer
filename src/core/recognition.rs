@@ -841,7 +841,8 @@ fn maintenance_state(collection: &Collection, key: &str) -> Result<(i64, Option<
 /// Stand. Er lebt nur im Arbeitsspeicher und ist jederzeit verwerfbar.
 #[derive(Default)]
 pub struct MatchCache {
-    owner: Option<(std::path::PathBuf, String)>,
+    /// Sammlungspfad, Identität (`collection.id`) und Modell, für die gerechnet ist.
+    owner: Option<(std::path::PathBuf, String, String)>,
     /// Referenzen je Person (Gesichts-ID, Vektor), gegen die die Spalten gerechnet sind.
     references: BTreeMap<i64, Vec<(i64, Vec<f32>)>>,
     /// Personen-ID je Spalte, wie `References::people`.
@@ -1161,6 +1162,16 @@ impl MatchCache {
     }
 }
 
+/// Eigentümer eines Zwischenspeichers: Sammlungspfad, Identität (`collection.id`) und
+/// Modell. Eine andere Sammlung unter demselben Pfad (ersetzte Datenbank) baut neu auf.
+fn cache_owner(collection: &Collection, key: &str) -> Result<(std::path::PathBuf, String, String)> {
+    Ok((
+        collection.root.clone(),
+        super::revision::identity(&collection.db)?,
+        key.to_string(),
+    ))
+}
+
 /// Zwischenspeicher des laufenden Programms (eine Sammlung, ein Modell zugleich).
 static MATCH_CACHE: std::sync::Mutex<Option<MatchCache>> = std::sync::Mutex::new(None);
 
@@ -1207,7 +1218,7 @@ pub fn rematch_with(
     let limits = Limits::load(collection)?;
     let births = load_births(collection)?;
     let mut state = MatchState::load(collection, key)?;
-    let owner = (collection.root.clone(), key.to_string());
+    let owner = cache_owner(collection, key)?;
     if cache.owner.as_ref() != Some(&owner) {
         *cache = MatchCache {
             owner: Some(owner),
@@ -1322,7 +1333,7 @@ pub fn person_candidates(
     // Die Sperre gilt nur für diesen Leser und nur, wenn der Zwischenspeicher dieser Sammlung
     // bereitliegt; der Abgleich wartet ohne Rückgabepunkt auf sie, ein gegenseitiges Warten ist
     // daher ausgeschlossen. Ohne passenden Zwischenspeicher wird sie vor dem Rechnen frei.
-    let owner = (collection.root.clone(), key.to_string());
+    let owner = cache_owner(collection, key)?;
     let mut slot = Some(match_cache());
     let ready = slot
         .as_ref()
@@ -1354,7 +1365,7 @@ pub fn person_candidates_with(
         minimum,
         exclusions: &exclusions,
     };
-    let owner = (collection.root.clone(), key.to_string());
+    let owner = cache_owner(collection, key)?;
     let mut found = match cache.filter(|cache| cache.owner.as_ref() == Some(&owner)) {
         Some(cache) => {
             cached_candidates(collection, key, &wanted, cache, &mut state, &ids, control)?
@@ -1634,6 +1645,19 @@ pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_cache_owner_follows_the_collection_identity_not_only_the_path() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let c = Collection::open(root.path(), true)?;
+        let before = cache_owner(&c, "emb")?;
+        assert_eq!(before, cache_owner(&c, "emb")?);
+        assert_ne!(before, cache_owner(&c, "anderes")?);
+        // Andere Datenbank unter demselben Pfad: anderer Eigentümer.
+        c.db.execute("UPDATE collection SET id='andere-sammlung'", [])?;
+        assert_ne!(before, cache_owner(&c, "emb")?);
+        Ok(())
+    }
 
     fn items(scores: &[f32]) -> Vec<(i64, String, f32)> {
         scores

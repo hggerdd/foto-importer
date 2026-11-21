@@ -23,8 +23,8 @@
   Gesichtsgruppen samt Vorschlägen.
 - **Seite zuerst, Zählung danach:** Der Auftrag „Sammlung durchsuchen“ liest nur die Seite
   (Datumsindex, kalt auf der USB-Platte rund 1 s) und den Stand der Sammlung
-  (`collection.id` und `projection_revision`, die Trigger bei jeder Änderung an Dateien,
-  Fotos und Projektionsspalten erhöhen). Gesamtzahl, Kameras und Bestand (`status()`) zählt
+  (`collection.id` und die Datenrevision `files` aus `core::revision`, die Trigger bei jeder
+  Änderung an Dateien und Projektionsspalten erhöhen). Gesamtzahl, Kameras und Bestand (`status()`) zählt
   danach der eigene Auftrag „Sammlung zählen“ (`counts`); sie lesen alle Treffer und kosteten
   kalt zusammen 20 bis 50 s (Messung 2026-11-21, `E:\Bilder`, siehe
   [Validierung](../docs/validierung.md)). Bis dahin stehen die bisherigen Zahlen mit
@@ -111,8 +111,8 @@ unterschiedlich beschnittener Varianten werden nicht gleichgesetzt.
 
 Die Leisten dürfen der Galerie keine Höhe nehmen; Vorschau und Metadaten bei 980 × 680
 prüfen. Cache-Schlüssel dürfen keine je Bild oder Revision veränderlichen Werte enthalten.
-Neue Suchfelder legen fest, ob ihre Zählung der Projektionsrevision folgt
+Neue Suchfelder legen fest, ob ihre Zählung der Datenrevision `files` folgt
 (`counts_follow_revision`); im Zweifel nicht. Änderungen, die Treffer verändern, ohne über die
-Trigger `projection_revision` zu erhöhen, dürfen keine wiederverwendbare Zählung erlauben.
+Trigger die Revision `files` zu erhöhen, dürfen keine wiederverwendbare Zählung erlauben.
 Neue Suchfelder legen ihre Variantenpriorität fest. Bestätigte Zuordnung, Vorschlag und
 fehlende Detektion bleiben unterscheidbar.

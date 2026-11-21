@@ -17,9 +17,13 @@ Konzept und offene Ideen: [docs/konzept-zeitreise.md](../docs/konzept-zeitreise.
   lesen“ (`timeline::load_person`) Gesichter, Geburt und Entscheidungen nur dieser Person.
   Eine neue Wahl ersetzt den laufenden Auftrag (Abbruch, Revision). Gelesene Personen bleiben
   im Speicher (`config::TIMELINE_CACHED_PEOPLE`, 12); der Wechsel zurück rechnet nur neu.
-  Jede Änderung am Bestand (Benennen, Rücknahme, eigene Entscheidungen) verwirft diesen
-  Speicher (`TimeUi::invalidate`, Datenstand `data_serial`); ältere Antworten kommen nicht
-  mehr hinein. Messung 2026-11-21 an `E:\Bilder` (USB-Festplatte): Personenliste kalt 0,15 s,
+  Jede gemerkte Person trägt ihren Datenstand (`core::revision`, Bereiche `faces` und
+  `people`, in derselben Lesetransaktion gelesen). Die Zeitreise sieht neue Stände über
+  jede neu gelesene Gesichterseite, eigene Ladeaufträge und gespeicherte Entscheidungen
+  (`TimeUi::observe`); ein neuerer Stand verwirft Gemerktes zu älteren Ständen, liest die
+  Personenliste und die gezeigte Person neu (sie bleibt bis dahin sichtbar). Ältere
+  Antworten kommen nicht mehr hinein. Geänderte Metadaten allein (Bereich `files`) lesen nicht
+  neu, damit ein Hintergrundlauf die gezeigte Person nicht laufend neu lädt. Messung 2026-11-21 an `E:\Bilder` (USB-Festplatte): Personenliste kalt 0,15 s,
   Gesichter einer Person kalt 3,3 s (408 Gesichter) bis 10,9 s (3 595), warm 9 bis 54 ms.
 - **Inhalt:** Gesichter einer Person über die Zeit (`core/timeline.rs`,
   `ui/app/time_view.rs`) mit den Reitern Zeitstrahl, Lücken, Zeitraffer & Export. Alles wird

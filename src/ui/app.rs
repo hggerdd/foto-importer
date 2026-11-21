@@ -382,7 +382,9 @@ pub struct PhotoApp {
     central_ui: central_view::CentralUi,
     people_ui: people_table::PeopleUi,
     time_ui: time_view::TimeUi,
-    /// Zählt übernommene `face_page`-Stände; Tabellenansicht berechnet sich daran neu.
+    /// Zählt übernommene `face_page`-Stände (rein UI-seitig): die Tabellenansicht ordnet ihre
+    /// Zeilen daran neu. Datenstände der Sammlung stehen in `face_page.revisions`; nur ohne
+    /// Revision dient der Zähler als Ersatz (`people_table::PageKey`).
     face_page_serial: u64,
     relationship_graph: relationship_view::RelationshipView,
     report: Option<String>,
@@ -1234,6 +1236,8 @@ impl PhotoApp {
                         snapshot = read(index)?;
                     }
                 }
+                // Derselbe Lesestand wie die Seite (gleiche Lesetransaktion).
+                snapshot.revisions = crate::core::revision::read(&c.db)?;
                 Ok(Outcome::Faces(revision, index, snapshot))
             },
         );
@@ -1868,6 +1872,10 @@ impl PhotoApp {
                         }
                     }
                     self.face_index = index;
+                    // Neuer Datenstand: Caches der Zeitreise prüfen sich daran.
+                    if let Some(revisions) = &page.revisions {
+                        self.time_ui.observe(revisions);
+                    }
                     self.face_page = page;
                     // Noch nicht geschriebene Entscheidungen bleiben ausgeblendet (ADR 0068).
                     self.hide_pending_faces();
@@ -1921,9 +1929,6 @@ impl PhotoApp {
                     }
                     if running.write && running.collection == self.settings.collection {
                         self.relationship_graph.stale = true;
-                        if running.kind == "undo" {
-                            self.time_ui.invalidate();
-                        }
                         self.requery_collection();
                         self.refresh_faces();
                         // Der Hintergrundlauf lädt die Details nur neu, wenn sie noch fehlen.
@@ -1948,8 +1953,7 @@ impl PhotoApp {
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
                     self.relationship_graph.stale = true;
-                    // Die Zeitreise zeigt bestätigte Gesichter; beim nächsten Zeigen neu lesen.
-                    self.time_ui.invalidate();
+                    // Die Zeitreise folgt dem Datenstand der neu gelesenen Gesichterseite.
                     self.prepare_group_advance(&undo);
                     let saved = optimistic::decision_message(undo.summary());
                     self.undo.push(undo);
