@@ -330,7 +330,6 @@ fn disk_cached(
 
 /// Schreibt eine Kachel atomar und ersetzt nie eine vorhandene Datei.
 fn store_tile(root: &Path, file: &Path, bytes: &[u8]) {
-    let Some(folder) = file.parent() else { return };
     let base = root.join(TILE_DIR);
     if base
         .symlink_metadata()
@@ -338,15 +337,7 @@ fn store_tile(root: &Path, file: &Path, bytes: &[u8]) {
     {
         return;
     }
-    if std::fs::create_dir_all(folder).is_err() {
-        return;
-    }
-    let Ok(mut temp) = tempfile::NamedTempFile::new_in(folder) else {
-        return;
-    };
-    if std::io::Write::write_all(&mut temp, bytes).is_ok() {
-        let _ = temp.persist_noclobber(file);
-    }
+    let _ = super::files::write_atomic(file, bytes, super::files::Mode::NoClobber, false);
 }
 
 #[cfg(test)]

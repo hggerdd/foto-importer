@@ -1,26 +1,24 @@
 use super::{
     collection::Collection,
-    faces, inference,
+    faces, files, inference,
     jobs::Control,
-    recognition,
     previews::{self, PreviewRequest},
+    recognition,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Write,
     path::Path,
 };
 
 fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().context("Ungültiger Ausgabepfad")?;
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path)?;
-    Ok(())
+    Ok(files::write_atomic(
+        path,
+        bytes,
+        files::Mode::Replace,
+        true,
+    )?)
 }
 fn generated_path(root: &Path, path: &Path) -> Result<()> {
     let root = root.canonicalize()?;

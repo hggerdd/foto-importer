@@ -364,14 +364,8 @@ impl Settings {
     }
     fn write(&self) -> anyhow::Result<()> {
         let path = Self::path();
-        let parent = path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Einstellungspfad ungültig"))?;
-        std::fs::create_dir_all(parent)?;
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer_pretty(&mut file, self)?;
-        file.as_file().sync_all()?;
-        file.persist(path)?;
+        let bytes = serde_json::to_vec_pretty(self)?;
+        crate::core::files::write_atomic(&path, &bytes, crate::core::files::Mode::Replace, true)?;
         Ok(())
     }
 }

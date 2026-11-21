@@ -177,10 +177,13 @@ pub fn load(dir: &Path, collection: &str) -> Option<Snapshot> {
 
 /// Schreibt die Startansicht atomar (Zwischendatei, dann Umbenennen).
 pub fn save(dir: &Path, snapshot: &Snapshot) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-    serde_json::to_writer(&mut temp, snapshot)?;
-    temp.persist(file(dir, &snapshot.collection))?;
+    let bytes = serde_json::to_vec(snapshot)?;
+    super::files::write_atomic(
+        &file(dir, &snapshot.collection),
+        &bytes,
+        super::files::Mode::Replace,
+        false,
+    )?;
     Ok(())
 }
 

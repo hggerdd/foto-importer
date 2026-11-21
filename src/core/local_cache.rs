@@ -46,17 +46,17 @@ pub fn save<T: Serialize>(
     collection: &str,
     value: &T,
 ) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-    serde_json::to_writer(
-        &mut temp,
-        &Entry {
-            format,
-            collection: collection.to_owned(),
-            value,
-        },
+    let bytes = serde_json::to_vec(&Entry {
+        format,
+        collection: collection.to_owned(),
+        value,
+    })?;
+    files::write_atomic(
+        &file(dir, kind, collection),
+        &bytes,
+        files::Mode::Replace,
+        false,
     )?;
-    temp.persist(file(dir, kind, collection))?;
     Ok(())
 }
 
