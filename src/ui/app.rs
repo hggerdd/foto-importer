@@ -387,8 +387,6 @@ pub struct PhotoApp {
     delete_phrase: String,
     move_old: String,
     move_new: String,
-    purge_scans: u32,
-    purge_confirm: bool,
     dng_status: String,
     /// Importquelle, die beim Start nicht erreichbar war (z. B. Karte nicht eingesteckt).
     source_offline: Option<String>,
@@ -530,8 +528,6 @@ impl PhotoApp {
             delete_phrase: String::new(),
             move_old: String::new(),
             move_new: String::new(),
-            purge_scans: 0,
-            purge_confirm: false,
             dng_status: "Converter-Version wird gelesen …".into(),
             source_offline: None,
             missing: Default::default(),
@@ -1300,16 +1296,7 @@ impl PhotoApp {
             self.refresh_faces();
             return;
         }
-        if [
-            "scan",
-            "metadata",
-            "analyze",
-            "confirm_missing",
-            "purge",
-            "resolve",
-        ]
-        .contains(&action)
-        {
+        if ["scan", "metadata", "analyze", "confirm_missing", "resolve"].contains(&action) {
             self.undo.clear();
         }
         let settings = self.settings.clone();
@@ -1320,11 +1307,9 @@ impl PhotoApp {
         let embedder = self.embedder.clone();
         let old = self.move_old.clone();
         let new = self.move_new.clone();
-        let age = self.purge_scans;
         let label = match action.as_str() {
             "scan" => "Sammlung indizieren",
             "confirm_missing" => "Fehlende nach Prüfung markieren",
-            "purge" => "Fehlende Indexeinträge entfernen",
             "resolve" => "Verschiebung zuordnen",
             "metadata" => "Metadaten lesen",
             "verify" => "Dateien auf Fehler prüfen",
@@ -1346,7 +1331,6 @@ impl PhotoApp {
             let message = match action.as_str() {
                 "scan" => c.quick_scan(false, &control)?,
                 "confirm_missing" => c.quick_scan(true, &control)?,
-                "purge" => c.purge_missing(age as i64)?,
                 "resolve" => c.resolve_move(&old, &new, &control)?,
                 "metadata" => {
                     metadata::enrich_scoped(&mut c, &settings.exiftool, &control, &scope)?

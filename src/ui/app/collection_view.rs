@@ -351,28 +351,17 @@ impl PhotoApp {
             }
         });
         egui::CollapsingHeader::new("Erweitert").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(
-                    &mut self.purge_confirm,
-                    "Fehlende Einträge aus dem Index entfernen",
-                );
-                ui.add(
-                    egui::DragValue::new(&mut self.purge_scans)
-                        .range(0..=10000)
-                        .prefix("Scanabstand "),
-                );
-                if ui
-                    .add_enabled(
-                        !self.busy() && self.purge_confirm,
-                        egui::Button::new("Einträge entfernen"),
-                    )
-                    .clicked()
-                {
-                    self.purge_confirm = false;
-                    self.collection_dialog = None;
-                    self.collection_action("purge");
-                }
-            });
+            // Entfernen läuft nur über die Ansicht „Fehlende Dateien“: dort wird jede Datei
+            // erneut gesucht und vorher automatisch gesichert.
+            if ui
+                .button("Fehlende Einträge aus dem Index entfernen …")
+                .on_hover_text(
+                    "Öffnet „Fehlende Dateien“: Ordner wählen, dann „Einträge entfernen“",
+                )
+                .clicked()
+            {
+                self.open_missing();
+            }
             ui.label(RichText::new("Foto-IDs und Personen bleiben erhalten.").small());
             ui.separator();
             ui.label(RichText::new("Geprüfte Verschiebung zuordnen").strong());

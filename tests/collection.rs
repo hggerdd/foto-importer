@@ -116,40 +116,6 @@ fn known_hash_preserves_identity_when_file_id_changes() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn explicit_purge_preserves_photo_anchors_and_labels() -> anyhow::Result<()> {
-    let temp = tempfile::tempdir()?;
-    for id in 0..5 {
-        fs::write(temp.path().join(format!("{id}.jpg")), b"photo")?;
-    }
-    let mut c = Collection::open(temp.path(), true)?;
-    c.quick_scan(false, &Control::default())?;
-    let photo: i64 = c.db.query_row(
-        "SELECT photo_id FROM files WHERE relpath='0.jpg'",
-        [],
-        |r| r.get(0),
-    )?;
-    c.db.execute("INSERT INTO persons(id) VALUES(77)", [])?;
-    c.db.execute("INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment) VALUES(?,'0.jpg','legacy',77,'user')",[photo])?;
-    fs::remove_file(temp.path().join("0.jpg"))?;
-    c.quick_scan(false, &Control::default())?;
-    assert_eq!(c.status()?.missing, 1);
-    c.purge_missing(0)?;
-    assert_eq!(
-        c.db.query_row("SELECT count(*) FROM photos WHERE id=?", [photo], |r| r
-            .get::<_, i64>(0))?,
-        1
-    );
-    assert_eq!(
-        c.db.query_row(
-            "SELECT person_id FROM faces WHERE photo_id=?",
-            [photo],
-            |r| r.get::<_, i64>(0)
-        )?,
-        77
-    );
-    Ok(())
-}
-#[test]
 fn explicit_ambiguous_move_retains_the_reviewed_anchor() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     for name in ["a.jpg", "b.jpg"] {
