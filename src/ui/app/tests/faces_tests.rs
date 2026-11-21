@@ -1007,6 +1007,18 @@ fn tile_icons_follow_the_target_person_of_the_group() -> anyhow::Result<()> {
         app.face_page.groups = vec![vec![confirmed(8)]];
         assert_eq!(labels(&context, &mut app), (0, 0, 1), "{mode}");
     }
+    // Der Schalter in der Fußzeile (Standard an) blendet alle Symbole aus.
+    assert!(Settings::default().tile_icons);
+    let (context, mut app) = sure_app(root.path());
+    app.settings.tile_icons = false;
+    assert_eq!(labels(&context, &mut app), (0, 0, 0));
+    let widgets = frame_with(&context, &mut app, Vec::new());
+    assert!(
+        widgets
+            .iter()
+            .any(|(text, _)| text == "Symbole auf den Gesichtern"),
+        "Schalter neben der Fotovorschau"
+    );
     assert_eq!(naming_tasks(&app), 0);
     Ok(())
 }
