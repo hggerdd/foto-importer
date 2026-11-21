@@ -33,6 +33,7 @@ use crate::{
         jobs::{Control, FacePhase, Task},
         metadata::{self, Photo, Rule, Search, SearchPage},
         previews::PreviewRequest,
+        start_view::{self, Counts, Known, Stamp},
     },
 };
 use anyhow::Result;
@@ -161,7 +162,12 @@ enum Outcome {
     ),
     /// Neue Datensicherung erstellt (Hinweistext).
     BackupCreated(String),
-    Search(u64, CollectionStatus, SearchPage, Search),
+    /// Frisch gelesene Seite einer Suche mit Stand; Zählungen nur, wenn eine bekannte Zählung
+    /// für diesen Stand gilt (sonst zählt danach `Counts`).
+    Search(u64, Option<Stamp>, Vec<Photo>, Option<Counts>, Search),
+    /// Zählungen zur Suche derselben Revision samt Stand und, auf der ersten Seite, den
+    /// Fotos, gegen die sie geprüft wurden.
+    Counts(u64, Option<Stamp>, Counts, Search, Option<Vec<i64>>),
     /// Ordnerübersicht eines Lesens; ein Fehler wird mitgeliefert, damit er dem Lesen zuzuordnen ist.
     Folders(u64, std::result::Result<Vec<(String, usize)>, String>),
     Faces(u64, usize, FacePage),
@@ -301,6 +307,19 @@ pub struct PhotoApp {
     folder_revealed: Option<String>,
     page: SearchPage,
     status: CollectionStatus,
+    /// Gehören Gesamtzahl, Kameras und Bestand zur gezeigten Suche und zum aktuellen Stand der
+    /// Sammlung? Sonst zeigt die Kopfzeile „wird aktualisiert …“ und der Hintergrundlauf der
+    /// Metadaten wartet.
+    counts_fresh: bool,
+    /// Die Seite stammt aus der gespeicherten Startansicht und wird gerade neu gelesen.
+    page_from_snapshot: bool,
+    /// Zuletzt gezählte Suche mit Stand; gilt weiter, solange der Stand gleich bleibt.
+    known_counts: Option<Known>,
+    /// Lokaler Cache-Ordner (Startansicht, Vorschauen).
+    cache_dir: PathBuf,
+    /// Beim Start liest „Personen und Gesichter lesen“ erst nach Seite und Zählung der
+    /// Sammlung, damit beide nicht um die Sammlungsplatte konkurrieren.
+    faces_after_search: bool,
     face_revision: u64,
     face_page: FacePage,
     /// Reiter der Ansicht „Gesichter“: `unknown`, `review`, `confirmed`, `ignored` oder
@@ -451,6 +470,11 @@ impl PhotoApp {
             folder_revealed: None,
             page: SearchPage::default(),
             status: CollectionStatus::default(),
+            counts_fresh: false,
+            page_from_snapshot: false,
+            known_counts: None,
+            cache_dir: Settings::cache_dir(),
+            faces_after_search: false,
             face_revision: 0,
             face_page: FacePage::default(),
             face_mode: "unknown".into(),
@@ -587,9 +611,12 @@ impl PhotoApp {
         {
             app.family_ui.down = down;
         }
+        crate::core::thumb_cache::configure(Some(app.cache_dir.join("vorschau")));
         if !app.settings.collection.is_empty() {
+            app.show_start_view();
             app.refresh_collection();
-            app.refresh_faces();
+            // Personen und Gesichter erst nach der Sammlung (siehe `faces_after_search`).
+            app.faces_after_search = true;
         }
         // Sichtprüfung: startet z. B. "scan" gleich nach dem Öffnen (docs/validierung.md).
         if let Ok(action) = std::env::var("FOTO_IMPORTER_ACTION") {
@@ -851,18 +878,86 @@ impl PhotoApp {
         self.query_revision += 1;
         let revision = self.query_revision;
         self.queried = filters.clone();
+        // Eine laufende Zählung gehört zur alten Suche.
+        for task in &self.tasks {
+            if task.kind == "counts" {
+                task.task.control.stop();
+            }
+        }
         let root = PathBuf::from(&self.settings.collection);
+        let known = self.known_counts.clone();
         self.launch("Sammlung durchsuchen", false, "search", move |control| {
             let c = Collection::open(&root, false)?;
             c.cancel_with(&control);
             let detector = faces::active_detector_key(&c)?.unwrap_or_default();
-            Ok(Outcome::Search(
-                revision,
-                c.status()?,
-                metadata::search(&c, &filters, &detector)?,
-                filters,
+            // Erst die Seite (kalt auf der USB-Platte rund 1 s); die Zählungen lesen alle
+            // Treffer und kommen danach, außer eine bekannte Zählung gilt noch.
+            control.phase("seite", "");
+            let (stamp, photos) = start_view::page(&c, &filters, &detector)?;
+            let counts = known
+                .filter(|known| known.reusable(stamp.as_ref(), &filters, &photos))
+                .map(|known| known.counts);
+            Ok(Outcome::Search(revision, stamp, photos, counts, filters))
+        });
+    }
+    /// Zählt die gezeigte Suche (Gesamtzahl, Kameras, Bestand) auf einem Worker. Die erste
+    /// Seite ohne Filter wird mit den Zählungen als Startansicht lokal gespeichert.
+    fn count_collection(&mut self, filters: Search, photos: Vec<Photo>) {
+        let revision = self.query_revision;
+        let root = PathBuf::from(&self.settings.collection);
+        let collection = self.settings.collection.clone();
+        let cache = self.cache_dir.clone();
+        self.launch("Sammlung zählen", false, "counts", move |control| {
+            let c = Collection::open(&root, false)?;
+            c.cancel_with(&control);
+            let detector = faces::active_detector_key(&c)?.unwrap_or_default();
+            control.phase("zaehlen", "");
+            let (stamp, counts) = start_view::count(&c, &filters, &detector)?;
+            let first_page =
+                (filters.page == 0).then(|| photos.iter().map(|photo| photo.id).collect());
+            if let Some(stamp) = &stamp {
+                let mut start = filters.clone();
+                start.page = 0;
+                let known = Known {
+                    stamp: stamp.clone(),
+                    filters: start,
+                    counts: counts.clone(),
+                    first_page: first_page.clone(),
+                };
+                if filters.page == 0
+                    && let Some(snapshot) = start_view::Snapshot::new(&collection, known, photos)
+                {
+                    start_view::store(&cache, &snapshot);
+                }
+            }
+            Ok(Outcome::Counts(
+                revision, stamp, counts, filters, first_page,
             ))
         });
+    }
+    /// Zeigt die gespeicherte Startansicht der Sammlung sofort, bis die frisch gelesene Seite
+    /// kommt. Ihre Zählungen gelten erst, wenn der Stand der Sammlung noch derselbe ist.
+    fn show_start_view(&mut self) {
+        let started = std::time::Instant::now();
+        let Some(snapshot) = start_view::load(&self.cache_dir, &self.settings.collection) else {
+            return;
+        };
+        let counts = snapshot.known.counts.clone();
+        self.page = SearchPage {
+            photos: snapshot.photos,
+            total: counts.total,
+            cameras: counts.cameras,
+        };
+        self.status = counts.status;
+        self.known_counts = Some(snapshot.known);
+        self.page_from_snapshot = true;
+        self.counts_fresh = false;
+        log::info!(
+            target: "sammlung",
+            "startansicht gezeigt fotos={} dauer_ms={:.1}",
+            self.page.photos.len(),
+            diag::millis(started.elapsed())
+        );
     }
     /// Liest die zuletzt angefragte Suche neu, z. B. nach einer Änderung am Bestand. Eine noch
     /// laufende Filteränderung geht dabei nicht verloren.
@@ -1045,6 +1140,10 @@ impl PhotoApp {
         self.queried = Search::default();
         self.page = SearchPage::default();
         self.status = CollectionStatus::default();
+        self.counts_fresh = false;
+        self.page_from_snapshot = false;
+        self.known_counts = None;
+        self.faces_after_search = false;
         self.selected_photo = None;
         self.large = false;
         self.collection_dialog = None;
@@ -1080,6 +1179,7 @@ impl PhotoApp {
             .join(".myfotomanager")
             .exists()
         {
+            self.show_start_view();
             self.refresh_collection();
             self.refresh_faces();
         } else {
@@ -1087,6 +1187,7 @@ impl PhotoApp {
         }
     }
     fn refresh_faces(&mut self) {
+        self.faces_after_search = false;
         if self.settings.collection.is_empty() {
             return;
         }
@@ -1147,6 +1248,7 @@ impl PhotoApp {
             || self.settings.collection.is_empty()
             || self.settings.exiftool.trim().is_empty()
             || self.status.unread == 0
+            || !self.counts_fresh
             || self.index_due()
             || self.tasks.iter().any(|t| low_priority(t.kind))
         {
@@ -1351,7 +1453,9 @@ impl PhotoApp {
             Outcome::Backups(revision, _) => {
                 *revision != self.backups.revision || running.collection != self.settings.collection
             }
-            Outcome::Search(revision, ..) => *revision != self.query_revision,
+            Outcome::Search(revision, ..) | Outcome::Counts(revision, ..) => {
+                *revision != self.query_revision
+            }
             Outcome::Folders(revision, _) => {
                 self.folder_pending != Some(*revision)
                     || running.collection != self.settings.collection
@@ -1387,7 +1491,21 @@ impl PhotoApp {
         };
         let items = match result {
             Ok(Outcome::Scan(_, scan)) => format!(" dateien={}", scan.files.len()),
-            Ok(Outcome::Search(_, _, page, _)) => format!(" fotos={}", page.photos.len()),
+            Ok(Outcome::Search(_, stamp, photos, counts, _)) => format!(
+                " fotos={} zaehlung={} revision={}",
+                photos.len(),
+                if counts.is_some() {
+                    "wiederverwendet"
+                } else {
+                    "folgt"
+                },
+                stamp.as_ref().map_or(-1, |s| s.revision)
+            ),
+            Ok(Outcome::Counts(_, stamp, counts, _, _)) => format!(
+                " gesamt={} revision={}",
+                counts.total,
+                stamp.as_ref().map_or(-1, |s| s.revision)
+            ),
             Ok(Outcome::Faces(_, _, page)) => format!(" gruppen={}", page.groups.len()),
             Ok(Outcome::Detail(_, _, faces, _)) => format!(" gesichter={}", faces.len()),
             Ok(Outcome::Imported(report)) => format!(
@@ -1616,11 +1734,24 @@ impl PhotoApp {
                         self.backups.files = None;
                     }
                 }
-                Ok(Outcome::Search(revision, status, page, filters))
+                Ok(Outcome::Search(revision, _, photos, counts, filters))
                     if revision == self.query_revision =>
                 {
-                    self.status = status;
-                    self.page = page;
+                    self.page.photos = photos;
+                    self.page_from_snapshot = false;
+                    match counts {
+                        Some(counts) => {
+                            self.status = counts.status;
+                            self.page.total = counts.total;
+                            self.page.cameras = counts.cameras;
+                            self.counts_fresh = true;
+                        }
+                        // Bis zur Zählung bleiben die bisherigen Zahlen sichtbar, markiert.
+                        None => {
+                            self.counts_fresh = false;
+                            self.count_collection(filters.clone(), self.page.photos.clone());
+                        }
+                    }
                     self.filters.folder.clone_from(&filters.folder);
                     self.filters.page = filters.page;
                     self.applied = filters;
@@ -1638,6 +1769,24 @@ impl PhotoApp {
                         self.selected_photo = None;
                         self.detail_revision += 1;
                     }
+                }
+                Ok(Outcome::Counts(revision, stamp, counts, filters, first_page))
+                    if revision == self.query_revision =>
+                {
+                    self.status = counts.status.clone();
+                    self.page.total = counts.total;
+                    self.page.cameras = counts.cameras.clone();
+                    self.counts_fresh = true;
+                    self.known_counts = stamp.map(|stamp| {
+                        let mut filters = filters;
+                        filters.page = 0;
+                        Known {
+                            stamp,
+                            filters,
+                            counts,
+                            first_page,
+                        }
+                    });
                 }
                 Ok(Outcome::Folders(revision, result))
                     if self.folder_pending == Some(revision)
@@ -1933,6 +2082,16 @@ impl PhotoApp {
         {
             self.auto_analysis_pending = false;
             self.collection_action("automatic");
+        }
+        // Beim Start: Personen und Gesichter lesen, sobald Seite und Zählung der Sammlung da
+        // sind (oder gescheitert).
+        if self.faces_after_search
+            && !self
+                .tasks
+                .iter()
+                .any(|task| matches!(task.kind, "search" | "counts"))
+        {
+            self.refresh_faces();
         }
         self.start_metadata_background();
         let now = chrono::Local::now();

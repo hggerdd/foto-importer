@@ -23,7 +23,8 @@
   (Format, App-Version und Build, Zeitpunkt, Anlass, Quellpfade, Größe, SHA-256 und
   Schemaversion je Eintrag, fehlende Quellen unter `skipped`). Nicht gesichert, weil
   ableitbar oder wieder ladbar: Fotos, Vorschau- und Gesichtskacheln, Referenzexport
-  `.myfotomanager_faces`, ältere `.bak`-Kopien, `models/`, `runtime/`, `logs/`, Sperrdatei.
+  `.myfotomanager_faces`, ältere `.bak`-Kopien, `models/`, `runtime/`, `logs/`, Sperrdatei,
+  der lokale Cache-Ordner (Startansicht, Vorschauen).
   Datenbanken werden mit der SQLite-Online-Sicherung kopiert, auf einer eigenen
   Leseverbindung mit einer über alle Schritte offenen Lesetransaktion: die Kopie ist ein
   fester Stand, Schreiber laufen weiter und starten die Kopie nicht neu (Test mit

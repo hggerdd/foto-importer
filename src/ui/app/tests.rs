@@ -80,6 +80,137 @@ fn opening_the_collection_keeps_a_running_search() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn add_photo(c: &Collection, id: i64) -> anyhow::Result<()> {
+    let rel = format!("2024/{id}.jpg");
+    c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+    c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(?,?,?,'2024',?,?,'jpg',1,1,?,'present')", rusqlite::params![id, rel, rel, format!("{id}.jpg"), id.to_string(), id])?;
+    Ok(())
+}
+
+/// Wartet auf alle Aufträge und liefert die Arten, die dabei liefen.
+fn settle_kinds(ctx: &egui::Context, app: &mut PhotoApp) -> BTreeSet<&'static str> {
+    let mut seen = BTreeSet::new();
+    for _ in 0..3000 {
+        seen.extend(app.tasks.iter().map(|t| t.kind));
+        app.poll(ctx);
+        seen.extend(app.tasks.iter().map(|t| t.kind));
+        if app.tasks.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(app.tasks.is_empty());
+    seen
+}
+
+#[test]
+fn the_page_comes_first_and_the_saved_start_view_shows_before_any_read() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    {
+        let c = Collection::open(root.path(), true)?;
+        for id in 1..=3 {
+            add_photo(&c, id)?;
+        }
+    }
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let collection = root.path().to_string_lossy().into_owned();
+    let open = |collection: &str| {
+        let mut app = PhotoApp::with_settings(&creation, Settings::default());
+        app.settings.collection = collection.to_owned();
+        // Kein Hintergrundlauf der Metadaten: die Testdateien liegen nicht auf der Platte.
+        app.settings.exiftool.clear();
+        app
+    };
+
+    // Ohne gespeicherte Startansicht: Seite, dann Zählung; danach liegt die Startansicht lokal.
+    let mut app = open(&collection);
+    app.show_start_view();
+    assert!(app.page.photos.is_empty() && !app.page_from_snapshot);
+    app.refresh_collection();
+    let kinds = settle_kinds(&ctx, &mut app);
+    assert!(
+        kinds.contains("search") && kinds.contains("counts"),
+        "{kinds:?}"
+    );
+    assert!(app.counts_fresh);
+    assert_eq!(
+        (app.page.photos.len(), app.page.total, app.status.photos),
+        (3, 3, 3)
+    );
+    let saved = start_view::load(&app.cache_dir, &collection).expect("Startansicht");
+    assert!(
+        !app.cache_dir.starts_with(root.path()),
+        "nie in der Sammlung"
+    );
+    assert_eq!(saved.photos, app.page.photos);
+
+    // Nächster Start: die Startansicht steht sofort da, ohne die Sammlung zu lesen, und ist
+    // als veraltet markiert. Unveränderte Sammlung: die Zählung gilt weiter, keine neue.
+    let mut app = open(&collection);
+    let started = std::time::Instant::now();
+    app.show_start_view();
+    let shown = started.elapsed();
+    assert_eq!(app.page.photos.len(), 3);
+    assert_eq!(app.page.total, 3);
+    assert!(app.page_from_snapshot && !app.counts_fresh);
+    eprintln!("startansicht_ms={:.2}", shown.as_secs_f64() * 1000.0);
+    app.refresh_collection();
+    let kinds = settle_kinds(&ctx, &mut app);
+    assert!(!kinds.contains("counts"), "{kinds:?}");
+    assert!(app.counts_fresh && !app.page_from_snapshot);
+    assert_eq!(app.page.total, 3);
+
+    // Geänderte Sammlung: die gespeicherten Zahlen werden gezeigt, aber neu gezählt.
+    {
+        let c = Collection::open(root.path(), true)?;
+        add_photo(&c, 4)?;
+    }
+    let mut app = open(&collection);
+    app.show_start_view();
+    assert_eq!(app.page.total, 3);
+    app.refresh_collection();
+    let kinds = settle_kinds(&ctx, &mut app);
+    assert!(kinds.contains("counts"), "{kinds:?}");
+    assert!(app.counts_fresh);
+    assert_eq!(
+        (app.page.photos.len(), app.page.total, app.status.photos),
+        (4, 4, 4)
+    );
+    // Blättern in derselben Suche zählt nicht erneut.
+    app.navigate_collection(0, None);
+    let kinds = settle_kinds(&ctx, &mut app);
+    assert!(!kinds.contains("counts"), "{kinds:?}");
+    // Ein Ordnerfilter ist eine andere Suche und wird gezählt.
+    app.navigate_collection(0, Some("2024".into()));
+    let kinds = settle_kinds(&ctx, &mut app);
+    assert!(kinds.contains("counts"), "{kinds:?}");
+    assert_eq!(app.page.total, 4);
+    Ok(())
+}
+
+#[test]
+fn startup_reads_people_only_after_the_collection() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let settings = Settings {
+        collection: root.path().to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    let mut app = PhotoApp::with_settings(&creation, settings);
+    assert!(app.faces_after_search);
+    assert_eq!(tasks_of(&app, "search"), 1);
+    assert_eq!(tasks_of(&app, "faces"), 0);
+    // Die Ansicht „Gesichter“ wartet nicht: sie liest sofort.
+    app.open_view(View::Faces);
+    assert!(!app.faces_after_search);
+    assert_eq!(tasks_of(&app, "faces"), 1);
+    settle_kinds(&ctx, &mut app);
+    Ok(())
+}
+
 #[test]
 fn folder_tree_loads_completely_on_a_worker_and_reveals_the_selection() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
@@ -1724,6 +1855,8 @@ fn metadata_app(root: &Path) -> PhotoApp {
     app.status.unread = 5;
     app.status.pending = 5;
     app.status.files = 9;
+    // Von Hand gesetzte Zählungen gelten als frisch gezählt.
+    app.counts_fresh = true;
     app
 }
 fn tasks_of(app: &PhotoApp, kind: &str) -> usize {

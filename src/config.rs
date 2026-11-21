@@ -21,6 +21,21 @@ pub const SCAN_BATCH: usize = 500;
 pub const HASH_PORTION: usize = 100;
 pub const CACHE_BYTES: usize = 192 * 1024 * 1024;
 pub const CACHE_ENTRIES: usize = 512;
+/// Lokaler Vorschau-Cache (`core::thumb_cache`) im Cache-Ordner des Arbeitsplatzes: nur ganze
+/// Vorschauen dieser Kantenlängen (Galerie 400, Bildinspektor 960).
+pub const THUMB_CACHE_EDGES: &[u32] = &[400, 960];
+/// Obergrenze aller Einträge zusammen; eine Galerievorschau hat rund 25 KB, eine des
+/// Inspektors rund 120 KB. Darüber werden die am längsten unbenutzten gelöscht.
+pub const THUMB_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+/// JPEG-Qualität der gespeicherten Vorschauen.
+pub const THUMB_CACHE_QUALITY: u8 = 85;
+/// Nach so vielen neuen Einträgen räumt der Cache auf (und einmal beim Start).
+pub const THUMB_CACHE_TRIM_EVERY: usize = 256;
+/// Ein Treffer frischt die Änderungszeit eines Eintrags höchstens so oft auf.
+pub const THUMB_CACHE_TOUCH: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// Gespeicherte Startansicht der Sammlung (`core::start_view`): größere Dateien werden
+/// ignoriert (48 Fotos sind rund 20 KB).
+pub const START_VIEW_MAX_BYTES: u64 = 1024 * 1024;
 /// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
 pub const THUMBNAIL_WORKERS: usize = 4;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
@@ -301,6 +316,21 @@ impl Settings {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
+    }
+    /// Lokaler Cache-Ordner (Startansicht, Vorschauen), nie in einer Sammlung:
+    /// `%LOCALAPPDATA%\FotoImporter\cache`, weil er groß werden darf und nicht mit dem Profil
+    /// wandern soll. Mit eigener Einstellungsdatei (Tests, `FOTO_IMPORTER_SETTINGS`) liegt er
+    /// neben ihr; `FOTO_IMPORTER_CACHE` überschreibt den Ort.
+    pub fn cache_dir() -> PathBuf {
+        if let Some(dir) = std::env::var_os("FOTO_IMPORTER_CACHE") {
+            return PathBuf::from(dir);
+        }
+        if cfg!(test) || std::env::var_os("FOTO_IMPORTER_SETTINGS").is_some() {
+            return Self::path().with_file_name("cache");
+        }
+        std::env::var_os("LOCALAPPDATA")
+            .map(|dir| PathBuf::from(dir).join("FotoImporter").join("cache"))
+            .unwrap_or_else(|| Self::path().with_file_name("cache"))
     }
     /// Ordner des Diagnose-Logs neben der Einstellungsdatei, nie in einer Sammlung.
     pub fn log_dir() -> PathBuf {

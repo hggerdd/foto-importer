@@ -21,6 +21,26 @@
   nur, wenn eine Regel Spalten daraus braucht (sonst kalt über 30 s auf USB-Platten).
   Außerhalb von „Gesichter“ und „Personen“ liest die App nur Personen und Zählungen, keine
   Gesichtsgruppen samt Vorschlägen.
+- **Seite zuerst, Zählung danach:** Der Auftrag „Sammlung durchsuchen“ liest nur die Seite
+  (Datumsindex, kalt auf der USB-Platte rund 1 s) und den Stand der Sammlung
+  (`collection.id` und `projection_revision`, die Trigger bei jeder Änderung an Dateien,
+  Fotos und Projektionsspalten erhöhen). Gesamtzahl, Kameras und Bestand (`status()`) zählt
+  danach der eigene Auftrag „Sammlung zählen“ (`counts`); sie lesen alle Treffer und kosteten
+  kalt zusammen 20 bis 50 s (Messung 2026-11-21, `E:\Bilder`, siehe
+  [Validierung](../docs/validierung.md)). Bis dahin stehen die bisherigen Zahlen mit
+  „wird aktualisiert …“ da, und der Hintergrundlauf der Metadaten wartet. Eine Zählung gilt
+  weiter, solange der Stand gleich ist und die Suche (ohne Seite) dieselbe ist; das gilt nur
+  für Filter, deren Treffer allein an der Projektion hängen (`counts_follow_revision`: kein
+  Text, keine Personen, kein Gesichtszustand, keine Regel auf `meta` oder Gesichter). Auf der
+  ersten Seite müssen zusätzlich die Foto-IDs mit denen beim Zählen übereinstimmen.
+- **Startansicht:** Die erste Seite ohne Filter wird mit ihren Zählungen und dem Stand als
+  kleine JSON-Datei (`start-<Hash des Pfads>.json`) im lokalen Cache-Ordner abgelegt
+  (`Settings::cache_dir`, `%LOCALAPPDATA%\FotoImporter\cache`, nie in der Sammlung) und beim
+  Start (und Sammlungswechsel) sofort gezeigt, bevor die Datenbank geöffnet ist, markiert mit
+  „wird aktualisiert …“. Die frisch gelesene Seite ersetzt sie immer; ihre Zählungen gelten
+  nur bei gleichem Stand (sonst wird gezählt). Beim Start liest „Personen und Gesichter
+  lesen“ erst nach Seite und Zählung, damit beide nicht um die Platte konkurrieren; die
+  Ansichten „Gesichter“ und „Personen“ lesen beim Öffnen sofort.
 - **Filter ohne Entwurf:** Jede Änderung im Filterdialog fragt die Sammlung sofort neu ab
   (auf dem Worker); Datums- und Wertfelder bei Fokusverlust, Enter oder Schließen des
   Dialogs. Es gibt keinen Anwenden-Knopf und keinen Zustand „Entwurf“; der Knopf zeigt
@@ -50,8 +70,9 @@
   Nachlesen länger als 0,5 s, zeigt der Kopf „aktualisiert …“.
 - **Ordnerübersicht in der Sammlung:** Der Baum liest die Tabelle `folder_counts` (Fotos je
   Ordner, von Triggern gepflegt, siehe [Sammlung und Daten](sammlung-daten.md)); das sind
-  wenige Seiten. Kein lokaler Cache außerhalb der Sammlung: dieselbe Sammlung muss auf jedem
-  Rechner gleich schnell sein. Fehlt die Tabelle (ältere Sammlung, nur lesend geöffnet),
+  wenige Seiten. Lokale Caches außerhalb der Sammlung (Startansicht, Vorschauen) sind nur
+  Beschleunigung: Ohne sie ist jede Ansicht vollständig und richtig, nur langsamer; der
+  Ordnerbaum selbst wird nicht lokal gespeichert. Fehlt die Tabelle (ältere Sammlung, nur lesend geöffnet),
   zählt der Baum über `ix_files_dir_cover` (Messung 2026-11-17, `E:\Bilder`,
   USB-Festplatte, 98 082 Dateien: kalt 16,6 s, warm 0,02 s; nur über `metadata_photos` kalt
   33,7 s — die verstreuten Seitenzugriffe begründen die Tabelle).
@@ -59,15 +80,30 @@
   Kacheln. Der Texturcache ist nach Wurzel, Pfad, Orientierung, Ausschnitt und Kantenlänge
   verschlüsselt, begrenzt auf 192 MiB und 512 Einträge, und räumt nichts, was im aktuellen
   oder vorigen Bild gezeichnet wurde. Vorschauen sind keine RAW-Entwicklung.
+- **Lokaler Vorschau-Cache** (`core::thumb_cache`): Ganze Vorschauen der Galerie (400) und
+  des Inspektors (960) liegen als JPEG (Qualität 85) unter `<cache_dir>\vorschau`, nie in der
+  Sammlung; ein Treffer liest eine kleine lokale Datei statt das Original von der
+  Sammlungsplatte zu dekodieren. Schlüssel: kanonischer Pfad, Größe und Änderungszeit des
+  Originals, Ausrichtung, Kantenlänge (ein geändertes Original ergibt einen neuen Eintrag);
+  vorher gelten dieselben Pfadprüfungen wie beim Dekodieren. Transparente Bilder werden nicht
+  gespeichert. Grenze `THUMB_CACHE_BYTES` (1 GiB); beim Start und nach je 256 neuen Einträgen
+  werden die am längsten unbenutzten gelöscht (ein Treffer frischt die Änderungszeit höchstens
+  täglich auf), bis neun Zehntel übrig sind. Gelöscht werden nur `*.jpg` in den
+  Unterordnern und alte Zwischendateien. Nicht in der Datensicherung (ableitbar).
 
 ## Grenzen
 
-Freie Teilstringsuche ist ein Scan in SQL. Tiefe Seiten nutzen `OFFSET`. Rahmen
+Freie Teilstringsuche ist ein Scan in SQL. Tiefe Seiten nutzen `OFFSET`. Ändert sich der
+Stand, bleibt die Zählung kalt teuer (verstreute Seiten auf der USB-Platte); erst danach
+stimmen Gesamtzahl und Blätterer. Die Startansicht hilft nur der Suche ohne Filter. Rahmen
 unterschiedlich beschnittener Varianten werden nicht gleichgesetzt.
 
 ## Beim Ändern beachten
 
 Die Leisten dürfen der Galerie keine Höhe nehmen; Vorschau und Metadaten bei 980 × 680
 prüfen. Cache-Schlüssel dürfen keine je Bild oder Revision veränderlichen Werte enthalten.
+Neue Suchfelder legen fest, ob ihre Zählung der Projektionsrevision folgt
+(`counts_follow_revision`); im Zweifel nicht. Änderungen, die Treffer verändern, ohne über die
+Trigger `projection_revision` zu erhöhen, dürfen keine wiederverwendbare Zählung erlauben.
 Neue Suchfelder legen ihre Variantenpriorität fest. Bestätigte Zuordnung, Vorschlag und
 fehlende Detektion bleiben unterscheidbar.

@@ -228,6 +228,13 @@ pub fn cached_preview(
     exiftool: &str,
     control: &Control,
 ) -> Result<Preview> {
+    if request.crop.is_none()
+        && request.root.is_some()
+        && crate::config::THUMB_CACHE_EDGES.contains(&request.edge)
+        && let Some(dir) = super::thumb_cache::dir()
+    {
+        return disk_cached(&dir, request, exiftool, control);
+    }
     let (Some(bbox), Some(root)) = (request.crop, request.root.clone()) else {
         return preview(request, exiftool, control);
     };
@@ -269,6 +276,56 @@ pub fn cached_preview(
     };
     store_tile(&root, &file, &bytes);
     Ok(from(request, decode_tile(&bytes).unwrap_or(image)))
+}
+
+/// Ganze Vorschau über den lokalen Vorschau-Cache (`thumb_cache`): Ein Treffer liest eine
+/// kleine Datei von der lokalen Platte statt das Original von der Sammlungsplatte. Dieselben
+/// Pfadprüfungen wie [`preview`] gelten vorher. Wie bei Gesichtskacheln wird eine frische
+/// Vorschau durch dieselbe Kodierung geführt wie eine gespeicherte.
+fn disk_cached(
+    dir: &Path,
+    request: PreviewRequest,
+    exiftool: &str,
+    control: &Control,
+) -> Result<Preview> {
+    let resolved = request.path.canonicalize()?;
+    if let Some(root) = &request.root
+        && (!resolved.starts_with(root.canonicalize()?)
+            || request.path.symlink_metadata()?.file_type().is_symlink())
+    {
+        bail!("Vorschau liegt außerhalb des gewählten Ordners");
+    }
+    let meta = resolved.metadata()?;
+    let key = super::thumb_cache::key(&resolved, &meta, request.orientation, request.edge);
+    let from = |request: PreviewRequest, image: DynamicImage| Preview {
+        request,
+        width: image.width() as usize,
+        height: image.height() as usize,
+        rgba: image.to_rgba8().into_raw(),
+    };
+    if let Some(image) = super::thumb_cache::get(dir, &key) {
+        return Ok(from(request, image));
+    }
+    let fresh = preview(request, exiftool, control)?;
+    let request = fresh.request.clone();
+    let Some(image) =
+        image::RgbaImage::from_raw(fresh.width as u32, fresh.height as u32, fresh.rgba)
+    else {
+        bail!("Ungültige Vorschau");
+    };
+    // Transparente Bilder (PNG, GIF) bleiben ungespeichert: JPEG kennt keinen Alphakanal.
+    if image.pixels().any(|p| p.0[3] != 255) {
+        return Ok(from(request, DynamicImage::ImageRgba8(image)));
+    }
+    let image = DynamicImage::ImageRgba8(image);
+    let Ok(bytes) = super::thumb_cache::encode(&image) else {
+        return Ok(from(request, image));
+    };
+    super::thumb_cache::put(dir, &key, &bytes);
+    Ok(from(
+        request,
+        image::load_from_memory(&bytes).unwrap_or(image),
+    ))
 }
 
 /// Schreibt eine Kachel atomar und ersetzt nie eine vorhandene Datei.
