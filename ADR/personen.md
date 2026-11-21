@@ -124,6 +124,8 @@
     Lesen, damit keine Karte einer anderen Seite entschieden wird.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
+  Die Liste zeigt immer alle Treffer ohne Obergrenze (auch ohne Suchtext alle Personen);
+  gezeichnet werden nur die sichtbaren Zeilen, der Bildlauf folgt den Pfeiltasten.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern
   und Nachkommen, höchstens 300 Personen. Das Layout ist eine reine, deterministische
   Funktion (`tree_layout`). Textalternative „Als Liste anzeigen“; Verwandtschaftsprüfung für

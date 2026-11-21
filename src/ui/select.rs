@@ -11,8 +11,6 @@ use crate::core::{
 };
 use egui::{Align2, Color32, FontId, Id, Key, Modifiers, Popup, PopupCloseBehavior, RichText};
 
-/// Höchstens so viele Treffer werden gezeichnet; der Rest steht als „… weitere“.
-pub const MAX_HITS: usize = 60;
 /// Ab so vielen Einträgen erscheint das Suchfeld; kürzere Listen zeigen nur Zeilen.
 pub const SEARCH_FROM: usize = 8;
 const ROW_HEIGHT: f32 = 36.0;
@@ -97,6 +95,8 @@ struct State {
     query: String,
     highlight: usize,
     focus_pending: bool,
+    /// Bildlaufstand der Trefferliste; nötig, weil nur sichtbare Zeilen gezeichnet werden.
+    scroll: f32,
 }
 
 /// Einstellungen eines Auswahlfelds; `show` zeichnet es und meldet eine Änderung.
@@ -223,8 +223,7 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
                     state_id,
                     State {
                         query: query.to_string(),
-                        highlight: 0,
-                        focus_pending: false,
+                        ..Default::default()
                     },
                 )
             });
@@ -269,7 +268,7 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
                     i.consume_key(Modifiers::NONE, Key::ArrowUp),
                 )
             });
-            let hits_before = self.hits(&state.query).len().min(MAX_HITS);
+            let hits_before = self.hits(&state.query).len();
             if down {
                 state.highlight = choice_filter::move_highlight(state.highlight, hits_before, 1);
                 moved = true;
@@ -290,12 +289,12 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
             }
             if edit.changed() {
                 state.highlight = 0;
+                state.scroll = 0.0;
+                moved = true;
             }
         }
         let hits = self.hits(&state.query);
-        state.highlight = state
-            .highlight
-            .min(hits.len().saturating_sub(1).min(MAX_HITS - 1));
+        state.highlight = state.highlight.min(hits.len().saturating_sub(1));
         let enter = searchable && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
         if enter && let Some(&index) = hits.get(state.highlight) {
             chosen = Some(Some(self.items[index].value.clone()));
@@ -313,56 +312,55 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
             return chosen;
         }
         let pointer_moved = ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
-        egui::ScrollArea::vertical()
+        // Alle Treffer sind erreichbar; gezeichnet werden nur die sichtbaren Zeilen, damit
+        // auch lange Personenlisten flüssig bleiben. Pfeiltasten führen den Bildlauf nach.
+        let row = ROW_HEIGHT + ui.spacing().item_spacing.y;
+        if moved {
+            state.scroll = scroll_to_row(state.scroll, state.highlight, row, LIST_HEIGHT);
+        }
+        let mut area = egui::ScrollArea::vertical()
             .id_salt("filter-select-list")
             .max_height(LIST_HEIGHT)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                for (position, &index) in hits.iter().take(MAX_HITS).enumerate() {
-                    let item = &self.items[index];
-                    let (rect, response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), ROW_HEIGHT),
-                        egui::Sense::click(),
-                    );
-                    let is_selected = selected == Some(&item.value);
-                    let highlighted = position == state.highlight && searchable;
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::Button,
-                            true,
-                            is_selected,
-                            format!("{} {}", item.label, item.detail),
-                        )
-                    });
-                    paint_row(
-                        ui,
-                        rect,
-                        &response,
+            .auto_shrink([false, true]);
+        if moved {
+            area = area.vertical_scroll_offset(state.scroll);
+        }
+        let output = area.show_rows(ui, ROW_HEIGHT, hits.len(), |ui, range| {
+            for position in range {
+                let index = hits[position];
+                let item = &self.items[index];
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ROW_HEIGHT),
+                    egui::Sense::click(),
+                );
+                let is_selected = selected == Some(&item.value);
+                let highlighted = position == state.highlight && searchable;
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Button,
+                        true,
                         is_selected,
-                        highlighted,
-                        &item.label,
-                        &item.detail,
-                    );
-                    if highlighted && moved {
-                        response.scroll_to_me(None);
-                    }
-                    if response.hovered() && pointer_moved {
-                        state.highlight = position;
-                    }
-                    if response.clicked() {
-                        chosen = Some(Some(item.value.clone()));
-                    }
+                        format!("{} {}", item.label, item.detail),
+                    )
+                });
+                paint_row(
+                    ui,
+                    rect,
+                    &response,
+                    is_selected,
+                    highlighted,
+                    &item.label,
+                    &item.detail,
+                );
+                if response.hovered() && pointer_moved {
+                    state.highlight = position;
                 }
-                if hits.len() > MAX_HITS {
-                    ui.label(
-                        RichText::new(format!(
-                            "… {} weitere. Mehr Buchstaben eingeben, um einzugrenzen.",
-                            hits.len() - MAX_HITS
-                        ))
-                        .color(theme::MUTED),
-                    );
+                if response.clicked() {
+                    chosen = Some(Some(item.value.clone()));
                 }
-            });
+            }
+        });
+        state.scroll = output.state.offset.y;
         chosen
     }
 
@@ -371,6 +369,19 @@ impl<'a, T: Clone + PartialEq> FilterSelect<'a, T> {
             return (0..self.items.len()).collect();
         }
         choice_filter::filter_ranked(self.items, query, Choice::search_text)
+    }
+}
+
+/// Bildlaufstand, bei dem die Zeile `index` (Höhe `row` samt Abstand) ganz in einem Fenster
+/// der Höhe `view` liegt; ist sie schon sichtbar, bleibt `offset`.
+fn scroll_to_row(offset: f32, index: usize, row: f32, view: f32) -> f32 {
+    let top = index as f32 * row;
+    if top < offset {
+        top
+    } else if top + row > offset + view {
+        top + row - view
+    } else {
+        offset
     }
 }
 
@@ -453,4 +464,58 @@ pub fn person_select(
         .placeholder(placeholder)
         .width(width)
         .show(ui, selected)
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::scroll_to_row;
+    #[test]
+    fn scrolling_follows_the_highlighted_row_only_when_needed() {
+        assert_eq!(scroll_to_row(0.0, 2, 40.0, 288.0), 0.0, "schon sichtbar");
+        assert_eq!(scroll_to_row(0.0, 10, 40.0, 288.0), 440.0 - 288.0);
+        assert_eq!(scroll_to_row(400.0, 3, 40.0, 288.0), 120.0);
+    }
+
+    /// Ohne Suchtext sind alle Einträge erreichbar, auch weit über die früheren 60 hinaus.
+    #[test]
+    fn every_entry_is_reachable_without_typing() {
+        use super::{Choice, FilterSelect};
+        let items: Vec<Choice<usize>> = (0..150)
+            .map(|i| Choice::new(i, format!("Person {i:03}"), ""))
+            .collect();
+        let context = egui::Context::default();
+        let mut selected = None;
+        let frame = |key: Option<egui::Key>, selected: &mut Option<usize>| {
+            let events = key
+                .map(|key| {
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                })
+                .unwrap_or_default();
+            let _ = context.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        FilterSelect::new("all", &items)
+                            .open_with(Some(""))
+                            .show(ui, selected);
+                    });
+                },
+            );
+        };
+        frame(None, &mut selected);
+        for _ in 0..149 {
+            frame(Some(egui::Key::ArrowDown), &mut selected);
+        }
+        frame(Some(egui::Key::Enter), &mut selected);
+        assert_eq!(selected, Some(149));
+    }
 }
