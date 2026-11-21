@@ -48,12 +48,15 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   (trifft auch RAW/DNG desselben Fotos), das erste Ergebnis ist gewählt.
 - **Kachelsymbole:** Jede Gruppenkachel trägt oben rechts dauerhaft dezente, unter der Maus
   hervorgehobene Symbole (eine gemeinsame Funktion `tile_icons` für alle Gruppenkarten),
-  von links: Kreuz, Haken, Fragezeichen. Haken und Kreuz gibt es nur, wenn die Gruppe eine
+  von links: durchgestrichener Kreis („nicht interessiert“), Kreuz, Haken, Fragezeichen. Der
+  Kreis steht auf allen Seiten außer „Ignoriert“; Doppelklick ignoriert nur dieses Gesicht
+  (`Decision::OneIgnore`, derselbe Weg wie „Nicht interessiert“: maschinelle Zuordnung
+  entfällt, bestätigte Identität bleibt, keine Ablehnung). Haken und Kreuz gibt es nur, wenn die Gruppe eine
   Zielperson X hat (`tile_target`): in „Vorschläge prüfen“ und „Wahrscheinlich X“ die
   vorgeschlagene Person, in „Benennen“ der sichere Vorschlag von „Ist das X?“. Auf Seiten
   bestätigter Gesichter („Bestätigt“ und „Bestätigt“ einer Person) ist X die Person der
   Gruppe, dort gibt es nur das Kreuz. „Ungeeignet“, „Ignoriert“ und Gruppen ohne Zielperson
-  zeigen nur das Fragezeichen. **Doppelklick** auf den Haken bestätigt genau dieses Gesicht
+  haben weder Haken noch Kreuz. **Doppelklick** auf den Haken bestätigt genau dieses Gesicht
   als X (`user`), Doppelklick auf das Kreuz lehnt X für genau dieses Gesicht ab (gespeicherte
   Ablehnung; trug es X, wird es unbenannt) – derselbe Weg wie „Bestätigen“ bzw. „Keines ist
   X“ (`decide_group` mit `Decision::OneIs`/`OneIsNot`, `name_group` mit nur dieser ID); die

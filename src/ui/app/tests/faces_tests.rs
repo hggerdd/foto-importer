@@ -873,6 +873,9 @@ fn rejections(root: &Path) -> anyhow::Result<Vec<(i64, i64)>> {
     Ok(rows)
 }
 
+const IGNORE_LABEL: &str =
+    "Doppelklick: ein Gesicht, aber nicht interessant (nur dieses ignorieren)";
+
 /// Kachelsymbole: Einfachklick auf Haken oder Kreuz bewirkt nichts und schaltet keine Auswahl
 /// um; Doppelklick bestätigt bzw. lehnt genau dieses Gesicht ab, die Gruppe bleibt mit den
 /// übrigen Gesichtern (samt Abwahl) stehen; Strg+Z nimmt es zurück; „?“ öffnet den Dialog.
@@ -914,18 +917,32 @@ fn tile_icons_decide_exactly_one_face_on_double_click() -> anyhow::Result<()> {
     click_at(&context, &mut app, pos, 2);
     assert_eq!(naming_tasks(&app) + app.undo.len(), 2);
     assert_eq!(page_ids(&app), vec![vec![1]]);
+    // Doppelklick auf „nicht interessiert“ von Gesicht 1: ignoriert, ohne Ablehnung.
+    let pos = tile_icon_pos(&context, &mut app, "1.jpg", IGNORE_LABEL);
+    click_at(&context, &mut app, pos, 2);
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 3);
+    assert!(page_ids(&app).is_empty());
     wait_for_tasks(&mut app);
     assert_eq!(
         face_rows(root.path())?,
         vec![
-            (1, Some(1), "suggested".into()),
+            (1, None, String::new()),
             (2, Some(1), "user".into()),
             (3, None, String::new()),
         ]
     );
+    let ignored: i64 = Collection::open(root.path(), false)?.db.query_row(
+        "SELECT ignored FROM faces WHERE id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(ignored, 1);
     assert_eq!(rejections(root.path())?, vec![(3, 1)]);
-    assert_eq!(app.undo.len(), 2, "beide Entscheidungen sind zurücknehmbar");
-    // Strg+Z nimmt die Ablehnung zurück, ein zweites die Bestätigung.
+    assert_eq!(app.undo.len(), 3, "alle Entscheidungen sind zurücknehmbar");
+    // Strg+Z nimmt das Ignorieren zurück, dann die Ablehnung, dann die Bestätigung.
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(face_rows(root.path())?[0], (1, Some(1), "suggested".into()));
     app.undo_last_face_decision();
     wait_for_tasks(&mut app);
     assert_eq!(face_rows(root.path())?[2], (3, Some(1), "suggested".into()));
@@ -959,6 +976,7 @@ fn tile_icons_follow_the_target_person_of_the_group() -> anyhow::Result<()> {
         let widgets = frame_with(context, app, Vec::new());
         let count = |label: &str| widgets.iter().filter(|(text, _)| text == label).count();
         (
+            count(IGNORE_LABEL),
             count("Doppelklick: das ist nicht Anna"),
             count("Doppelklick: das ist Anna"),
             count("Namen wählen …"),
@@ -966,13 +984,13 @@ fn tile_icons_follow_the_target_person_of_the_group() -> anyhow::Result<()> {
     };
     // „Benennen“ mit sicherem Vorschlag (zwei Gesichter) und ohne (ein Gesicht).
     let (context, mut app) = sure_app(root.path());
-    assert_eq!(labels(&context, &mut app), (2, 2, 3));
+    assert_eq!(labels(&context, &mut app), (3, 2, 2, 3));
     app.face_page.groups.truncate(1);
     app.face_page.suggestions.clear();
     assert_eq!(
         labels(&context, &mut app),
-        (0, 0, 2),
-        "nur das Fragezeichen"
+        (2, 0, 0, 2),
+        "nur Ignorieren und Fragezeichen"
     );
     // Ohne Zielperson bleibt der Doppelklick wirkungslos.
     let group = app.face_page.groups[0].clone();
@@ -996,22 +1014,25 @@ fn tile_icons_follow_the_target_person_of_the_group() -> anyhow::Result<()> {
         app.tasks.clear();
         app.face_page.people = people.clone();
         app.face_page.groups = vec![vec![confirmed(8), confirmed(9)]];
-        assert_eq!(labels(&context, &mut app), (2, 0, 2), "{mode}");
+        assert_eq!(labels(&context, &mut app), (2, 2, 0, 2), "{mode}");
         let group = app.face_page.groups[0].clone();
         assert!(!app.decide_group(&group, faces_view::Decision::OneIs(8)));
     }
     // „Ungeeignet“ und „Ignoriert“: nur das Fragezeichen.
     app.view = View::Faces;
-    for mode in ["unsuitable", "ignored"] {
+    for (mode, ignore) in [("unsuitable", 1), ("ignored", 0)] {
         app.face_mode = mode.into();
         app.face_page.groups = vec![vec![confirmed(8)]];
-        assert_eq!(labels(&context, &mut app), (0, 0, 1), "{mode}");
+        assert_eq!(labels(&context, &mut app), (ignore, 0, 0, 1), "{mode}");
     }
+    // Bereits ignorierte Gesichter lassen sich nicht noch einmal ignorieren.
+    let group = app.face_page.groups[0].clone();
+    assert!(!app.decide_group(&group, faces_view::Decision::OneIgnore(8)));
     // Der Schalter in der Fußzeile (Standard an) blendet alle Symbole aus.
     assert!(Settings::default().tile_icons);
     let (context, mut app) = sure_app(root.path());
     app.settings.tile_icons = false;
-    assert_eq!(labels(&context, &mut app), (0, 0, 0));
+    assert_eq!(labels(&context, &mut app), (0, 0, 0, 0));
     let widgets = frame_with(&context, &mut app, Vec::new());
     assert!(
         widgets

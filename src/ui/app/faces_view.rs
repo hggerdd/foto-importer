@@ -146,9 +146,10 @@ impl PhotoApp {
                 let icons = ui
                     .checkbox(&mut self.settings.tile_icons, "Symbole auf den Gesichtern")
                     .on_hover_text(
-                        "Kreuz, Haken und Fragezeichen oben rechts auf jedem Gesicht: \
-                         Doppelklick lehnt ab bzw. bestätigt nur dieses Gesicht, das \
-                         Fragezeichen öffnet die Namensauswahl.",
+                        "Symbole oben rechts auf jedem Gesicht: Doppelklick auf den \
+                         durchgestrichenen Kreis heißt „nicht interessiert“, auf Kreuz oder \
+                         Haken lehnt ab bzw. bestätigt nur dieses Gesicht; das Fragezeichen \
+                         öffnet die Namensauswahl.",
                     );
                 if preview.changed() || icons.changed() {
                     self.save();
@@ -480,11 +481,7 @@ impl PhotoApp {
         // Zielperson der Kachelsymbole (Haken/Kreuz); ohne sie gibt es nur das Fragezeichen.
         let target = tile_target(&mode, &self.face_page, group);
         let show_icons = self.settings.tile_icons;
-        let tile_hint = match (show_icons, target.is_some()) {
-            (false, _) => TILE_PLAIN_HINT,
-            (true, true) => TILE_ICONS_HINT,
-            (true, false) => TILE_MENU_HINT,
-        };
+        let tile_hint = tile_hint(show_icons, target.as_ref(), can_ignore(&mode));
         theme::card(ui).show(ui, |ui| {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
             ui.set_min_width(ui.available_width());
@@ -780,11 +777,15 @@ impl PhotoApp {
                                             response.rect,
                                             ui.id().with(("tile-icons", face.id)),
                                             target.as_ref(),
+                                            can_ignore(&mode),
                                             !busy,
                                         )
                                     })
                                     .flatten();
                                 match icon {
+                                    Some(TileIcon::Ignore) => {
+                                        decision = Some(Decision::OneIgnore(face.id))
+                                    }
                                     Some(TileIcon::Is) => decision = Some(Decision::OneIs(face.id)),
                                     Some(TileIcon::IsNot) => {
                                         decision = Some(Decision::OneIsNot(face.id))
@@ -977,6 +978,14 @@ impl PhotoApp {
                 (removed, BTreeSet::new(), Some(person), String::new(), false)
             }
             Decision::NotFace => return self.mark_not_face(kept.into_iter().collect()),
+            Decision::OneIgnore(id) => {
+                // Wie „Nicht interessiert“, nur für dieses Gesicht; bestätigte Identität bleibt.
+                if !can_ignore(self.page_mode()) || !ids.contains(&id) {
+                    return false;
+                }
+                self.carry_draft(group, id);
+                (vec![id], BTreeSet::new(), None, String::new(), true)
+            }
             Decision::OneIs(id) | Decision::OneIsNot(id) => {
                 // Kachelsymbol: dieselbe Entscheidung wie für die Gruppe, nur für dieses
                 // Gesicht; die übrigen bleiben unberührt (keine Ablehnung, keine Bestätigung).
@@ -991,24 +1000,7 @@ impl PhotoApp {
                 } else {
                     BTreeSet::new()
                 };
-                // Auswahl und Namensentwurf der übrigen Gesichter gehen mit in die verkleinerte
-                // Karte über.
-                let rest: Vec<Face> = group.iter().filter(|f| f.id != id).cloned().collect();
-                if let Some(draft) = draft
-                    && !rest.is_empty()
-                {
-                    let carried = Draft {
-                        name: draft.name.clone(),
-                        person: draft.person,
-                        excluded: draft
-                            .excluded
-                            .iter()
-                            .copied()
-                            .filter(|x| *x != id)
-                            .collect(),
-                    };
-                    self.drafts.insert(draft_key(&rest), carried);
-                }
+                self.carry_draft(group, id);
                 (
                     vec![id],
                     selected,
@@ -1028,6 +1020,30 @@ impl PhotoApp {
         });
         self.queue_hiding("Gesichtsgruppe speichern", hide, work);
         true
+    }
+
+    /// Nach einer Entscheidung über ein einzelnes Gesicht gehen Auswahl und Namensentwurf der
+    /// übrigen Gesichter in die verkleinerte Karte über.
+    fn carry_draft(&mut self, group: &[Face], id: i64) {
+        let rest: Vec<Face> = group.iter().filter(|f| f.id != id).cloned().collect();
+        let Some(draft) = self
+            .drafts
+            .get(&draft_key(group))
+            .filter(|_| !rest.is_empty())
+        else {
+            return;
+        };
+        let carried = Draft {
+            name: draft.name.clone(),
+            person: draft.person,
+            excluded: draft
+                .excluded
+                .iter()
+                .copied()
+                .filter(|x| *x != id)
+                .collect(),
+        };
+        self.drafts.insert(draft_key(&rest), carried);
     }
 }
 
@@ -1075,6 +1091,13 @@ pub(super) enum Decision {
     OneIs(i64),
     /// Kachelsymbol Kreuz: genau dieses Gesicht ist nicht die Zielperson der Gruppe.
     OneIsNot(i64),
+    /// Kachelsymbol „nicht interessiert“: nur dieses Gesicht ignorieren.
+    OneIgnore(i64),
+}
+
+/// Lässt sich ein Gesicht dieser Seite einzeln ignorieren? Überall außer in „Ignoriert“.
+fn can_ignore(mode: &str) -> bool {
+    mode != "ignored"
 }
 
 /// Zielperson X einer Gruppe für die Kachelsymbole.
@@ -1258,19 +1281,34 @@ enum TileAction {
     Name,
     ShowPhoto,
 }
-/// Hinweis unter der Maus für Kacheln mit [`tile_menu`] und nur dem Fragezeichen.
-const TILE_MENU_HINT: &str = "Fragezeichen oben rechts: Namen wählen\n\
-     Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
-/// Hinweis bei abgeschalteten Kachelsymbolen.
-const TILE_PLAIN_HINT: &str = "Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
-/// Hinweis für Kacheln einer Gruppe mit Zielperson (Haken und Kreuz).
-const TILE_ICONS_HINT: &str = "Doppelklick auf Haken oder Kreuz oben rechts: nur dieses Gesicht \
-     ist bzw. ist nicht die Person; Fragezeichen: Namen wählen\n\
-     Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+/// Hinweis unter der Maus für Gruppenkacheln: Rechtsklickmenü ([`tile_menu`]) und, wenn
+/// eingeschaltet, die Symbole, die diese Kachel zeigt.
+fn tile_hint(icons: bool, target: Option<&TileTarget>, ignore: bool) -> String {
+    let mut lines = Vec::new();
+    if icons {
+        if let Some(target) = target {
+            lines.push(if target.confirm {
+                "Doppelklick auf Haken oder Kreuz oben rechts: nur dieses Gesicht ist bzw. ist \
+                 nicht die Person"
+            } else {
+                "Doppelklick auf das Kreuz oben rechts: dieses Gesicht ist nicht die Person"
+            });
+        }
+        if ignore {
+            lines.push("Doppelklick auf den durchgestrichenen Kreis: nicht interessiert");
+        }
+        lines.push("Fragezeichen oben rechts: Namen wählen");
+    }
+    lines.push("Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen");
+    lines.join("\n")
+}
 
 /// Symbol oben rechts auf einer Gruppenkachel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TileIcon {
+    /// Durchgestrichener Kreis: ein Gesicht, aber für die Sammlung uninteressant
+    /// („Nicht interessiert“ für nur dieses Gesicht, Doppelklick).
+    Ignore,
     /// Kreuz: „das ist nicht X“ (Doppelklick).
     IsNot,
     /// Haken: „das ist X“ (Doppelklick).
@@ -1282,6 +1320,9 @@ enum TileIcon {
 /// Hinweistext (und Beschriftung für Bedienhilfen) eines Kachelsymbols.
 fn tile_icon_hint(icon: TileIcon, name: &str) -> String {
     match icon {
+        TileIcon::Ignore => {
+            "Doppelklick: ein Gesicht, aber nicht interessant (nur dieses ignorieren)".into()
+        }
         TileIcon::IsNot => format!("Doppelklick: das ist nicht {name}"),
         TileIcon::Is => format!("Doppelklick: das ist {name}"),
         TileIcon::Name => "Namen wählen …".into(),
@@ -1289,8 +1330,9 @@ fn tile_icon_hint(icon: TileIcon, name: &str) -> String {
 }
 
 /// Die Symbole oben rechts auf einer Gruppenkachel, für alle Seiten mit Gruppenkarten gleich:
-/// von links Kreuz, Haken (nur mit Zielperson; der Haken nur, wenn `target.confirm`) und
-/// Fragezeichen. Haken und Kreuz wirken erst auf Doppelklick, das Fragezeichen auf Klick.
+/// von links „nicht interessiert“ (nur mit `ignore`), Kreuz, Haken (beide nur mit Zielperson;
+/// der Haken nur, wenn `target.confirm`) und Fragezeichen. Alle außer dem Fragezeichen wirken
+/// erst auf Doppelklick, das Fragezeichen auf Klick.
 /// Die Symbole müssen nach der Kachel angemeldet werden: Dann liegen sie über ihr, und ein
 /// Klick auf ein Symbol schaltet die Auswahl der Kachel nicht um. Dauerhaft dezent, unter der
 /// Maus hervorgehoben; dunkler Grund mit hellem Zeichen, lesbar in hell und dunkel.
@@ -1299,9 +1341,13 @@ fn tile_icons(
     tile: egui::Rect,
     id: egui::Id,
     target: Option<&TileTarget>,
+    ignore: bool,
     enabled: bool,
 ) -> Option<TileIcon> {
-    let mut icons = Vec::with_capacity(3);
+    let mut icons = Vec::with_capacity(4);
+    if ignore {
+        icons.push(TileIcon::Ignore);
+    }
     if let Some(target) = target {
         icons.push(TileIcon::IsNot);
         if target.confirm {
@@ -1310,7 +1356,8 @@ fn tile_icons(
     }
     icons.push(TileIcon::Name);
     let name = target.map(|t| t.name.as_str()).unwrap_or_default();
-    let edge = (tile.width() / 5.0).clamp(14.0, 20.0);
+    // Vier Symbole passen auch auf die kleinste Kachel (60 Punkte).
+    let edge = (tile.width() / 6.0).clamp(12.0, 20.0);
     let (margin, gap) = (3.0, 2.0);
     let mut chosen = None;
     for (index, icon) in icons.iter().rev().enumerate() {
@@ -1344,12 +1391,24 @@ fn tile_icons(
             (_, false, _) => egui::Color32::from_white_alpha(90),
             (true, _, TileIcon::Is) => egui::Color32::from_rgb(130, 230, 130),
             (true, _, TileIcon::IsNot) => egui::Color32::from_rgb(255, 130, 130),
+            (true, _, TileIcon::Ignore) => egui::Color32::from_rgb(240, 200, 110),
             (true, _, TileIcon::Name) => egui::Color32::WHITE,
             (false, _, _) => egui::Color32::from_white_alpha(200),
         };
         let stroke = egui::Stroke::new(1.6_f32, color);
         let r = radius * 0.45;
         match icon {
+            TileIcon::Ignore => {
+                // Durchgestrichener Kreis wie ein Verbotszeichen: „egal für die Sammlung“.
+                painter.circle_stroke(center, r * 1.2, stroke);
+                painter.line_segment(
+                    [
+                        center + egui::vec2(-r * 0.85, r * 0.85),
+                        center + egui::vec2(r * 0.85, -r * 0.85),
+                    ],
+                    stroke,
+                );
+            }
             TileIcon::IsNot => {
                 painter.line_segment(
                     [center + egui::vec2(-r, -r), center + egui::vec2(r, r)],
@@ -1387,7 +1446,7 @@ fn tile_icons(
             TileIcon::Name => response.clicked(),
             // Eigener Doppelklick: beide Klicks müssen dieses Symbol treffen. egui zählt auch
             // einen schnellen Klick auf die Kachel und dann auf das Symbol als Doppelklick.
-            TileIcon::Is | TileIcon::IsNot => {
+            TileIcon::Ignore | TileIcon::Is | TileIcon::IsNot => {
                 response.clicked() && {
                     let now = ui.input(|i| i.time);
                     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
