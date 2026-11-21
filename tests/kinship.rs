@@ -1,5 +1,7 @@
 //! Verwandtschaftsrechner (ADR 0061): Fixture-Familien mit erwarteten Beziehungen,
 //! Grenzen und ein Eigenschaftstest gegen eine naive Referenzdefinition.
+mod common;
+use common::{parent, partner};
 use foto_importer::config::{
     KINSHIP_MAX_GENERATIONS as MAX_GENERATIONS, KINSHIP_MAX_PER_GROUP as MAX_PER_GROUP,
 };
@@ -7,12 +9,6 @@ use foto_importer::core::kinship::{Family, Relation};
 use foto_importer::core::relations::{Edge, Gender, Kind, Role, canonical};
 use std::collections::BTreeMap;
 
-fn parent(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Parent, b)
-}
-fn partner(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Partner, b)
-}
 fn former(a: i64, b: i64) -> Edge {
     canonical(a, Role::FormerPartner, b)
 }

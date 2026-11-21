@@ -1,10 +1,11 @@
+mod common;
 use foto_importer::core::{collection::Collection, faces, inference, jobs::Control};
 use rusqlite::params;
 use std::collections::BTreeSet;
 fn seed(c: &Collection, count: i64) -> anyhow::Result<()> {
     for id in 1..=count {
         c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
-        c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality) VALUES(?,?,?,'det',0,0,1,1,1)",params![id,id,format!("{id}.jpg")])?;
+        common::face(c, id, id)?;
         c.db.execute(
             "INSERT INTO face_embeddings VALUES(?,'test',2,?)",
             params![id, faces::encode(&[1.0, 0.0])],
@@ -271,7 +272,7 @@ fn polar(c: &Collection, id: i64, photo: i64, degrees: f32) -> anyhow::Result<()
         "INSERT OR IGNORE INTO photos(id,status) VALUES(?,'present')",
         [photo],
     )?;
-    c.db.execute("INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality) VALUES(?,?,?,'det',0,0,1,1,1)", params![id, photo, format!("{id}.jpg")])?;
+    common::face(c, id, photo)?;
     let r = degrees.to_radians();
     c.db.execute(
         "INSERT INTO face_embeddings VALUES(?,'test',2,?)",

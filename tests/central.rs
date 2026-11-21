@@ -1,4 +1,6 @@
 //! Zentraler Personenbestand zwischen mehreren Sammlungen (ADR 0062).
+mod common;
+use common::person;
 use foto_importer::core::{
     central::{self, Central, CentralConfig, Side},
     collection::Collection,
@@ -32,12 +34,6 @@ fn setup() -> anyhow::Result<Setup> {
         b,
         cfg,
     })
-}
-fn person(name: &str) -> NewPerson {
-    NewPerson {
-        name: name.into(),
-        ..Default::default()
-    }
 }
 fn open(cfg: &CentralConfig) -> Central {
     Central::open_config(cfg).expect("central")

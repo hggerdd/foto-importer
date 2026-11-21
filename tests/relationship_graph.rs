@@ -1,3 +1,4 @@
+mod common;
 use foto_importer::core::{
     collection::Collection,
     jobs::Control,
@@ -35,11 +36,7 @@ fn weights_match_joint_photo_search_and_include_recorded_zero_links() -> anyhow:
         (999, 1, "user", 0),
         (999, 2, "user", 0),
     ] {
-        collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
-             VALUES(?,'a.jpg','det',?,?,?,0.1,0.1,0.5,0.5)",
-            rusqlite::params![photo, person, assignment, retained],
-        )?;
+        common::assigned_face(&collection, photo, person, assignment, retained)?;
     }
     let graph = relationship_graph::for_person(&collection, 1)?;
     assert_eq!(graph.name, "Anna");
@@ -110,11 +107,7 @@ fn network_contains_all_people_and_matches_the_photo_counts() -> anyhow::Result<
         (second, 2, "user", 0),
         (second, 3, "user", 1),
     ] {
-        collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,retained,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
-             VALUES(?,'a.jpg','det',?,?,?,0.1,0.1,0.5,0.5)",
-            rusqlite::params![photo, person, assignment, retained],
-        )?;
+        common::assigned_face(&collection, photo, person, assignment, retained)?;
     }
     let network = relationship_graph::network(&collection)?;
     assert!(
@@ -239,11 +232,7 @@ fn graph_is_recomputed_only_when_its_data_changes() -> anyhow::Result<()> {
          INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');",
     )?;
     for person in [1, 2] {
-        collection.db.execute(
-            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
-             VALUES(?,'a.jpg','det',?,'user',0.1,0.1,0.5,0.5)",
-            rusqlite::params![photo, person],
-        )?;
+        common::assigned_face(&collection, photo, person, "user", 0)?;
     }
     let (signature, network) = relationship_graph::refresh(&collection, None)?;
     let network = network.expect("erstes Lesen berechnet");

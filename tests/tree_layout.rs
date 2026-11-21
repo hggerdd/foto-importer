@@ -1,17 +1,12 @@
 //! Stammbaum-Layout (ADR 0061): keine Überlappung, deterministisch, endlich, schnell.
 #![allow(clippy::unwrap_used)]
+mod common;
+use common::{parent, partner};
 use foto_importer::core::kinship::Family;
-use foto_importer::core::relations::{Edge, Gender, Role, canonical};
+use foto_importer::core::relations::{Gender, Role, canonical};
 use foto_importer::core::tree_layout::{LinkKind, MAX_TREE_NODES, NodeRole, TreeLayout, layout};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
-
-fn parent(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Parent, b)
-}
-fn partner(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Partner, b)
-}
 
 /// Familie wie im Verwandtschaftstest: 4 Generationen, Geschwister, Halbgeschwister,
 /// frühere Partner, mehrere Partner.

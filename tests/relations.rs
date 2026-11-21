@@ -1,3 +1,5 @@
+mod common;
+use common::{collection_with_people as collection, parent};
 use foto_importer::core::{
     collection::Collection,
     faces,
@@ -6,15 +8,6 @@ use foto_importer::core::{
     relations::{self, Edge, Kind, Role, canonical, validate_add},
 };
 use rusqlite::params;
-
-fn collection(people: i64) -> anyhow::Result<(tempfile::TempDir, Collection)> {
-    let temp = tempfile::tempdir()?;
-    let c = Collection::open(temp.path(), true)?;
-    for id in 1..=people {
-        c.db.execute("INSERT INTO persons(id) VALUES(?)", [id])?;
-    }
-    Ok((temp, c))
-}
 
 fn stored(c: &Collection) -> anyhow::Result<Vec<(i64, i64, i64)>> {
     Ok(c.db
@@ -240,10 +233,6 @@ fn collections_without_the_new_type_rows_keep_working() -> anyhow::Result<()> {
         )?;
     }
     Ok(())
-}
-
-fn parent(a: i64, b: i64) -> Edge {
-    canonical(a, Role::Parent, b)
 }
 
 /// Befunde der Prüfung (ADR 0061): Die alte Validierung erlaubte diese Widersprüche.
