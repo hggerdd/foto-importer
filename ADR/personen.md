@@ -106,9 +106,13 @@
   für alle Ansichten), darunter „Wahrscheinlich X · N | Bestätigt · N“. Beide Seiten nutzen
   die Gruppenkarten, Seiten zu acht Gruppen, Rücknahme, sofortiges Ausblenden und den Leser
   der Ansicht „Gesichter“ (`faces::page_with`, Revision `face_revision`).
-  - **Wahrscheinlich X** (Modus `probable`): unbestätigte Gesichter nach Personenscore
-    absteigend (`recognition::person_candidates`, siehe Gesichtserkennung), in Gruppen zu 28
-    geschnitten, die erste ist die wahrscheinlichste. Karte, Knöpfe und Tasten wie „Vorschläge
+  - **Wahrscheinlich X** (Modus `probable`, `recognition::person_candidates`, siehe
+    Gesichtserkennung): zwei Abschnitte, jeder nach Personenscore für X absteigend und für
+    sich in Gruppen zu 28 geschnitten (keine Gruppe mischt sie). Zuerst die Gesichter, deren
+    beste Person X ist; dann unter der Überschrift „Eher jemand anderes – X ist nicht am
+    wahrscheinlichsten“ die, bei denen eine andere Person vorn liegt. Dort nennt jede Kachel
+    „eher: Y (0,62)“ und die Kopfzeile der Karte die anderen Personen mit Anzahl. Der Reiter
+    zeigt „Wahrscheinlich X · N (+M eher andere)“. Karte, Knöpfe und Tasten wie „Vorschläge
     prüfen“ für diese Person („Alle N sind X“, abgewählte werden abgelehnt; „Keines ist X“;
     „Nicht interessiert“). Nach jeder Entscheidung liest die Seite neu; bestätigte Gesichter
     ändern die Referenzen erst mit der Wartung.

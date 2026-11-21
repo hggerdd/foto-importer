@@ -23,8 +23,9 @@ impl PhotoApp {
         let hint = if self.person_face_mode == "probable" {
             let minimum = format!("{:.2}", config::PERSON_CANDIDATE_MIN).replace('.', ",");
             format!(
-                "Unbestätigte Gesichter, nach Ähnlichkeit zu {} geordnet, wahrscheinlichste zuerst \
-                 (ab {minimum}). Bestätigen und Ablehnen wie in „Vorschläge prüfen“; die Tasten J, \
+                "Unbestätigte Gesichter, nach Ähnlichkeit zu {0} geordnet, wahrscheinlichste zuerst \
+                 (ab {minimum}); darunter die, die einer anderen Person noch ähnlicher sind als \
+                 {0}. Bestätigen und Ablehnen wie in „Vorschläge prüfen“; die Tasten J, \
                  N und Entf gelten für die oberste Gruppe.",
                 person.name
             )
@@ -78,12 +79,17 @@ impl PhotoApp {
                 fallback
             }
         };
-        let tabs = [
-            (
-                "probable",
-                format!("Wahrscheinlich {}", person.name),
-                count("probable", None),
+        let others = self.face_page.probable_others;
+        let probable = match count("probable", None) {
+            Some(total) => format!(
+                "Wahrscheinlich {}{}",
+                person.name,
+                probable_count(total, others)
             ),
+            None => format!("Wahrscheinlich {}", person.name),
+        };
+        let tabs = [
+            ("probable", probable, None),
             (
                 "person-confirmed",
                 "Bestätigt".to_string(),
@@ -135,6 +141,160 @@ impl PhotoApp {
         self.face_page.groups.clear();
         self.face_page.total_groups = 0;
         self.face_page.faces_total = 0;
+        self.face_page.probable_others = 0;
+        self.face_page.better.clear();
         self.reset_face_page();
+    }
+
+    /// Überschrift vor der ersten Gruppe des zweiten Abschnitts der Seite `probable`.
+    pub(super) fn others_heading(&self, ui: &mut egui::Ui, group: &[Face]) {
+        let name = group
+            .first()
+            .and_then(|f| f.person)
+            .and_then(|id| self.face_page.people.iter().find(|p| p.id == id))
+            .map(|p| p.name.as_str())
+            .unwrap_or_default();
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "Eher jemand anderes – {name} ist nicht am wahrscheinlichsten"
+            ))
+            .size(16.0)
+            .strong(),
+        );
+        ui.label(
+            RichText::new(format!(
+                "Diese Gesichter ähneln {name}, eine andere Person ähnelt ihnen aber noch mehr. \
+                 Unter jedem Gesicht steht, wer."
+            ))
+            .small()
+            .weak(),
+        );
+        ui.add_space(6.0);
+    }
+}
+
+/// Zahl im Reiter „Wahrscheinlich X“: erster Abschnitt, dazu der zweite in Klammern.
+pub(super) fn probable_count(total: usize, others: usize) -> String {
+    let first = total.saturating_sub(others);
+    if others == 0 {
+        format!(" · {first}")
+    } else {
+        format!(" · {first} (+{others} eher andere)")
+    }
+}
+
+/// Beginnt mit `index` der zweite Abschnitt der Seite `probable`? Gruppen mischen die
+/// Abschnitte nie, daher entscheidet das erste Gesicht.
+pub(super) fn starts_others(
+    groups: &[Vec<Face>],
+    index: usize,
+    better: &BTreeMap<i64, (i64, f32)>,
+) -> bool {
+    let others = |group: &Vec<Face>| group.first().is_some_and(|f| better.contains_key(&f.id));
+    groups.get(index).is_some_and(others) && (index == 0 || !others(&groups[index - 1]))
+}
+
+fn person_name(people: &[faces::Person], id: i64) -> String {
+    people
+        .iter()
+        .find(|p| p.id == id)
+        .map_or_else(|| format!("#{id}"), |p| p.name.clone())
+}
+
+/// „eher: Y (0,62)“ unter einem Gesicht des zweiten Abschnitts.
+pub(super) fn better_note(better: Option<&(i64, f32)>, people: &[faces::Person]) -> Option<String> {
+    let (person, score) = better?;
+    Some(format!(
+        "eher: {} ({})",
+        person_name(people, *person),
+        format!("{score:.2}").replace('.', ",")
+    ))
+}
+
+/// Zusammenfassung für die Karte: die anderen Personen nach Häufigkeit (bis zu drei), etwa
+/// „eher: Anna (12×), Ben (3×)“.
+pub(super) fn better_summary(
+    group: &[Face],
+    better: &BTreeMap<i64, (i64, f32)>,
+    people: &[faces::Person],
+) -> Option<String> {
+    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    for face in group {
+        if let Some((person, _)) = better.get(&face.id) {
+            *counts.entry(*person).or_default() += 1;
+        }
+    }
+    let mut counts: Vec<(i64, usize)> = counts.into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut parts: Vec<String> = counts
+        .iter()
+        .take(3)
+        .map(|(person, count)| format!("{} ({count}×)", person_name(people, *person)))
+        .collect();
+    if counts.len() > 3 {
+        parts.push("…".into());
+    }
+    (!parts.is_empty()).then(|| format!("eher: {}", parts.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn person(id: i64, name: &str) -> faces::Person {
+        faces::Person {
+            id,
+            name: name.into(),
+            birth: String::new(),
+            count: 0,
+            gender: String::new(),
+            note: String::new(),
+        }
+    }
+    fn face(id: i64) -> Face {
+        Face {
+            id,
+            photo: id,
+            source: String::new(),
+            bbox: [0.0; 4],
+            person: Some(1),
+            assignment: None,
+            ignored: false,
+            score: 0.5,
+        }
+    }
+
+    #[test]
+    fn tab_count_shows_the_second_section_only_when_present() {
+        assert_eq!(probable_count(10, 0), " · 10");
+        assert_eq!(probable_count(10, 4), " · 6 (+4 eher andere)");
+    }
+
+    #[test]
+    fn heading_comes_once_before_the_first_group_of_the_second_section() {
+        let groups = vec![vec![face(1)], vec![face(2)], vec![face(3)]];
+        let better = BTreeMap::from([(2, (7, 0.6)), (3, (8, 0.5))]);
+        let starts: Vec<bool> = (0..3).map(|i| starts_others(&groups, i, &better)).collect();
+        assert_eq!(starts, vec![false, true, false]);
+        // Eine Seite ganz im zweiten Abschnitt beginnt mit der Überschrift.
+        assert!(starts_others(&groups[1..], 0, &better));
+    }
+
+    #[test]
+    fn notes_name_the_better_person_with_a_decimal_comma() {
+        let people = vec![person(7, "Anna"), person(8, "Ben")];
+        assert_eq!(
+            better_note(Some(&(7, 0.6234)), &people).as_deref(),
+            Some("eher: Anna (0,62)")
+        );
+        assert_eq!(better_note(None, &people), None);
+        let better = BTreeMap::from([(1, (8, 0.5)), (2, (7, 0.6)), (3, (8, 0.55))]);
+        let group = vec![face(1), face(2), face(3), face(4)];
+        assert_eq!(
+            better_summary(&group, &better, &people).as_deref(),
+            Some("eher: Ben (2×), Anna (1×)")
+        );
+        assert_eq!(better_summary(&[face(4)], &better, &people), None);
     }
 }

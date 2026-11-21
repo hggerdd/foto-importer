@@ -57,11 +57,13 @@ fn main() -> anyhow::Result<()> {
             &control,
         )?;
         let candidates = started.elapsed();
+        let others = found.iter().filter(|f| f.better.is_some()).count();
         let started = Instant::now();
         let page = faces::page_filtered(&collection, "probable", 0, Some(person))?;
         println!(
-            "Runde {round}: {} wahrscheinliche Gesichter in {candidates:?}; Seite 1 ({} Gruppen) in {:?}",
+            "Runde {round}: {} wahrscheinliche Gesichter ({} am ehesten {name}, {others} eher andere) in {candidates:?}; Seite 1 ({} Gruppen) in {:?}",
             found.len(),
+            found.len() - others,
             page.groups.len(),
             started.elapsed()
         );

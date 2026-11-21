@@ -203,7 +203,17 @@ impl PhotoApp {
             .id_salt("face-groups")
             .animated(false)
             .show(ui, |ui| {
+                let probable = self.page_mode() == "probable";
                 for (index, group) in self.face_page.groups.clone().into_iter().enumerate() {
+                    if probable
+                        && person_faces_view::starts_others(
+                            &self.face_page.groups,
+                            index,
+                            &self.face_page.better,
+                        )
+                    {
+                        self.others_heading(ui, &group);
+                    }
                     let top = ui.next_widget_position().y - ui.clip_rect().top();
                     if let Some(face) = group.first() {
                         self.face_row_tops.push((face.id, top));
@@ -505,6 +515,13 @@ impl PhotoApp {
                             if let Some(range) = similarity_text(group.iter().map(|f| f.score)) {
                                 detail = format!("{detail} · {range}");
                             }
+                            if let Some(others) = person_faces_view::better_summary(
+                                group,
+                                &self.face_page.better,
+                                &self.face_page.people,
+                            ) {
+                                detail = format!("{detail} · {others}");
+                            }
                             ui.label(RichText::new(detail).small().weak());
                         });
                         ui.add_space(12.0);
@@ -729,6 +746,15 @@ impl PhotoApp {
                                     painter.line_segment(
                                         [rect.left_bottom(), rect.right_top()],
                                         egui::Stroke::new(2.0_f32, egui::Color32::from_gray(230)),
+                                    );
+                                }
+                                if let Some(note) = person_faces_view::better_note(
+                                    self.face_page.better.get(&face.id),
+                                    &self.face_page.people,
+                                ) {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(note).small().weak())
+                                            .truncate(),
                                     );
                                 }
                                 if let Some(note) = rejection_note(

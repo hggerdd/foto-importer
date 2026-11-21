@@ -140,7 +140,7 @@ fn not_a_face_is_a_lasting_decision_outside_every_count() -> anyhow::Result<()> 
     );
     recognition::rematch(&mut c, KEY, &Control::default())?;
     let found = recognition::person_candidates(&c, KEY, 1, 0.0, &Control::default())?;
-    assert!(found.iter().all(|(id, _)| *id != 5));
+    assert!(found.iter().all(|f| f.face != 5));
     let assigned: Option<i64> =
         c.db.query_row("SELECT person_id FROM faces WHERE id=5", [], |r| r.get(0))?;
     assert_eq!(assigned, None, "kein Vorschlag für „Kein Gesicht“");
@@ -187,9 +187,9 @@ fn probable_faces_come_most_likely_first_in_groups_of_28() -> anyhow::Result<()>
             (angle.cos() >= 0.40).then_some(100 + n)
         }))
         .collect();
-    assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), expected);
-    assert!(found.windows(2).all(|w| w[0].1 >= w[1].1));
-    assert!((found[1].1 - 0.05_f32.cos()).abs() < 1e-6);
+    assert_eq!(found.iter().map(|f| f.face).collect::<Vec<_>>(), expected);
+    assert!(found.windows(2).all(|w| w[0].score >= w[1].score));
+    assert!((found[1].score - 0.05_f32.cos()).abs() < 1e-6);
     // Dieselbe Liste aus dem Zwischenspeicher des Abgleichs.
     recognition::rematch(&mut c, KEY, &Control::default())?;
     assert_eq!(
@@ -259,6 +259,122 @@ fn confirming_and_rejecting_on_the_person_page_updates_both_lists() -> anyhow::R
     )?;
     assert_eq!(pins, 1);
     let candidates = recognition::person_candidates(&c, KEY, 1, 0.0, &Control::default())?;
-    assert!(candidates.iter().all(|(id, _)| *id != wrong), "abgelehnt");
+    assert!(candidates.iter().all(|f| f.face != wrong), "abgelehnt");
+    Ok(())
+}
+
+fn at(angle: f32) -> Option<[f32; 2]> {
+    Some([angle.cos(), angle.sin()])
+}
+/// Anna (1) mit Referenzen bei Winkel 0, Ben (2) bei 0,6. 30 offene Gesichter liegen näher an
+/// Anna, 33 näher an Ben; 300 und 301 (Winkel 0,5, gleicher Wert) lägen bei Ben, aber 300 ist
+/// für Ben abgelehnt und 301 steht in einem Foto, in dem Ben bestätigt ist.
+fn two_people_collection(temp: &tempfile::TempDir) -> anyhow::Result<(Collection, Vec<i64>)> {
+    let c = open(temp)?;
+    for id in 1..=3 {
+        face(&c, id, id, 1.0, at(0.0));
+    }
+    for id in 11..=13 {
+        face(&c, id, id, 1.0, at(0.6));
+    }
+    let mut anna = Vec::new();
+    for n in 0..30 {
+        face(&c, 100 + n, 100 + n, 1.0, at(0.01 + 0.009 * n as f32));
+        anna.push(100 + n);
+    }
+    let mut ben = Vec::new();
+    for n in 0..33 {
+        face(&c, 200 + n, 200 + n, 1.0, at(0.32 + 0.02 * n as f32));
+        ben.push(200 + n);
+    }
+    face(&c, 300, 300, 1.0, at(0.5));
+    face(&c, 301, 11, 1.0, at(0.5));
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');
+         UPDATE faces SET person_id=1,assignment='user',confidence=1 WHERE id IN (1,2,3);
+         UPDATE faces SET person_id=2,assignment='user',confidence=1 WHERE id IN (11,12,13);
+         INSERT INTO face_rejections VALUES(300,2);",
+    )?;
+    // Erster Abschnitt: nach Wert absteigend, also nach Winkel; 300 und 301 haben denselben
+    // Wert und folgen nach ID.
+    anna.extend([300, 301]);
+    Ok((c, [anna, ben].concat()))
+}
+
+#[test]
+fn faces_that_look_more_like_someone_else_come_in_a_second_section() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let (mut c, expected) = two_people_collection(&temp)?;
+    let control = Control::default();
+    let streamed = recognition::person_candidates_with(&c, KEY, 1, 0.40, &control, None)?;
+    assert_eq!(
+        streamed.iter().map(|f| f.face).collect::<Vec<_>>(),
+        expected
+    );
+    let (first, second) = streamed.split_at(32);
+    assert!(first.iter().all(|f| f.better.is_none()));
+    assert!(first.windows(2).all(|w| w[0].score >= w[1].score));
+    assert_eq!(first[30].score.to_bits(), first[31].score.to_bits());
+    assert!(second.windows(2).all(|w| w[0].score >= w[1].score));
+    for found in second {
+        let (person, score) = found.better.expect("Ben liegt vorn");
+        assert_eq!(person, 2);
+        assert!(score > found.score);
+        let angle = 0.32 + 0.02 * (found.face - 200) as f32;
+        assert!((score - (angle - 0.6).cos()).abs() < 1e-5);
+    }
+    // Der Weg über den Zwischenspeicher des Abgleichs liefert bitgleich dasselbe.
+    let mut cache = recognition::MatchCache::default();
+    recognition::rematch_with(&mut c, KEY, &control, &mut cache)?;
+    assert!(!cache.is_empty());
+    let cached = recognition::person_candidates_with(&c, KEY, 1, 0.40, &control, Some(&mut cache))?;
+    let again = recognition::person_candidates_with(&c, KEY, 1, 0.40, &control, None)?;
+    assert_eq!(cached, again);
+    assert_eq!(
+        cached, streamed,
+        "Vorschläge des Abgleichs ändern die Liste nicht"
+    );
+    type Bits = (i64, u32, Option<(i64, u32)>);
+    let bits = |list: &[recognition::PersonCandidate]| -> Vec<Bits> {
+        list.iter()
+            .map(|f| {
+                (
+                    f.face,
+                    f.score.to_bits(),
+                    f.better.map(|b| (b.0, b.1.to_bits())),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(bits(&cached), bits(&streamed));
+    // Seite: 32 + 33 Gesichter in Gruppen zu 28, ohne die Abschnitte zu mischen.
+    let page = faces::page_filtered(&c, "probable", 0, Some(1))?;
+    let sizes: Vec<usize> = page.groups.iter().map(Vec::len).collect();
+    assert_eq!(sizes, vec![28, 4, 28, 5]);
+    assert_eq!(
+        (page.faces_total, page.probable_others, page.total_groups),
+        (65, 33, 4)
+    );
+    for group in &page.groups {
+        let marked = group
+            .iter()
+            .filter(|f| page.better.contains_key(&f.id))
+            .count();
+        assert!(
+            marked == 0 || marked == group.len(),
+            "Gruppe mischt die Abschnitte"
+        );
+    }
+    assert_eq!(
+        page.groups
+            .concat()
+            .iter()
+            .map(|f| f.id)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(page.better.get(&200).map(|b| b.0), Some(2));
+    assert!(!page.better.contains_key(&300) && !page.better.contains_key(&301));
     Ok(())
 }
