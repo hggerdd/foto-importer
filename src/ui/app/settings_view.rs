@@ -205,21 +205,25 @@ impl PhotoApp {
         if self.settings.collection.is_empty() {
             return;
         }
-        let root = self.settings.collection.clone();
         let folder = self.settings.model_dir.clone();
         let detector = self.detector.clone();
         let embedder = self.embedder.clone();
-        self.launch("Sammlungsmodelle speichern", true, "mutation", move |_| {
-            let mut c = Collection::open(Path::new(&root), true)?;
-            faces::configure_models(&mut c, Path::new(&folder), &detector, &embedder)?;
-            Ok(Outcome::Done(
-                "Modellauswahl der Sammlung gespeichert".into(),
-            ))
-        });
+        self.launch_write(
+            "Sammlungsmodelle speichern",
+            JobKind::Mutation,
+            move |mut c, _| {
+                faces::configure_models(&mut c, Path::new(&folder), &detector, &embedder)?;
+                Ok(Outcome::Done(
+                    "Modellauswahl der Sammlung gespeichert".into(),
+                ))
+            },
+        );
     }
 
     pub(super) fn models_installing(&self) -> bool {
-        self.tasks.iter().any(|task| task.kind == "model-install")
+        self.tasks
+            .iter()
+            .any(|task| task.kind == JobKind::ModelInstall)
     }
 
     pub(super) fn model_weights_present(&self) -> bool {
@@ -234,7 +238,7 @@ impl PhotoApp {
     pub(super) fn runtime_downloading(&self) -> bool {
         self.tasks
             .iter()
-            .any(|task| task.kind == "runtime-download")
+            .any(|task| task.kind == JobKind::RuntimeDownload)
     }
 
     /// Laufzeit vorhanden (oder auf dieser Plattform nicht ladbar)?
@@ -275,7 +279,7 @@ impl PhotoApp {
         self.launch(
             "Laufzeit herunterladen",
             false,
-            "runtime-download",
+            JobKind::RuntimeDownload,
             |control| {
                 let settings = std::path::absolute(Settings::path())?;
                 let destination = settings
@@ -294,7 +298,7 @@ impl PhotoApp {
         self.launch(
             "Modellgewichte installieren",
             false,
-            "model-install",
+            JobKind::ModelInstall,
             move |control| {
                 let settings = std::path::absolute(Settings::path())?;
                 let destination = settings
@@ -313,11 +317,11 @@ impl PhotoApp {
         if let Some(running) = self
             .tasks
             .iter()
-            .find(|task| matches!(task.kind, "runtime-download" | "model-install"))
+            .find(|task| matches!(task.kind, JobKind::RuntimeDownload | JobKind::ModelInstall))
         {
             let done = running.task.control.done.load(Ordering::Relaxed);
             let total = running.task.control.total.load(Ordering::Relaxed);
-            let runtime = running.kind == "runtime-download";
+            let runtime = running.kind == JobKind::RuntimeDownload;
             let step = match (runtime, self.setup_chain) {
                 (true, true) => "Schritt 1 von 2 · ",
                 _ => "",
@@ -374,7 +378,7 @@ impl PhotoApp {
         };
         if ui
             .add_enabled(
-                !self.tasks.iter().any(|task| task.kind == "picker"),
+                !self.tasks.iter().any(|task| task.kind == JobKind::Picker),
                 egui::Button::new("Gesichtserkennung einrichten"),
             )
             .on_hover_text(hint)
@@ -425,12 +429,10 @@ impl PhotoApp {
     pub(super) fn save_review_threshold(&mut self, value: f32) {
         let root = self.settings.collection.clone();
         self.review_draft = Some((root.clone(), value));
-        self.launch(
+        self.launch_write(
             "Strenge der Namensvorschläge speichern",
-            true,
-            "mutation",
-            move |_| {
-                let mut collection = Collection::open(Path::new(&root), true)?;
+            JobKind::Mutation,
+            move |mut collection, _| {
                 crate::core::recognition::set_review_threshold(&mut collection, value)?;
                 Ok(Outcome::Done(
                     "Strenge gespeichert. Die Namensvorschläge werden neu berechnet.".into(),
@@ -463,7 +465,7 @@ impl PhotoApp {
                 ui.label(&self.dng_status);
                 if ui
                     .add_enabled(
-                        !self.tasks.iter().any(|t| t.kind == "dngupdates"),
+                        !self.tasks.iter().any(|t| t.kind == JobKind::DngUpdates),
                         egui::Button::new("Converter-Version prüfen"),
                     )
                     .clicked()
@@ -609,8 +611,8 @@ impl PhotoApp {
                     {
                         if can_pause {
                             match running.kind {
-                                "metadata-bg" => self.metadata_paused = true,
-                                "index-new" => self.index_paused = true,
+                                JobKind::MetadataBg => self.metadata_paused = true,
+                                JobKind::IndexNew => self.index_paused = true,
                                 _ => self.maintenance_paused = true,
                             }
                         }

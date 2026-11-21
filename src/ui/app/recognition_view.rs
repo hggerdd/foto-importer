@@ -2,15 +2,15 @@ use super::*;
 
 impl PhotoApp {
     pub(super) fn analysing_current_collection(&self) -> bool {
-        self.tasks
-            .iter()
-            .any(|task| task.kind == "face-analysis" && task.collection == self.settings.collection)
+        self.tasks.iter().any(|task| {
+            task.kind == JobKind::FaceAnalysis && task.collection == self.settings.collection
+        })
     }
 
     /// Ist das ein Analyse- oder Vorschlagsauftrag der aktiven Sammlung?
     fn is_face_task(&self, task: &Running) -> bool {
         task.collection == self.settings.collection
-            && (task.is_face_matching() || task.kind == "face-analysis")
+            && (task.is_face_matching() || task.kind == JobKind::FaceAnalysis)
     }
 
     /// Fehlt noch etwas, bevor Fotos analysiert werden können (Laufzeit oder Modelle)?
@@ -225,7 +225,7 @@ impl PhotoApp {
     fn recognition_progress(&mut self, ui: &mut egui::Ui) {
         let Some(running) = self.tasks.iter().find(|task| {
             task.collection == self.settings.collection
-                && (task.is_face_matching() || task.kind == "face-analysis")
+                && (task.is_face_matching() || task.kind == JobKind::FaceAnalysis)
         }) else {
             return;
         };
@@ -296,9 +296,7 @@ impl PhotoApp {
                     &mut nightly, "Um 03:00 Uhr, solange die App läuft"
                 )).changed();
                 if changed {
-                    let root = self.settings.collection.clone();
-                    self.launch("Automatik speichern", true, "mutation", move |_| {
-                        let mut collection = Collection::open(Path::new(&root), true)?;
+                    self.launch_write("Automatik speichern", JobKind::Mutation, move |mut collection, _| {
                         faces::configure_automatic(&mut collection, auto_import, nightly)?;
                         Ok(Outcome::Done("Sammlungsautomatik gespeichert".into()))
                     });
@@ -354,13 +352,10 @@ impl PhotoApp {
         let Some(undo) = self.undo.last().cloned() else {
             return;
         };
-        let root = self.settings.collection.clone();
-        self.launch(
+        self.launch_write(
             "Gruppenentscheidung zurücknehmen",
-            true,
-            "undo",
-            move |_| {
-                let mut collection = Collection::open(Path::new(&root), true)?;
+            JobKind::Undo,
+            move |mut collection, _| {
                 faces::undo(&mut collection, &undo)?;
                 Ok(Outcome::Done("Gruppenentscheidung zurückgenommen".into()))
             },

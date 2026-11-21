@@ -126,7 +126,7 @@ impl PhotoApp {
     /// Solange die Seite gelesen wird: Hinweis mit Spinner und `true`.
     pub(super) fn face_page_loading(&self, ui: &mut egui::Ui) -> bool {
         // Nach einem Wechsel der Ansicht oder des Reiters ist die Seite noch unterwegs.
-        let loading = self.tasks.iter().any(|task| task.kind == "faces");
+        let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
         if loading {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -153,7 +153,7 @@ impl PhotoApp {
     /// auch die Tasten der obersten Gruppe und Strg+Z.
     pub(super) fn face_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let loading = self.tasks.iter().any(|task| task.kind == "faces");
+            let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
             let pages = self
                 .face_page
                 .total_groups
@@ -803,11 +803,10 @@ impl PhotoApp {
         if ids.is_empty() {
             return false;
         }
-        let root = self.settings.collection.clone();
-        self.queue_hiding("Als „Kein Gesicht“ speichern", ids.clone(), move |_| {
-            let mut c = Collection::open(Path::new(&root), true)?;
-            Ok(Outcome::Named(faces::mark_not_face(&mut c, &ids)?))
-        });
+        let hide = ids.clone();
+        let work = self
+            .on_collection(move |mut c, _| Ok(Outcome::Named(faces::mark_not_face(&mut c, &ids)?)));
+        self.queue_hiding("Als „Kein Gesicht“ speichern", hide, work);
         true
     }
 
@@ -935,15 +934,15 @@ impl PhotoApp {
             }
             Decision::NotFace => return self.mark_not_face(kept.into_iter().collect()),
         };
-        let root = self.settings.collection.clone();
         let config = self.settings.central();
-        self.queue_hiding("Gesichtsgruppe speichern", ids.clone(), move |_| {
-            let mut c = Collection::open(Path::new(&root), true)?;
+        let hide = ids.clone();
+        let work = self.on_collection(move |mut c, _| {
             let (undo, note) = crate::core::central::name_group_synced(
                 &mut c, &config, &ids, &selected, person, &name, ignore,
             )?;
             Ok(Outcome::Synced(Box::new(Outcome::Named(undo)), note))
         });
+        self.queue_hiding("Gesichtsgruppe speichern", hide, work);
         true
     }
 }

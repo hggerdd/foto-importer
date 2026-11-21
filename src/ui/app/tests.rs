@@ -91,9 +91,9 @@ fn add_photo(c: &Collection, id: i64) -> anyhow::Result<()> {
 fn settle_kinds(ctx: &egui::Context, app: &mut PhotoApp) -> BTreeSet<&'static str> {
     let mut seen = BTreeSet::new();
     for _ in 0..3000 {
-        seen.extend(app.tasks.iter().map(|t| t.kind));
+        seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
         app.poll(ctx);
-        seen.extend(app.tasks.iter().map(|t| t.kind));
+        seen.extend(app.tasks.iter().map(|t| t.kind.as_str()));
         if app.tasks.is_empty() {
             break;
         }
@@ -310,7 +310,11 @@ fn a_content_change_during_a_folder_read_does_not_restart_it() -> anyhow::Result
         app.status.photos += change;
         app.sync_folder_tree();
     }
-    let running: Vec<_> = app.tasks.iter().filter(|t| t.kind == "folders").collect();
+    let running: Vec<_> = app
+        .tasks
+        .iter()
+        .filter(|t| t.kind == JobKind::Folders)
+        .collect();
     assert_eq!(running.len(), 1);
     assert!(
         !running[0].task.control.cancel.load(Ordering::Relaxed),
@@ -524,16 +528,16 @@ fn interactive_writes_do_not_yield_to_readers_but_maintenance_does() {
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     let folder = tempfile::tempdir().expect("Ordner");
     app.settings.collection = folder.path().to_string_lossy().into_owned();
-    app.launch("Benennen", true, "naming", |_| {
+    app.launch("Benennen", true, JobKind::Naming, |_| {
         Ok(Outcome::Done(String::new()))
     });
-    app.launch("Wartung", true, "maintenance", |_| {
+    app.launch("Wartung", true, JobKind::Maintenance, |_| {
         Ok(Outcome::Done(String::new()))
     });
     let background = |kind: &str| {
         app.tasks
             .iter()
-            .find(|t| t.kind == kind)
+            .find(|t| t.kind.as_str() == kind)
             .map(|t| t.task.control.background)
     };
     assert_eq!(background("naming"), Some(false));
@@ -545,7 +549,7 @@ fn late_naming_result_from_another_collection_cannot_enter_undo() {
     let creation = eframe::CreationContext::_new_kittest(context.clone());
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.collection = "old collection".into();
-    app.launch("Late result", false, "naming", |_| {
+    app.launch("Late result", false, JobKind::Naming, |_| {
         Ok(Outcome::Named(Undo {
             before: Vec::new(),
             after: Vec::new(),
@@ -961,7 +965,7 @@ fn queued_group_decisions_hide_faces_at_once_and_reappear_on_failure() {
     release.store(true, Ordering::Relaxed);
     for _ in 0..3000 {
         app.poll(&context);
-        if app.tasks.iter().all(|t| t.kind != "naming") {
+        if app.tasks.iter().all(|t| t.kind != JobKind::Naming) {
             break;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -1002,7 +1006,10 @@ fn review_app(root: &Path) -> (egui::Context, PhotoApp) {
     (context, app)
 }
 fn naming_tasks(app: &PhotoApp) -> usize {
-    app.tasks.iter().filter(|t| t.kind == "naming").count()
+    app.tasks
+        .iter()
+        .filter(|t| t.kind == JobKind::Naming)
+        .count()
 }
 
 #[test]
@@ -1258,7 +1265,7 @@ fn ctrl_z_starts_exactly_one_undo_unless_a_text_field_has_focus() -> anyhow::Res
             app.undo_shortcut(ctx);
         });
     };
-    let undos = |app: &PhotoApp| app.tasks.iter().filter(|t| t.kind == "undo").count();
+    let undos = |app: &PhotoApp| app.tasks.iter().filter(|t| t.kind == JobKind::Undo).count();
     // Ein Textfeld mit Fokus behält Strg+Z für sich.
     press(&mut app, true);
     assert_eq!(undos(&app), 0);
@@ -1405,7 +1412,7 @@ fn imports_queued_back_to_back_run_one_after_the_other() -> anyhow::Result<()> {
     for _ in 0..3000 {
         app.poll(&egui::Context::default());
         assert!(tasks_of(&app, "copy") <= 1, "nie zwei Imports gleichzeitig");
-        if let Some(task) = app.tasks.iter().find(|t| t.kind == "copy")
+        if let Some(task) = app.tasks.iter().find(|t| t.kind == JobKind::Copy)
             && seen.last() != Some(&task.task.label)
         {
             seen.push(task.task.label.clone());
@@ -1521,7 +1528,13 @@ fn changing_the_strictness_starts_one_write_task() -> anyhow::Result<()> {
     let mut app = PhotoApp::with_settings(&creation, Settings::default());
     app.settings.collection = root.path().to_string_lossy().into_owned();
     app.save_review_threshold(0.65);
-    assert_eq!(app.tasks.iter().filter(|t| t.kind == "mutation").count(), 1);
+    assert_eq!(
+        app.tasks
+            .iter()
+            .filter(|t| t.kind == JobKind::Mutation)
+            .count(),
+        1
+    );
     assert_eq!(
         app.review_draft,
         Some((app.settings.collection.clone(), 0.65))
@@ -1755,7 +1768,7 @@ fn choosing_a_collection_resets_everything_that_belonged_to_the_old_one() -> any
     assert!(!app.maintenance_paused && !app.recognition_tools_open);
     // Antworten für die alte Sammlung sind veraltet; die neue wird auf Workern gelesen.
     assert!(app.query_revision > queries && app.face_revision > pages);
-    let kinds: Vec<&str> = app.tasks.iter().map(|t| t.kind).collect();
+    let kinds: Vec<&str> = app.tasks.iter().map(|t| t.kind.as_str()).collect();
     assert!(
         kinds.contains(&"search") && kinds.contains(&"faces"),
         "{kinds:?}"
@@ -1837,11 +1850,14 @@ fn person_views_follow_the_selected_person_and_render_in_both_window_sizes() {
 #[test]
 fn a_running_face_task_is_shown_by_the_footer_in_the_faces_view() {
     let (context, mut app) = review_app(Path::new("tmp/synthetic-review"));
-    app.launch("Fotos lokal analysieren", true, "face-analysis", |_| {
-        Ok(Outcome::Done(String::new()))
-    });
+    app.launch(
+        "Fotos lokal analysieren",
+        true,
+        JobKind::FaceAnalysis,
+        |_| Ok(Outcome::Done(String::new())),
+    );
     let shown = PhotoApp::footer_task(app.view, &app.tasks).map(|t| t.kind);
-    assert_eq!(shown, Some("face-analysis"));
+    assert_eq!(shown, Some(JobKind::FaceAnalysis));
     draw_people(&context, &mut app, egui::vec2(980.0, 680.0));
     // In der Aufgabenansicht steht der Auftrag als Karte da, nicht in der Fußleiste.
     assert!(PhotoApp::footer_task(View::Tasks, &app.tasks).is_none());
@@ -1860,7 +1876,7 @@ fn metadata_app(root: &Path) -> PhotoApp {
     app
 }
 fn tasks_of(app: &PhotoApp, kind: &str) -> usize {
-    app.tasks.iter().filter(|t| t.kind == kind).count()
+    app.tasks.iter().filter(|t| t.kind.as_str() == kind).count()
 }
 fn wait_for_tasks(app: &mut PhotoApp) {
     for _ in 0..3000 {
@@ -1932,7 +1948,7 @@ fn background_metadata_waits_for_user_writes_and_without_unread_files() -> anyho
     let root = tempfile::tempdir()?;
     drop(Collection::open(root.path(), true)?);
     let mut app = metadata_app(root.path());
-    app.launch("Benennen", true, "mutation", |control| {
+    app.launch("Benennen", true, JobKind::Mutation, |control| {
         while !control.cancel.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -1966,7 +1982,7 @@ fn a_user_write_task_stops_the_background_metadata_run() -> anyhow::Result<()> {
     let mut app = metadata_app(root.path());
     app.start_metadata_background();
     assert!(!app.tasks[0].task.control.cancel.load(Ordering::Relaxed));
-    app.launch("Benennen", true, "mutation", |_| {
+    app.launch("Benennen", true, JobKind::Mutation, |_| {
         Ok(Outcome::Done(String::new()))
     });
     assert!(app.tasks[0].task.control.cancel.load(Ordering::Relaxed));
@@ -2027,7 +2043,7 @@ fn inspector_button_starts_exactly_one_write_task() -> anyhow::Result<()> {
     assert!(
         app.tasks
             .iter()
-            .filter(|t| t.kind == "metadata-bg")
+            .filter(|t| t.kind == JobKind::MetadataBg)
             .all(|t| t.task.control.cancel.load(Ordering::Relaxed))
     );
     Ok(())
@@ -2151,7 +2167,7 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
     app.launch(
         "Laufzeit herunterladen",
         false,
-        "runtime-download",
+        JobKind::RuntimeDownload,
         move |_| Ok(Outcome::RuntimeDownloaded(downloaded)),
     );
     for _ in 0..3000 {
@@ -2174,9 +2190,12 @@ fn face_setup_installs_models_after_the_runtime_download() -> anyhow::Result<()>
     wait_for_tasks(&mut app);
     // Ein gescheiterter Download beendet die Kette.
     app.setup_chain = true;
-    app.launch("Laufzeit herunterladen", false, "runtime-download", |_| {
-        anyhow::bail!("kein Netz")
-    });
+    app.launch(
+        "Laufzeit herunterladen",
+        false,
+        JobKind::RuntimeDownload,
+        |_| anyhow::bail!("kein Netz"),
+    );
     wait_for_tasks(&mut app);
     assert!(!app.setup_chain);
     assert_eq!(tasks_of(&app, "model-install"), 0);
@@ -2346,7 +2365,7 @@ fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view(
     assert!(app.selected_photo.is_none(), "Sammlung nie geöffnet");
     // Der Rechtsklick wählt die Kachel nicht ab.
     assert!(app.drafts.values().all(|d| d.excluded.is_empty()));
-    assert!(app.tasks.iter().any(|t| t.kind == "suggestions"));
+    assert!(app.tasks.iter().any(|t| t.kind == JobKind::Suggestions));
     wait_for_tasks(&mut app);
     // Name eintragen und übernehmen: nur dieses Gesicht, der Dialog schließt sofort.
     app.name_input = "Bert".into();
@@ -2446,7 +2465,7 @@ fn a_folder_without_collection_asks_before_anything_is_written() -> anyhow::Resu
 
     assert_eq!(app.settings.collection, "tmp/old-collection");
     assert_eq!(app.new_collection_prompt.as_deref(), Some(chosen.as_str()));
-    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    assert!(!app.tasks.iter().any(|t| t.kind == JobKind::Scan));
     // Ein neues Fenster misst sich im ersten Bild nur aus und erscheint im zweiten.
     drawn_texts(&context, &mut app, Vec::new());
     let texts = drawn_texts(&context, &mut app, Vec::new());
@@ -2542,7 +2561,7 @@ fn the_import_source_and_memory_cards_are_refused_as_collection() -> anyhow::Res
         );
         assert!(!folder.join(".myfotomanager").exists(), "{folder:?}");
     }
-    assert!(!app.tasks.iter().any(|t| t.kind == "scan"));
+    assert!(!app.tasks.iter().any(|t| t.kind == JobKind::Scan));
     assert!(std::fs::read_dir(&card)?.next().is_none());
     // Der Ordner um die Quelle (Sammlung mit Zwischenordner wie `__einzuordnen`) ist erlaubt.
     app.notice = None;
@@ -2664,7 +2683,7 @@ fn a_new_import_stops_the_index_update_which_resumes_afterwards() -> anyhow::Res
     assert!(
         app.tasks
             .iter()
-            .any(|t| t.kind == "index-new" && t.task.control.cancel.load(Ordering::Relaxed)),
+            .any(|t| t.kind == JobKind::IndexNew && t.task.control.cancel.load(Ordering::Relaxed)),
         "Import geht vor"
     );
     assert_eq!(batch_states(&app), [import_queue::BatchState::Running]);
@@ -2842,7 +2861,9 @@ fn connect_mode_adds_the_chosen_relation_through_the_normal_path() -> anyhow::Re
     let button = text_centre(&output, "Anna ist Mutter von Bernd").expect("Eintrag im Menü");
     click_at(&context, &mut app, button);
     assert!(
-        app.tasks.iter().any(|t| t.kind == "mutation" && t.write),
+        app.tasks
+            .iter()
+            .any(|t| t.kind == JobKind::Mutation && t.write),
         "dieselbe Schreibaufgabe wie in der Übersicht"
     );
     wait_for_tasks(&mut app);
@@ -3202,7 +3223,7 @@ fn person_faces_page_confirms_probable_and_removes_only_deselected_faces() -> an
     assert_eq!(page_ids(&app), vec![vec![3]]);
     app.set_person_face_mode("person-confirmed");
     assert_eq!(app.page_mode(), "person-confirmed");
-    app.tasks.retain(|t| t.kind == "naming");
+    app.tasks.retain(|t| t.kind == JobKind::Naming);
     let confirmed = |id| Face {
         assignment: Some("user".into()),
         ..review_face(id, 1.0)

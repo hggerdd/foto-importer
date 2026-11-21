@@ -83,7 +83,7 @@ impl PhotoApp {
     fn metadata_bg_running(&self) -> bool {
         self.tasks
             .iter()
-            .any(|t| t.kind == "metadata-bg" && t.collection == self.settings.collection)
+            .any(|t| t.kind == JobKind::MetadataBg && t.collection == self.settings.collection)
     }
 
     /// Hinweiszeile zum Nachholen; ein pausierter Hintergrundlauf bietet „Fortsetzen“ an.

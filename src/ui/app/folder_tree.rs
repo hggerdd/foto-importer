@@ -32,7 +32,7 @@ impl PhotoApp {
         if key != self.folder_key {
             if key.0 != self.folder_key.0 {
                 for task in &self.tasks {
-                    if task.kind == "folders" && task.collection != key.0 {
+                    if task.kind == JobKind::Folders && task.collection != key.0 {
                         task.task.control.stop();
                     }
                 }
@@ -51,7 +51,7 @@ impl PhotoApp {
             self.folder_revealed = self.applied.folder.clone();
         }
         if self.folder_tree.is_loading()
-            || self.tasks.iter().any(|task| task.kind == "folders")
+            || self.tasks.iter().any(|task| task.kind == JobKind::Folders)
             || !self.folder_tree.needs_load()
         {
             return;
@@ -61,7 +61,7 @@ impl PhotoApp {
         self.folder_revision += 1;
         let revision = self.folder_revision;
         self.folder_pending = Some(revision);
-        self.launch("Ordner lesen", false, "folders", move |control| {
+        self.launch("Ordner lesen", false, JobKind::Folders, move |control| {
             let result = read_directories(&root, &control).map_err(|e| format!("{e:#}"));
             Ok(Outcome::Folders(revision, result))
         });
@@ -95,7 +95,7 @@ impl PhotoApp {
                         // Mit `folder_counts` ist das Lesen kurz; der Hinweis erscheint nur, wenn
                         // es spürbar dauert (ältere, nur lesend geöffnete Sammlung ohne Tabelle).
                         let slow = self.tasks.iter().any(|task| {
-                            task.kind == "folders"
+                            task.kind == JobKind::Folders
                                 && task.task.started.elapsed() > Duration::from_millis(500)
                         });
                         if self.folder_tree.is_refreshing() && slow {

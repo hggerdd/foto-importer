@@ -70,7 +70,7 @@ impl PhotoApp {
 
     /// Umschalter „Wahrscheinlich X | Bestätigt“ mit der Zahl der Gesichter.
     fn person_faces_tabs(&mut self, ui: &mut egui::Ui, person: &faces::Person) {
-        let loading = self.tasks.iter().any(|task| task.kind == "faces");
+        let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
         let total = (!loading).then_some(self.face_page.faces_total);
         let count = |mode: &str, fallback: Option<usize>| {
             if self.person_face_mode == mode {

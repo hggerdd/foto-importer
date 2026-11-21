@@ -61,11 +61,16 @@ impl PhotoApp {
         self.missing.revision += 1;
         let revision = self.missing.revision;
         let root = PathBuf::from(&self.settings.collection);
-        self.launch("Fehlende Dateien lesen", false, "missing", move |control| {
-            let c = Collection::open(&root, false)?;
-            c.cancel_with(&control);
-            Ok(Outcome::Missing(revision, missing::report(&c, &control)?))
-        });
+        self.launch(
+            "Fehlende Dateien lesen",
+            false,
+            JobKind::Missing,
+            move |control| {
+                let c = Collection::open(&root, false)?;
+                c.cancel_with(&control);
+                Ok(Outcome::Missing(revision, missing::report(&c, &control)?))
+            },
+        );
     }
 
     /// Entfernt die Einträge der gewählten Ordner (nach der Rückfrage).
@@ -78,15 +83,10 @@ impl PhotoApp {
         self.missing.confirm = false;
         self.missing.selected.clear();
         self.collection_dialog = None;
-        let root = self.settings.collection.clone();
-        self.launch(
+        self.launch_write(
             "Fehlende Einträge entfernen",
-            true,
-            "mutation",
-            move |control| {
-                let mut c = Collection::open(Path::new(&root), true)?;
-                Ok(Outcome::Done(missing::remove(&mut c, &dirs, &control)?))
-            },
+            JobKind::Mutation,
+            move |mut c, control| Ok(Outcome::Done(missing::remove(&mut c, &dirs, &control)?)),
         );
     }
 
@@ -96,13 +96,10 @@ impl PhotoApp {
         }
         self.undo.clear();
         self.collection_dialog = None;
-        let root = self.settings.collection.clone();
-        self.launch(
+        self.launch_write(
             "Fehlende Dateien neu verknüpfen",
-            true,
-            "mutation",
-            move |control| {
-                let mut c = Collection::open(Path::new(&root), true)?;
+            JobKind::Mutation,
+            move |mut c, control| {
                 Ok(Outcome::Done(missing::relink(
                     &mut c, &from, &to, &control,
                 )?))
