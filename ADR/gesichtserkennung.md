@@ -69,7 +69,7 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `set_review_threshold` setzt die
   Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
   Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
-  `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
+  `suggest` aus dem Manifest werden weder ausgewertet noch in die Sammlung geschrieben.
 - Jede Änderung an Bestätigungen erhöht `generation` (und setzt den Foto-Cursor des
   vollständigen Laufs zurück). Ein Lauf schreibt nur, solange die Generation die vom Beginn
   ist, und schließt nur dann ab; eine Änderung währenddessen lässt den Auftrag für einen

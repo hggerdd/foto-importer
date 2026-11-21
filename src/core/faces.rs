@@ -136,7 +136,7 @@ fn table_state(
     let ids: Vec<i64> = people.iter().map(|p| p.id).collect();
     // Ohne Merkmale: eine Fensterabfrage, keine Vektoren dekodieren (Tabelle bleibt schnell).
     // Fehlende Porträts verhindern die Tabelle nicht, werden aber geloggt.
-    let portraits = person_portraits(collection, "", &ids).unwrap_or_else(|error| {
+    let portraits = person_portraits(collection, &ids).unwrap_or_else(|error| {
         log::warn!(target: "personen", "portraets_nicht_gelesen ansicht=tabelle fehler={error:#}");
         Default::default()
     });
@@ -365,50 +365,11 @@ fn medoid(vectors: &[(i64, Vec<f32>)]) -> Option<i64> {
         .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
         .map(|(id, _)| id)
 }
-/// Typischstes Gesicht für viele Personen auf einmal (Personengraph): je Person das
-/// Medoid der höchstens 40 besten bestätigten Gesichter mit Merkmalen. Personen
-/// ohne Merkmale erhalten ersatzweise ihr Gesicht mit der besten Qualität.
-pub fn person_portraits(
-    collection: &Collection,
-    embedder: &str,
-    persons: &[i64],
-) -> Result<BTreeMap<i64, Face>> {
+/// Porträt für viele Personen auf einmal (Personentabelle, Personengraph): je Person das
+/// bestätigte Gesicht mit der besten Qualität, in einer Fensterabfrage ohne Merkmalsvektoren.
+pub fn person_portraits(collection: &Collection, persons: &[i64]) -> Result<BTreeMap<i64, Face>> {
     let wanted: BTreeSet<i64> = persons.iter().copied().collect();
     let mut chosen: BTreeMap<i64, i64> = BTreeMap::new();
-    if !embedder.is_empty() {
-        // `CROSS JOIN`: bestätigte Gesichter außen, sonst liest SQLite ohne Statistik alle
-        // Vektoren des Modells.
-        let rows: Vec<(i64, i64, Vec<u8>)> = collection
-            .db
-            .prepare(
-                "SELECT person_id,id,vec FROM (
-                   SELECT f.person_id,f.id,e.vec,
-                          row_number() OVER (PARTITION BY f.person_id ORDER BY f.quality DESC,f.id) rn
-                   FROM faces f CROSS JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?
-                   WHERE f.assignment='user' AND f.ignored=0 AND f.retained=0
-                     AND f.quality>=0.5 AND f.person_id IS NOT NULL AND f.bbox_x1 IS NOT NULL
-                 ) WHERE rn<=40 ORDER BY person_id,rn",
-            )?
-            .query_map([embedder], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect::<rusqlite::Result<_>>()?;
-        let mut by_person: BTreeMap<i64, Vec<(i64, Vec<f32>)>> = BTreeMap::new();
-        for (person, id, bytes) in rows {
-            if !wanted.contains(&person) {
-                continue;
-            }
-            if let Some(vector) = decode(&bytes)
-                .ok()
-                .and_then(|v| inference::normalize(&v).ok())
-            {
-                by_person.entry(person).or_default().push((id, vector));
-            }
-        }
-        for (person, vectors) in by_person {
-            if let Some(id) = medoid(&vectors) {
-                chosen.insert(person, id);
-            }
-        }
-    }
     let fallback: Vec<(i64, i64)> = collection
         .db
         .prepare(
@@ -886,22 +847,13 @@ pub fn analyze_scoped(
             .context("Analyse nicht gestartet")?;
         control.set_face_phase(super::jobs::FacePhase::Analysis);
     }
-    for (key, value) in [
-        ("rust.auto", models.embedder.thresholds.auto),
-        ("rust.suggest", models.embedder.thresholds.suggest),
-        ("rust.duplicate", models.embedder.thresholds.duplicate),
-    ] {
-        collection.db.execute(
-            "INSERT OR IGNORE INTO face_settings VALUES(?,?)",
-            params![
-                format!(
-                    "rust.thresholds.{embedder_key}.{}",
-                    key.strip_prefix("rust.").unwrap_or(key)
-                ),
-                value.to_string()
-            ],
-        )?;
-    }
+    collection.db.execute(
+        "INSERT OR IGNORE INTO face_settings VALUES(?,?)",
+        params![
+            format!("rust.thresholds.{embedder_key}.duplicate"),
+            models.embedder.thresholds.duplicate.to_string()
+        ],
+    )?;
     save_setting(&collection.db, "rust.detector_key", &detector_key)?;
     save_setting(&collection.db, EMBEDDER_KEY, &embedder_key)?;
     save_setting(&collection.db, "active_detector", detector)?;

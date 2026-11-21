@@ -441,7 +441,7 @@ mod tests {
                 found += 1;
             }
         }
-        // 13 SQL-Stellen und die Doku der Konstante.
-        assert!(found >= 14, "nur {found} Stellen gefunden");
+        // 12 SQL-Stellen und die Doku der Konstante.
+        assert!(found >= 13, "nur {found} Stellen gefunden");
     }
 }

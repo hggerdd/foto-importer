@@ -873,7 +873,7 @@ pub fn search_page(
     {
         let from =
             format!("FROM metadata_photos p LEFT JOIN meta m ON m.file_id=p.file_id WHERE {sql}");
-        let mut page_args = args.clone();
+        let mut page_args = args;
         let has_sources: bool = collection.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_sources')",
             [],
