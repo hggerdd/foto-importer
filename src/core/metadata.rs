@@ -792,7 +792,7 @@ fn placeholders(count: usize) -> String {
     vec!["?"; count].join(",")
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Photo {
     pub id: i64,
     pub file_id: i64,
@@ -806,32 +806,79 @@ pub struct Photo {
     pub source: String,
     pub orientation: u32,
 }
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchPage {
     pub photos: Vec<Photo>,
     pub total: usize,
     pub cameras: Vec<(String, usize)>,
 }
+/// Seite und Zählungen in einer Lesetransaktion (Tests, Beispiele). Die Oberfläche liest die
+/// Seite zuerst ([`search_page`]) und zählt danach getrennt ([`search_counts`]).
 pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Result<SearchPage> {
-    let (sql, args) = predicate(filters, detector)?;
     collection.db.execute_batch("BEGIN")?;
     let result = (|| -> Result<SearchPage> {
+        let (total, cameras) = search_counts(collection, filters, detector)?;
+        Ok(SearchPage {
+            photos: search_page(collection, filters, detector)?,
+            total,
+            cameras,
+        })
+    })();
+    collection.db.execute_batch("ROLLBACK")?;
+    result
+}
+/// Hängen die Zählungen eines Filters nur an Daten, deren Änderungen die
+/// Projektionsrevision (`projection_revision`) erhöhen? Dann darf eine Zählung bei gleicher
+/// Revision wiederverwendet werden. Gesichter, Personen und `meta`-Spalten außerhalb der
+/// Projektion zählen nicht dazu.
+pub fn counts_follow_revision(filters: &Search) -> bool {
+    filters.text.trim().is_empty()
+        && filters.people_all.is_empty()
+        && filters.people_any.is_empty()
+        && filters.people_none.is_empty()
+        && !filters.only_people
+        && matches!(filters.face_state.as_str(), "" | "any")
+        && filters.rules.iter().all(|rule| {
+            rule.field != "face_count"
+                && compile_rule(rule)
+                    .is_ok_and(|(sql, _)| !reads_meta(&sql) && !sql.contains("sm."))
+        })
+}
+/// Gesamtzahl und häufigste Kameras aller Treffer. Liest `meta` nur, wenn eine Regel es
+/// braucht: SQLite lässt den ungenutzten LEFT JOIN bei Aggregaten nicht weg, und jede Zeile
+/// von `meta` (samt JSON) liegt auf eigenen Seiten. Auf USB-Platten kostete das kalt über
+/// 30 s. Auch ohne `meta` lesen beide Abfragen alle Treffer; kalt dauert das auf der
+/// USB-Platte viele Sekunden, deshalb zeigt die Oberfläche die Seite vorher.
+pub fn search_counts(
+    collection: &Collection,
+    filters: &Search,
+    detector: &str,
+) -> Result<(usize, Vec<(String, usize)>)> {
+    let (sql, args) = predicate(filters, detector)?;
+    let count_from = if reads_meta(&sql) {
+        format!("FROM metadata_photos p LEFT JOIN meta m ON m.file_id=p.file_id WHERE {sql}")
+    } else {
+        format!("FROM metadata_photos p WHERE {sql}")
+    };
+    let total = collection.db.query_row(
+        &format!("SELECT count(*) {count_from}"),
+        rusqlite::params_from_iter(&args),
+        |r| r.get(0),
+    )?;
+    let cameras=collection.db.prepare(&format!("SELECT coalesce(p.camera,'Unbekannt'),count(*) {count_from} GROUP BY p.camera ORDER BY count(*) DESC LIMIT 8"))?.query_map(rusqlite::params_from_iter(&args),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((total, cameras))
+}
+/// Die Fotos der gewählten Seite. Folgt dem Datumsindex und liest nur die Zeilen der Seite
+/// (kalt auf der USB-Platte rund 1 s, siehe ADR Sammlungsansicht).
+pub fn search_page(
+    collection: &Collection,
+    filters: &Search,
+    detector: &str,
+) -> Result<Vec<Photo>> {
+    let (sql, args) = predicate(filters, detector)?;
+    {
         let from =
             format!("FROM metadata_photos p LEFT JOIN meta m ON m.file_id=p.file_id WHERE {sql}");
-        // Zählungen über alle Treffer lesen `meta` nur, wenn eine Regel es braucht: SQLite
-        // lässt den ungenutzten LEFT JOIN bei Aggregaten nicht weg, und jede Zeile von `meta`
-        // (samt JSON) liegt auf eigenen Seiten. Auf USB-Platten kostete das kalt über 30 s.
-        let count_from = if reads_meta(&sql) {
-            from.clone()
-        } else {
-            format!("FROM metadata_photos p WHERE {sql}")
-        };
-        let total = collection.db.query_row(
-            &format!("SELECT count(*) {count_from}"),
-            rusqlite::params_from_iter(&args),
-            |r| r.get(0),
-        )?;
-        let cameras=collection.db.prepare(&format!("SELECT coalesce(p.camera,'Unbekannt'),count(*) {count_from} GROUP BY p.camera ORDER BY count(*) DESC LIMIT 8"))?.query_map(rusqlite::params_from_iter(&args),|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let mut page_args = args.clone();
         let has_sources: bool = collection.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_sources')",
@@ -876,14 +923,8 @@ pub fn search(collection: &Collection, filters: &Search, detector: &str) -> Resu
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(SearchPage {
-            photos,
-            total,
-            cameras,
-        })
-    })();
-    collection.db.execute_batch("ROLLBACK")?;
-    result
+        Ok(photos)
+    }
 }
 
 pub fn detail(collection: &Collection, photo: i64) -> Result<Json> {

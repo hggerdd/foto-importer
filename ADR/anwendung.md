@@ -40,7 +40,11 @@
   (atomar geschrieben, `FOTO_IMPORTER_SETTINGS` überschreibt den Pfad; auch „Sicherungen
   behalten“ der Datensicherung, siehe [Sammlung und Daten](sammlung-daten.md)), Sammlungsoptionen in
   der Sammlungsdatenbank (`settings`, `face_settings`), Modellbeschreibungen als Manifeste
-  unter `models/`.
+  unter `models/`. Dazu ein reiner Beschleunigungs-Cache in
+  `%LOCALAPPDATA%\FotoImporter\cache` (`Settings::cache_dir`; neben einer eigenen
+  Einstellungsdatei, wenn `FOTO_IMPORTER_SETTINGS` gesetzt ist; `FOTO_IMPORTER_CACHE`
+  überschreibt): Startansicht und Vorschauen der Sammlung (siehe
+  [Sammlungsansicht](sammlungsansicht.md)). Er darf jederzeit fehlen oder gelöscht werden.
 - **Einstellungen wirken sofort, ohne Speichern-Knopf:** Schalter und Auswahllisten
   speichern beim Ändern; Pfadfelder beim Fokusverlust, mit Enter, beim Verlassen der
   Ansicht und sofort nach „Auswählen …“, nicht bei jedem Tastendruck. Ein Pfad wird vorher

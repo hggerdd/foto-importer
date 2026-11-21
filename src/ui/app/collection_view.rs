@@ -209,9 +209,45 @@ impl PhotoApp {
     fn collection_pagination(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let page = self.applied.page;
-            let pages = self.page.total.div_ceil(config::PAGE_SIZE).max(1);
+            // Solange gezählt wird, reicht der Blätterer mindestens eine Seite weiter, wenn die
+            // gezeigte voll ist.
+            let more = usize::from(self.page.photos.len() == config::PAGE_SIZE);
+            let pages = if self.counts_fresh {
+                self.page.total.div_ceil(config::PAGE_SIZE)
+            } else {
+                self.page
+                    .total
+                    .div_ceil(config::PAGE_SIZE)
+                    .max(page + 1 + more)
+            }
+            .max(1);
             let loading = self.tasks.iter().any(|task| task.kind == "search");
-            ui.label(RichText::new(format!("{} Fotos", self.page.total)).strong());
+            let refreshing = self.page_from_snapshot || !self.counts_fresh;
+            ui.label(
+                RichText::new(if refreshing && self.page.total == 0 {
+                    "… Fotos".to_owned()
+                } else {
+                    format!("{} Fotos", self.page.total)
+                })
+                .strong(),
+            );
+            if refreshing
+                && self
+                    .tasks
+                    .iter()
+                    .any(|task| matches!(task.kind, "search" | "counts"))
+            {
+                ui.label(
+                    RichText::new("wird aktualisiert …")
+                        .small()
+                        .color(theme::MUTED),
+                )
+                .on_hover_text(if self.page_from_snapshot {
+                    "Zuletzt gespeicherter Stand; die Sammlung wird gerade gelesen"
+                } else {
+                    "Die Sammlung wird gezählt; bis dahin gelten die bisherigen Zahlen"
+                });
+            }
             if pages > 1
                 && let Some(target) = theme::pager(ui, page, pages, !loading)
             {
@@ -558,6 +594,14 @@ impl PhotoApp {
         }
     }
     fn photo_gallery(&mut self, ui: &mut egui::Ui) {
+        if self.page.photos.is_empty() && self.tasks.iter().any(|task| task.kind == "search") {
+            self.empty(
+                ui,
+                "Sammlung wird gelesen …",
+                "Die ersten Fotos erscheinen gleich.",
+            );
+            return;
+        }
         if self.page.photos.is_empty() {
             self.empty(
                 ui,

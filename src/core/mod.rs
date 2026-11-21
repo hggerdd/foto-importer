@@ -32,6 +32,8 @@ pub mod recognition;
 pub mod relations;
 pub mod relationship_graph;
 pub mod scope;
+pub mod start_view;
+pub mod thumb_cache;
 pub mod timeline;
 pub mod timeline_export;
 pub mod tree_layout;

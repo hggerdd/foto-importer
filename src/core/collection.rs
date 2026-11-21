@@ -776,7 +776,7 @@ pub(crate) fn family_directory(directory: &str, extensions: &[String]) -> String
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CollectionStatus {
     pub photos: usize,
     pub files: usize,

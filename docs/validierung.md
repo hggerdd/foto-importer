@@ -522,3 +522,46 @@ Inhalt aller drei Teile, Nummern ohne Ersetzen, Aufräumen nur passender Namen, 
 Reste, gleichzeitiger Schreiber), `tests/migrations.rs` (Sicherung mit altem Schemastand vor
 der Migration, Löschen bei „Biometrie entfernen“) und `tests/missing_files.rs` (Sicherung vor
 „Einträge entfernen“).
+
+## Erster Blick auf die Sammlung (2026-11-21)
+
+Diagnose-Logs `%APPDATA%\FotoImporter\logs` (Build `main·6b1c543` und älter, Sammlung
+`E:\Bilder`, USB-Festplatte): Der Startauftrag „Sammlung durchsuchen“ dauerte 14,7 s, 27,4 s
+und 34,1 s, bevor die Galerie Zeilen hatte; parallel lief „Personen und Gesichter lesen“
+(20,9 s bis 32,1 s) auf derselben Platte. Galerievorschauen dekodierten jedes Original von
+`E:` (JPEG um 1 s, DNG über ExifTool 1,3 bis 2,1 s je Foto im Log), ohne Speicher über den
+Programmlauf hinaus.
+
+Nur lesend an `E:\Bilder\.myfotomanager` (1,39 GB, 99 134 Dateien, 57 512 Fotos; Python
+`sqlite3`, `mode=ro`, `mmap_size` 512 MB wie die App; die laufende App hielt die Datei offen).
+Erste Messung nach längerer Pause (kalt, soweit der Dateicache es erlaubt), zweite direkt
+danach (warm):
+
+| Abfrage | kalt | warm |
+|---|---|---|
+| Erste Seite (48 Fotos, Datumsindex, `face_sources`, `meta`) | 1,1 s | 5 bis 13 ms |
+| Gesamtzahl mit Formatfilter (Scan `metadata_photos`) | 24,9 s | 24 ms |
+| Kameras (Index `ix_browse_camera` plus Zeilen) | 16,2 s | 22 ms |
+| `status()` Fotos (`ix_browse_year`) | 6,8 s | 3 ms |
+| `status()` Dateien vorhanden (Scan `files`) | 6,5 s | 22 ms |
+| `status()` übrige drei Zählungen | je 15 ms (Seiten schon warm) | |
+| Ordnerübersicht `folder_counts` | 0,2 s | 0,5 ms |
+
+Die Zählungen lesen verstreute Seiten (Trigger-Pflege über Jahre); kalt bestimmt die
+Kopfbewegung die Dauer. Daraus: Seite zuerst, Zählung danach und nur bei geändertem Stand
+(ADR Sammlungsansicht). Geschätzt, nicht in der App auf `E:` gemessen: Galerie nach rund
+1,5 s (Öffnen 0,2 bis 0,3 s laut Log plus Seite 1,1 s) statt 15 bis 34 s; mit gespeicherter
+Startansicht sofort mit dem ersten Frame. Bei unverändertem Stand entfällt die Zählung ganz.
+
+Startansicht laden (Test `the_page_comes_first_and_the_saved_start_view_shows_before_any_read`,
+Debug-Build, lokale SSD): 0,26 ms für drei Fotos; eine volle Seite ist rund 20 KB JSON.
+
+`cargo run --release --example thumb_cache_bench -- <Ordner> <Cache> 12`, Originale nur
+gelesen von `E:\Bilder`, Cache auf der lokalen SSD, ein Thread: 2012er JPEGs ohne Treffer
+218 ms, mit Treffer 1,0 ms je Foto; 24-MP-JPEGs (2023) ohne Treffer 283 ms, mit Treffer
+1,8 ms; Eintrag im Mittel 23 KB. Nicht gemessen: RAW/DNG-Vorschauen (ExifTool) mit Cache und
+die ganze App gegen `E:\Bilder` (wird dort nicht gestartet). Regressionen:
+`core::start_view` (Wiederverwendung nur bei gleichem Stand, gleicher Suche und gleicher
+erster Seite; Filter auf `meta` und Gesichter nie), `core::thumb_cache` (Schlüssel folgt dem
+Original, kaputte Einträge, Aufräumen nur eigener Dateien), `src/ui/app/tests.rs` (Seite vor
+Zählung, Startansicht vor jedem Lesen, Personen erst nach der Sammlung).
