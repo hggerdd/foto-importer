@@ -6,7 +6,7 @@ use super::{
     previews,
     scope::Scope,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -872,15 +872,12 @@ pub fn analyze_scoped(
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
     let detector_key = inference::presence_detector_key(&models.detector.key());
     let embedder_key = models.embedder.key();
+    // Ein Detektorwechsel verändert alle späteren Erkennungen: vorher sichern, sonst unterbleibt
+    // die Analyse.
     if setting(collection, "rust.detector_key")?.is_some_and(|key| key != detector_key) {
-        collection.db.backup(
-            "main",
-            collection.root.join(format!(
-                ".myfotomanager.before-detector-{}.bak",
-                uuid::Uuid::new_v4()
-            )),
-            None,
-        )?;
+        super::backup::automatic(&collection.root, "Detektorwechsel", control)
+            .context("Analyse nicht gestartet")?;
+        control.set_face_phase(super::jobs::FacePhase::Analysis);
     }
     for (key, value) in [
         ("rust.auto", models.embedder.thresholds.auto),
@@ -1088,10 +1085,6 @@ pub fn analyze_scoped(
         prepare_groups(collection, &embedder_key, control)?;
     }
     super::grouping::rebuild_groups(collection, &embedder_key, control)?;
-    // Die Sicherung kostet bei großen Sammlungen spürbar Zeit: nur nach neuer Arbeit.
-    if worked > 0 {
-        collection.backup()?;
-    }
     if let Some(example) = missing_example {
         log::warn!(target: "gesichter", "dateien_fehlen anzahl={missing} beispiel={example:?}");
     }

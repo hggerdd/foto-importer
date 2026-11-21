@@ -1873,6 +1873,42 @@ fn wait_for_tasks(app: &mut PhotoApp) {
 }
 
 #[test]
+fn daily_backup_runs_once_per_day_in_the_background() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let mut app = metadata_app(root.path());
+    app.status.unread = 0;
+    // Aus: nichts startet.
+    app.settings.daily_backup = false;
+    app.daily_backup_due = true;
+    app.start_daily_backup();
+    assert_eq!(tasks_of(&app, "backup-daily"), 0);
+    app.settings.daily_backup = true;
+    app.start_daily_backup();
+    app.start_daily_backup();
+    assert_eq!(tasks_of(&app, "backup-daily"), 1);
+    // Niedrige Priorität: belegt keine Knöpfe und gibt Lesevorgängen nach.
+    assert!(!app.busy());
+    assert!(app.tasks[0].task.control.background);
+    wait_for_tasks(&mut app);
+    let backups = crate::core::backup::list(root.path())?;
+    assert_eq!(backups.len(), 1);
+    let today = chrono::Local::now().date_naive().to_string();
+    assert_eq!(
+        app.settings
+            .daily_backup_dates
+            .get(&app.settings.collection),
+        Some(&today)
+    );
+    // Am selben Tag (etwa beim erneuten Öffnen) keine zweite Sicherung.
+    app.daily_backup_due = true;
+    app.start_daily_backup();
+    assert_eq!(tasks_of(&app, "backup-daily"), 0);
+    assert!(!app.daily_backup_due);
+    Ok(())
+}
+
+#[test]
 fn background_metadata_starts_when_idle_and_only_once() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     drop(Collection::open(root.path(), true)?);

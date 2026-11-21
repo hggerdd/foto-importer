@@ -13,9 +13,12 @@
   weiter.
 - **Sperre:** Die Host/PID-Sperrdatei `.myfotomanager.lock` erlaubt einen schreibenden
   Prozess; eine weitere Instanz öffnet lesend. Fremde Sperren werden nie entfernt.
-- **Sicherungen:** `.myfotomanager.backup` nach abgeschlossenen Indexoperationen;
-  benannte Sicherung vor Detektorwechsel. Vor einem Schema-Upgrade entsteht eine
-  Datensicherung (unten).
+- **Ein Sicherungsweg:** Die Datensicherung (unten) ist die einzige Sicherung der App. Die
+  früheren Kopien `.myfotomanager.backup` (nach jedem Bestands-, Prüf-, Metadaten- und
+  Analyselauf ersetzt) und `.myfotomanager.before-detector-*.bak` entstehen nicht mehr;
+  vorhandene bleiben liegen, werden nicht automatisch gelöscht und können von Hand entfernt
+  werden. „Biometrie entfernen“ bereinigt sie weiterhin. Routineläufe (Bestand, Prüfung,
+  Metadaten, Analyse, geprüfte Einzelverschiebung) sichern nicht.
 - **Datensicherung der App-Daten** (`core::backup`, Einstellungen → „Datensicherung“): ein ZIP
   `.myimporter.backup.NNN` (mindestens dreistellig, `config::BACKUP_PREFIX`) im
   Sammlungsordner mit `sammlung/.myfotomanager`, `arbeitsplatz/central.sqlite` (eingestellter
@@ -23,8 +26,9 @@
   (Format, App-Version und Build, Zeitpunkt, Anlass, Quellpfade, Größe, SHA-256 und
   Schemaversion je Eintrag, fehlende Quellen unter `skipped`). Nicht gesichert, weil
   ableitbar oder wieder ladbar: Fotos, Vorschau- und Gesichtskacheln, Referenzexport
-  `.myfotomanager_faces`, ältere `.bak`-Kopien, `models/`, `runtime/`, `logs/`, Sperrdatei,
-  der lokale Cache-Ordner (Startansicht, Vorschauen).
+  `.myfotomanager_faces`, ältere Kopien `.myfotomanager.backup` und `*.bak`, `models/`,
+  `runtime/`, `logs/`, Sperrdatei, der lokale Cache-Ordner (Startansicht, Vorschauen,
+  Personenliste der Zeitreise, Personengraph) und der MatchCache im Speicher.
   Datenbanken werden mit der SQLite-Online-Sicherung kopiert, auf einer eigenen
   Leseverbindung mit einer über alle Schritte offenen Lesetransaktion: die Kopie ist ein
   fester Stand, Schreiber laufen weiter und starten die Kopie nicht neu (Test mit
@@ -41,13 +45,24 @@
   über `flate2`, bereits für das ONNX-Paket im Baum), Prüfsummen über `sha2`, freier Platz
   über `GetDiskFreeSpaceExW` ohne neues Crate: keine neue Abhängigkeit.
 - **Automatische Datensicherung vor riskanten Schritten:** vor einer Schema-Migration (in
-  `migrations::upgrade`, auf dem Worker, der die Sammlung schreibend öffnet) und vor
-  „Fehlende Einträge entfernen“ (in `missing::remove`, im selben Auftrag, mit Fortschritt und
-  Abbruch). Scheitert oder endet die Sicherung abgebrochen, findet der Schritt nicht statt
-  und der Auftrag meldet den Fehler. Den Plan (Arbeitsplatzdateien, Anzahl) setzt die
+  `migrations::upgrade`, auf dem Worker, der die Sammlung schreibend öffnet), vor einem
+  Detektorwechsel (in `faces::analyze_scoped`, Anlass „Detektorwechsel“), vor „Neu
+  verknüpfen“ (`missing::relink`) und vor „Fehlende Einträge entfernen“ (`missing::remove`),
+  jeweils im selben Auftrag, mit Fortschritt und Abbruch. Scheitert oder endet die Sicherung
+  abgebrochen, findet der Schritt nicht statt und der Auftrag meldet den Fehler.
+- **Tägliche Datensicherung:** Einstellung „Täglich automatisch sichern“ (Arbeitsplatz
+  `daily_backup`, Standard an). Beim Start mit Sammlung und nach jedem Sammlungswechsel
+  prüft die Oberfläche einmal, sobald Startseite und Zählung geladen sind und kein
+  Nutzerschreibauftrag läuft, ob für diese Sammlung heute schon gesichert wurde
+  (`daily_backup_dates`, Datum je Sammlungspfad). Wenn nicht, läuft `backup::automatic` mit
+  Anlass „täglich“ als Auftrag `backup-daily`: lesend, niedrige Priorität (gibt Lesevorgängen
+  an Haltepunkten nach, belegt keine Knöpfe), abbrechbar, im Diagnose-Log. Das Datum wird
+  erst nach Erfolg gespeichert; Abbruch oder Fehler (Fehler als Hinweis) holen sie beim
+  nächsten Öffnen nach. Aufbewahrung wie eingestellt. Den Plan (Arbeitsplatzdateien, Anzahl) setzt die
   Oberfläche beim Start und nach jedem Speichern der Einstellungen (`backup::configure`);
   ohne ihn (Tests, Beispiele) wird nur die Sammlungsdatenbank gesichert.
-  „Biometrie entfernen“ löscht alle Datensicherungen, weil sie Gesichtsdaten enthalten.
+  „Biometrie entfernen“ löscht alle Datensicherungen, weil sie Gesichtsdaten enthalten
+  (auch die täglichen; die nächste entsteht frühestens am Folgetag).
   Eine Wiederherstellung in der Oberfläche gibt es nicht; ein Test packt eine Sicherung aus
   und prüft Prüfsummen, `PRAGMA integrity_check` und Inhalt.
 - **Schema 6 mit Migration:** Stände 1 bis 5 werden beim ersten Schreibzugriff nach einer

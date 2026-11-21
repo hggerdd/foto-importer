@@ -40,7 +40,8 @@ fn biometric_erasure_scrubs_backup_but_preserves_inventory() -> anyhow::Result<(
         "INSERT INTO face_embeddings VALUES(1,'test',2,?)",
         [faces::encode(&[1.0, 0.0])],
     )?;
-    c.backup()?;
+    // Frühere Versionen legten diese Kopie an; sie kann noch auf der Platte liegen.
+    c.db.backup("main", temp.path().join(".myfotomanager.backup"), None)?;
     let tiles = temp.path().join(".myfotomanager_tiles").join("ab");
     std::fs::create_dir_all(&tiles)?;
     std::fs::write(tiles.join("x.tile"), b"kachel")?;

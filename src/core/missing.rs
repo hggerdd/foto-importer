@@ -213,9 +213,8 @@ pub fn relink(
         }
     }
     let new_photos: BTreeSet<i64> = pairs.iter().filter_map(|(_, n)| n.photo).collect();
-    let tx = collection.db.transaction()?;
     for photo in &new_photos {
-        let faces: i64 = tx.query_row(
+        let faces: i64 = collection.db.query_row(
             "SELECT count(*) FROM faces WHERE photo_id=?",
             [photo],
             |r| r.get(0),
@@ -228,6 +227,13 @@ pub fn relink(
             );
         }
     }
+    // Neu verknüpfen löscht Datei- und Fotozeilen: vorher sichern, sonst unterbleibt der Schritt.
+    if !pairs.is_empty() {
+        super::backup::automatic(&collection.root, "vor Neu verknüpfen", control)
+            .context("Nichts verknüpft")?;
+        control.phase("Neu verknüpfen", "");
+    }
+    let tx = collection.db.transaction()?;
     tx.execute("INSERT INTO scans(kind,scope,started_at,status) VALUES('relink',?,datetime('now'),'running')", [from])?;
     let scan = tx.last_insert_rowid();
     for (old, new) in &pairs {
@@ -292,7 +298,6 @@ pub fn relink(
         [scan],
     )?;
     tx.commit()?;
-    collection.backup()?;
     log::info!(target: "sammlung", "neu_verknuepft von={from:?} nach={to:?} dateien={}", pairs.len());
     Ok(format!(
         "{} Dateien von „{from}“ mit „{to}“ verknüpft; Foto-IDs, Gesichter und Zuordnungen bleiben",
@@ -302,7 +307,7 @@ pub fn relink(
 
 /// Entfernt die Einträge fehlender Dateien in den gewählten Ordnern aus der Datenbank. Jede
 /// Datei wird vorher auf der Platte gesucht: was wieder da ist, bleibt. Fotos, Gesichter und
-/// Personenzuordnungen bleiben erhalten (wie beim Entfernen nach Scanabstand).
+/// Personenzuordnungen bleiben erhalten.
 pub fn remove(collection: &mut Collection, dirs: &[String], control: &Control) -> Result<String> {
     collection.writable()?;
     if !collection.reachable() {
@@ -343,7 +348,6 @@ pub fn remove(collection: &mut Collection, dirs: &[String], control: &Control) -
         tx.execute("INSERT INTO changes(scan_id,kind,file_id,old_relpath,new_relpath,at) VALUES(NULL,'removed',?,?,NULL,datetime('now'))", params![row.id, row.relpath])?;
     }
     tx.commit()?;
-    collection.backup()?;
     log::info!(target: "sammlung", "fehlende_entfernt anzahl={} wieder_da={back}", gone.len());
     Ok(format!(
         "{} fehlende Dateieinträge entfernt; Foto-IDs, Gesichter und Personen bleiben erhalten{}",

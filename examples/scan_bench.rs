@@ -146,12 +146,7 @@ fn main() -> anyhow::Result<()> {
             .split(',')
             .filter_map(|v| v.trim().parse::<usize>().ok())
         {
-            for name in [
-                ".myfotomanager",
-                ".myfotomanager-wal",
-                ".myfotomanager-shm",
-                ".myfotomanager.backup",
-            ] {
+            for name in [".myfotomanager", ".myfotomanager-wal", ".myfotomanager-shm"] {
                 let _ = std::fs::remove_file(root.join(name));
             }
             let mut fresh = Collection::open(&root, true)?;
@@ -332,11 +327,5 @@ fn micro_costs(root: &Path, collection: &Collection, samples: usize) -> anyhow::
         per(started)
     );
     db.execute_batch("ROLLBACK")?;
-    let started = Instant::now();
-    collection.backup()?;
-    println!(
-        "backup of the whole database: {:.2} s",
-        started.elapsed().as_secs_f64()
-    );
     Ok(())
 }

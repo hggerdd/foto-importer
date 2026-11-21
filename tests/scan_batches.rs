@@ -65,9 +65,9 @@ fn every_batch_size_gives_the_same_inventory_and_projection() -> anyhow::Result<
             Some(first) => assert_eq!(first, &state, "batch size {batch}"),
         }
         let names: Vec<_> = control.timings().into_iter().map(|t| t.0).collect();
-        assert_eq!(names.len(), 5, "{names:?}");
+        assert_eq!(names.len(), 4, "{names:?}");
         let end = control.snapshot();
-        assert_eq!(end.phase, "Schritt 4 von 4 · Sicherung schreiben");
+        assert_eq!(end.phase, "Schritt 4 von 4 · Abschließen");
     }
     let ((files, photos), _) = reference.expect("state");
     let photo_of = |relative: &str| {

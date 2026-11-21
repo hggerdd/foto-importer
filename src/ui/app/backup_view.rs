@@ -78,8 +78,48 @@ impl PhotoApp {
         );
     }
 
+    /// Tägliche Datensicherung: beim ersten Öffnen einer Sammlung an einem Tag, sobald
+    /// Startseite und Zählung geladen sind und kein Nutzerschreibauftrag läuft. Niedrige
+    /// Priorität (gibt Lesevorgängen nach), abbrechbar; das Datum wird erst nach Erfolg
+    /// gespeichert, ein Abbruch holt sie beim nächsten Öffnen nach.
+    pub(super) fn start_daily_backup(&mut self) {
+        if !self.daily_backup_due
+            || self.closing
+            || !self.settings.daily_backup
+            || self.settings.collection.is_empty()
+            || !self.counts_fresh
+            || self.faces_after_search
+            || self.busy()
+            || self.backup_running()
+            || self
+                .tasks
+                .iter()
+                .any(|t| matches!(t.kind, "search" | "counts"))
+        {
+            return;
+        }
+        self.daily_backup_due = false;
+        let collection = self.settings.collection.clone();
+        let today = chrono::Local::now().date_naive().to_string();
+        if self.settings.daily_backup_dates.get(&collection) == Some(&today) {
+            return;
+        }
+        let root = PathBuf::from(&collection);
+        self.launch(
+            "Tägliche Datensicherung",
+            false,
+            "backup-daily",
+            move |control| {
+                let created = backup::automatic(&root, "täglich", &control)?;
+                Ok(Outcome::DailyBackup(collection, today, created.summary()))
+            },
+        );
+    }
+
     pub(super) fn backup_running(&self) -> bool {
-        self.tasks.iter().any(|t| t.kind == "backup")
+        self.tasks
+            .iter()
+            .any(|t| matches!(t.kind, "backup" | "backup-daily"))
     }
 
     /// Karte „Datensicherung“ in den Einstellungen.
@@ -93,12 +133,23 @@ impl PhotoApp {
             );
             ui.label(
                 RichText::new(
-                    "Vor einer Schema-Migration und vor „Einträge entfernen“ entsteht automatisch \
-                     eine Sicherung; scheitert sie, unterbleibt der Schritt.",
+                    "Vor einer Schema-Migration, einem Detektorwechsel, „Neu verknüpfen“ und \
+                     „Einträge entfernen“ entsteht automatisch eine Sicherung; scheitert sie, \
+                     unterbleibt der Schritt.",
                 )
                 .small()
                 .weak(),
             );
+            if ui
+                .checkbox(&mut self.settings.daily_backup, "Täglich automatisch sichern")
+                .on_hover_text(
+                    "Beim ersten Öffnen der Sammlung an einem Tag, im Hintergrund nach dem \
+                     Laden der Startseite. Abbrechen holt sie beim nächsten Öffnen nach.",
+                )
+                .changed()
+            {
+                self.save();
+            }
             if self.settings.collection.is_empty() {
                 ui.label("Erst eine Sammlung wählen.");
                 return;
@@ -110,7 +161,7 @@ impl PhotoApp {
             let running = self
                 .tasks
                 .iter()
-                .find(|t| t.kind == "backup")
+                .find(|t| matches!(t.kind, "backup" | "backup-daily"))
                 .map(|t| (t.task.control.clone(), t.task.control.snapshot()));
             match running {
                 Some((control, progress)) => {
