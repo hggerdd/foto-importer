@@ -102,11 +102,12 @@
   Format je Zeile: `2026-11-19 18:25:03.123 INFO  job ende art=faces dauer_ms=73.4 …`
   (Ortszeit, Stufe, Bereich, Schlüssel=Wert, Texte in Anführungszeichen, Zeilenumbrüche als
   „ | “). Fremde Crates nur ab Warnung. Inhalt: Sitzungsbeginn mit Version, Build und
-  Einstellungen; Startphasen (Einstellungen, App-Aufbau, erster Frame); jeder Frame ab
-  `DIAG_SLOW_FRAME_MS` (50 ms, gemessen von eframe: Aufbau, Tessellierung, Zeichnen) mit
-  Ansicht, hochgeladenen Texturen und übernommenen Aufträgen; alle `DIAG_FRAME_SUMMARY`
-  (10 s) eine Zusammenfassung (Frames, Mittel, p95, Maximum, langsame), nur solange gezeichnet
-  wird; Start und Ende jedes Auftrags aus `launch` mit Art, Dauer, Ergebnis (ok, verworfen
+  Einstellungen; Startphasen (Einstellungen, App-Aufbau, erster Frame); im Bereich `frame`
+  jeder Frame ab `DIAG_SLOW_FRAME_MS` (50 ms, gemessen von eframe: Aufbau, Tessellierung,
+  Zeichnen) mit Ansicht, hochgeladenen Texturen und übernommenen Aufträgen; alle
+  `DIAG_FRAME_SUMMARY` (10 s) eine Zusammenfassung (Frames, Mittel, p95, Maximum, langsame),
+  nur solange gezeichnet wird; im Bereich `job` Start und Ende jedes Auftrags aus `launch`
+  mit Art (`JobKind`, Namen wie `mutation`, `faces`, `metadata-bg`), Dauer, Ergebnis (ok, verworfen
   wegen Revision, abgebrochen, Fehler mit Text), Fortschritt, Phasenzeiten und Anzahlen;
   Abgleich (MatchCache bereit/vollständig), langsame oder fehlerhafte Vorschauen,
   Datenbank-Öffnen ab `DIAG_SLOW_DB_OPEN_MS` oder mit Fehler, Migrationen; jeder Hinweis

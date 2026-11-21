@@ -2563,7 +2563,7 @@ impl PhotoApp {
         let (slow, summary) = self.frame_meter.record(now, seconds * 1000.0);
         if let Some(note) = slow {
             log::info!(
-                target: "ui.frame",
+                target: "frame",
                 "langsam dauer_ms={:.1} update_ms={:.1} ansicht={} texturen={} auftraege={} laufend={}",
                 seconds * 1000.0,
                 note.update_ms,
@@ -2575,7 +2575,7 @@ impl PhotoApp {
         }
         if let Some(s) = summary {
             log::info!(
-                target: "ui.frame",
+                target: "frame",
                 "zusammenfassung frames={} avg_ms={:.1} p95_ms={:.1} max_ms={:.1} langsam={} texturen={} fenster_s={:.1}",
                 s.frames,
                 s.avg_ms,
