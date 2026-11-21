@@ -108,12 +108,115 @@ fn add(
     }
 }
 
+/// Ausgewählte Umgebung der Fokus-Person.
+struct Selection {
+    /// Personen in Prioritätsreihenfolge.
+    order: Vec<i64>,
+    /// Generation und Rolle je Person.
+    info: BTreeMap<i64, (i32, NodeRole)>,
+    kept: BTreeSet<i64>,
+    /// Wegen [`MAX_TREE_NODES`] nicht ausgewählte Personen.
+    truncated: usize,
+}
+
 /// Wählt die Umgebung von `focus` und ordnet sie an. `up` und `down` zählen
 /// Generationen (begrenzt auf [`MAX_TREE_GENERATIONS`]).
 pub fn layout(family: &Family, focus: i64, up: u8, down: u8) -> TreeLayout {
     let up = up.min(MAX_TREE_GENERATIONS) as i32;
     let down = down.min(MAX_TREE_GENERATIONS) as i32;
-    // ---- Auswahl in Prioritätsreihenfolge
+    let selection = select(family, focus, up, down);
+    let (mut rows, min_gen) = arrange_rows(family, focus, down, &selection);
+    settle(family, &mut rows);
+    let Selection {
+        order,
+        info,
+        truncated,
+        ..
+    } = selection;
+    // ---- Ausgabe: linke Kante der gesamten Zeichnung bei 0
+    let shown: BTreeSet<i64> = rows
+        .values()
+        .flat_map(|blocks| blocks.iter().flat_map(|b| b.members.iter().copied()))
+        .collect();
+    let left = rows
+        .values()
+        .flat_map(|blocks| blocks.iter().map(|b| b.center - b.width() / 2.0))
+        .fold(f32::INFINITY, f32::min);
+    let left = if left.is_finite() { left } else { 0.0 };
+    let mut nodes = Vec::new();
+    let mut right = 0.0f32;
+    for (g, blocks) in &rows {
+        for b in blocks {
+            for (i, &person) in b.members.iter().enumerate() {
+                let x = b.member_x(i) - left;
+                right = right.max(x + 0.5);
+                let (generation, role) = info[&person];
+                nodes.push(TreeNode {
+                    person,
+                    x,
+                    y: (*g - min_gen) as f32,
+                    generation,
+                    role,
+                    more_up: matches!(role, NodeRole::Focus | NodeRole::Ancestor)
+                        && family.parents_of(person).iter().any(|p| !shown.contains(p)),
+                    more_down: matches!(role, NodeRole::Focus | NodeRole::Descendant)
+                        && family
+                            .children_of(person)
+                            .iter()
+                            .any(|c| !shown.contains(c)),
+                });
+            }
+        }
+    }
+    nodes.sort_by_key(|n| (n.generation, n.person));
+    let max_gen = info.values().map(|(g, _)| *g).max().unwrap_or(0);
+    let mut links = Vec::new();
+    for &person in order.iter().filter(|p| shown.contains(p)) {
+        let parents: Vec<i64> = family
+            .parents_of(person)
+            .iter()
+            .copied()
+            .filter(|p| shown.contains(p) && info[p].0 == info[&person].0 - 1)
+            .collect();
+        if !parents.is_empty() {
+            links.push(LinkKind::Parents {
+                child: person,
+                parents,
+            });
+        }
+        for &partner in family.partners_of(person).iter().filter(|p| **p > person) {
+            if shown.contains(&partner) && info[&partner].0 == info[&person].0 {
+                links.push(LinkKind::Partner {
+                    a: person,
+                    b: partner,
+                });
+            }
+        }
+        for &partner in family
+            .former_partners_of(person)
+            .iter()
+            .filter(|p| **p > person)
+        {
+            if shown.contains(&partner) && info[&partner].0 == info[&person].0 {
+                links.push(LinkKind::FormerPartner {
+                    a: person,
+                    b: partner,
+                });
+            }
+        }
+    }
+    TreeLayout {
+        nodes,
+        links,
+        width: right,
+        height: (max_gen - min_gen + 1) as f32,
+        truncated,
+    }
+}
+
+/// Auswahl in Prioritätsreihenfolge: Fokus, Partner, Vorfahren, Geschwister, Nachkommen
+/// mit Partnern; begrenzt auf [`MAX_TREE_NODES`].
+fn select(family: &Family, focus: i64, up: i32, down: i32) -> Selection {
     let mut order: Vec<i64> = Vec::new();
     let mut info: BTreeMap<i64, (i32, NodeRole)> = BTreeMap::new();
     add(&mut info, &mut order, focus, 0, NodeRole::Focus);
@@ -171,8 +274,25 @@ pub fn layout(family: &Family, focus: i64, up: u8, down: u8) -> TreeLayout {
     order.truncate(MAX_TREE_NODES);
     let kept: BTreeSet<i64> = order.iter().copied().collect();
     info.retain(|k, _| kept.contains(k));
+    Selection {
+        order,
+        info,
+        kept,
+        truncated,
+    }
+}
 
-    // ---- Reihenfolge je Ebene
+/// Reihenfolge je Ebene: Blöcke (Personen, Paare) ab der Ebene der Fokus-Person nach oben
+/// und unten. Gibt die Ebenen und die oberste Generation zurück.
+fn arrange_rows(
+    family: &Family,
+    focus: i64,
+    down: i32,
+    selection: &Selection,
+) -> (BTreeMap<i32, Vec<Block>>, i32) {
+    let Selection {
+        order, info, kept, ..
+    } = selection;
     let gen_of = |p: i64| info[&p].0;
     let mut rows: BTreeMap<i32, Vec<Block>> = BTreeMap::new();
     let gender_rank = |p: i64| match family.gender(p) {
@@ -331,7 +451,11 @@ pub fn layout(family: &Family, focus: i64, up: u8, down: u8) -> TreeLayout {
         index_row(&blocks, &mut position);
         rows.insert(g, blocks);
     }
+    (rows, min_gen)
+}
 
+/// Lage der Blöcke: dicht gepackt beginnen, dann iterativ zu den Nachbarn ziehen.
+fn settle(family: &Family, rows: &mut BTreeMap<i32, Vec<Block>>) {
     // ---- Anfangslage: jede Ebene dicht gepackt, um 0 zentriert
     for blocks in rows.values_mut() {
         pack(blocks);
@@ -383,85 +507,6 @@ pub fn layout(family: &Family, focus: i64, up: u8, down: u8) -> TreeLayout {
                 .collect();
             project(blocks, &desired);
         }
-    }
-    // ---- Ausgabe: linke Kante der gesamten Zeichnung bei 0
-    let shown: BTreeSet<i64> = rows
-        .values()
-        .flat_map(|blocks| blocks.iter().flat_map(|b| b.members.iter().copied()))
-        .collect();
-    let left = rows
-        .values()
-        .flat_map(|blocks| blocks.iter().map(|b| b.center - b.width() / 2.0))
-        .fold(f32::INFINITY, f32::min);
-    let left = if left.is_finite() { left } else { 0.0 };
-    let mut nodes = Vec::new();
-    let mut right = 0.0f32;
-    for (g, blocks) in &rows {
-        for b in blocks {
-            for (i, &person) in b.members.iter().enumerate() {
-                let x = b.member_x(i) - left;
-                right = right.max(x + 0.5);
-                let (generation, role) = info[&person];
-                nodes.push(TreeNode {
-                    person,
-                    x,
-                    y: (*g - min_gen) as f32,
-                    generation,
-                    role,
-                    more_up: matches!(role, NodeRole::Focus | NodeRole::Ancestor)
-                        && family.parents_of(person).iter().any(|p| !shown.contains(p)),
-                    more_down: matches!(role, NodeRole::Focus | NodeRole::Descendant)
-                        && family
-                            .children_of(person)
-                            .iter()
-                            .any(|c| !shown.contains(c)),
-                });
-            }
-        }
-    }
-    nodes.sort_by_key(|n| (n.generation, n.person));
-    let max_gen = info.values().map(|(g, _)| *g).max().unwrap_or(0);
-    let mut links = Vec::new();
-    for &person in order.iter().filter(|p| shown.contains(p)) {
-        let parents: Vec<i64> = family
-            .parents_of(person)
-            .iter()
-            .copied()
-            .filter(|p| shown.contains(p) && info[p].0 == info[&person].0 - 1)
-            .collect();
-        if !parents.is_empty() {
-            links.push(LinkKind::Parents {
-                child: person,
-                parents,
-            });
-        }
-        for &partner in family.partners_of(person).iter().filter(|p| **p > person) {
-            if shown.contains(&partner) && info[&partner].0 == info[&person].0 {
-                links.push(LinkKind::Partner {
-                    a: person,
-                    b: partner,
-                });
-            }
-        }
-        for &partner in family
-            .former_partners_of(person)
-            .iter()
-            .filter(|p| **p > person)
-        {
-            if shown.contains(&partner) && info[&partner].0 == info[&person].0 {
-                links.push(LinkKind::FormerPartner {
-                    a: person,
-                    b: partner,
-                });
-            }
-        }
-    }
-    TreeLayout {
-        nodes,
-        links,
-        width: right,
-        height: (max_gen - min_gen + 1) as f32,
-        truncated,
     }
 }
 
