@@ -61,7 +61,9 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   Klick auf das Fragezeichen öffnet „Einzeln benennen“ wie das Rechtsklickmenü. Ein Klick
   auf ein Symbol schaltet die Auswahl der Kachel nie um; über einem Symbol ruht die
   Fotovorschau. Die Gruppe bleibt stehen, solange Gesichter übrig sind, und behält Abwahl
-  und Namensentwurf; Strg+Z nimmt die Entscheidung zurück.
+  und Namensentwurf; Strg+Z nimmt die Entscheidung zurück. Die Symbole lassen sich in der
+  Fußzeile neben der Fotovorschau abschalten („Symbole auf den Gesichtern“,
+  `Settings::tile_icons`, Standard an); Rechtsklickmenü und Gruppenknöpfe bleiben.
 - **„Ist das X?“ in „Benennen“:** Besteht der erste Vorschlag der Gruppe dieselbe Regel wie
   der Abgleich (`recognition::Limits::sure_suggestion` über `accept`, mit Schwelle und Abstand
   der Sammlung aus `faces::Status`), steht über den Kacheln eine hervorgehobene Zeile mit

@@ -135,18 +135,25 @@ impl PhotoApp {
         }
         loading
     }
-    /// Fußzeile mit dem Schalter für die Fotovorschau unter der Maus.
+    /// Fußzeile mit den Schaltern für die Fotovorschau unter der Maus und die Kachelsymbole.
     pub(super) fn hover_preview_footer(&mut self, ui: &mut egui::Ui) {
         egui::TopBottomPanel::bottom("people-footer").show_inside(ui, |ui| {
-            if ui
-                .checkbox(
+            ui.horizontal_wrapped(|ui| {
+                let preview = ui.checkbox(
                     &mut self.settings.hover_preview,
                     "Foto in der Vorschau zeigen, wenn die Maus über einem Gesicht steht",
-                )
-                .changed()
-            {
-                self.save();
-            }
+                );
+                let icons = ui
+                    .checkbox(&mut self.settings.tile_icons, "Symbole auf den Gesichtern")
+                    .on_hover_text(
+                        "Kreuz, Haken und Fragezeichen oben rechts auf jedem Gesicht: \
+                         Doppelklick lehnt ab bzw. bestätigt nur dieses Gesicht, das \
+                         Fragezeichen öffnet die Namensauswahl.",
+                    );
+                if preview.changed() || icons.changed() {
+                    self.save();
+                }
+            });
         });
     }
     /// Seitenwahl, Rücknahme, Neulesen und Kachelgröße über den Gesichtsgruppen; hier gelten
@@ -472,10 +479,11 @@ impl PhotoApp {
             .flatten();
         // Zielperson der Kachelsymbole (Haken/Kreuz); ohne sie gibt es nur das Fragezeichen.
         let target = tile_target(&mode, &self.face_page, group);
-        let tile_hint = if target.is_some() {
-            TILE_ICONS_HINT
-        } else {
-            TILE_MENU_HINT
+        let show_icons = self.settings.tile_icons;
+        let tile_hint = match (show_icons, target.is_some()) {
+            (false, _) => TILE_PLAIN_HINT,
+            (true, true) => TILE_ICONS_HINT,
+            (true, false) => TILE_MENU_HINT,
         };
         theme::card(ui).show(ui, |ui| {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
@@ -764,13 +772,19 @@ impl PhotoApp {
                                 }
                                 // Nach der Kachel angemeldet, damit die Symbole über ihr liegen
                                 // und ihr Klick die Auswahl nicht umschaltet.
-                                match tile_icons(
-                                    ui,
-                                    response.rect,
-                                    ui.id().with(("tile-icons", face.id)),
-                                    target.as_ref(),
-                                    !busy,
-                                ) {
+                                // Abschaltbar in der Fußzeile („Symbole auf den Gesichtern“).
+                                let icon = show_icons
+                                    .then(|| {
+                                        tile_icons(
+                                            ui,
+                                            response.rect,
+                                            ui.id().with(("tile-icons", face.id)),
+                                            target.as_ref(),
+                                            !busy,
+                                        )
+                                    })
+                                    .flatten();
+                                match icon {
                                     Some(TileIcon::Is) => decision = Some(Decision::OneIs(face.id)),
                                     Some(TileIcon::IsNot) => {
                                         decision = Some(Decision::OneIsNot(face.id))
@@ -1247,6 +1261,8 @@ enum TileAction {
 /// Hinweis unter der Maus für Kacheln mit [`tile_menu`] und nur dem Fragezeichen.
 const TILE_MENU_HINT: &str = "Fragezeichen oben rechts: Namen wählen\n\
      Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
+/// Hinweis bei abgeschalteten Kachelsymbolen.
+const TILE_PLAIN_HINT: &str = "Rechtsklick: einzeln benennen oder Foto in der Sammlung zeigen";
 /// Hinweis für Kacheln einer Gruppe mit Zielperson (Haken und Kreuz).
 const TILE_ICONS_HINT: &str = "Doppelklick auf Haken oder Kreuz oben rechts: nur dieses Gesicht \
      ist bzw. ist nicht die Person; Fragezeichen: Namen wählen\n\

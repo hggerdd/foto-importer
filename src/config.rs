@@ -286,6 +286,8 @@ pub struct Settings {
     pub dark: bool,
     /// Im Personenbereich das ganze Foto unter der Maus zeigen.
     pub hover_preview: bool,
+    /// Symbole oben rechts auf den Gruppenkacheln (Kreuz, Haken, Fragezeichen) zeigen.
+    pub tile_icons: bool,
     /// Reglerstellung für die Kachelgröße der Gesichtsgruppen (0 bis 1, Mitte = Standard).
     pub face_tile_scale: f32,
     /// Fotos je Analyse- oder Metadatenlauf, neueste zuerst; 0 bedeutet alle (ADR 0059).
@@ -334,6 +336,7 @@ impl Default for Settings {
             auto_metadata: false,
             dark: true,
             hover_preview: true,
+            tile_icons: true,
             face_tile_scale: 0.5,
             work_portion: 500,
             work_in_folder: false,
