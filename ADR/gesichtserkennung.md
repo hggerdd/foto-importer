@@ -77,7 +77,8 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Abschluss.
 - **Inkrementell** (`recognition::rematch`, `MatchCache`): Der Personenscore hängt nur von
   den Referenzen dieser Person ab; Ausschlüsse filtern erst danach. Ein Zwischenspeicher im
-  Arbeitsspeicher des Programms (eine Sammlung und ein Modell zugleich, nicht in SQLite)
+  Arbeitsspeicher des Programms (eine Sammlung und ein Modell zugleich, erkannt an Pfad,
+  `collection.id` und Modell, nicht in SQLite)
   hält je verglichenem Gesicht den Vektor und den Score gegen jede Person mit Referenzen,
   dazu den Referenzstand, gegen den gerechnet wurde. Jeder Lauf liest Referenzen,
   Gesichter (ohne Vektoren), Ablehnungen und Geburtsjahre neu; nur die Spalten von Personen

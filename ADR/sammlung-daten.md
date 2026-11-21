@@ -65,11 +65,32 @@
   (auch die täglichen; die nächste entsteht frühestens am Folgetag).
   Eine Wiederherstellung in der Oberfläche gibt es nicht; ein Test packt eine Sicherung aus
   und prüft Prüfsummen, `PRAGMA integrity_check` und Inhalt.
-- **Schema 6 mit Migration:** Stände 1 bis 5 werden beim ersten Schreibzugriff nach einer
-  Datensicherung in einer Transaktion auf 6 gebracht; die Versionsnummer ändert sich erst mit dem
-  Commit. Quellzeilen, IDs, Labels, Vektoren, Pins und Ablehnungen bleiben. Schema 4/5 darf
-  lesend ohne Upgrade geöffnet werden. Unvollständige Pflichttabellen und unbekannte Versionen
-  werden abgewiesen. Leser migrieren nie.
+- **Schema 7 mit Migration** (`migrations::SCHEMA_VERSION`): Stände 1 bis 6 werden beim ersten
+  Schreibzugriff nach einer Datensicherung (`backup::automatic`, Anlass „vor Schema-Migration
+  N → 7“) in einer Transaktion auf 7 gebracht; die Versionsnummer ändert sich erst mit dem
+  Commit. Stände 1 bis 5 bauen dabei die Projektionen neu auf, Schema 6 erhält nur die
+  Datenrevision (Tabelle, Trigger, `projection_revision` entfällt). Quellzeilen, IDs, Labels,
+  Vektoren, Pins und Ablehnungen bleiben. Schema 4 bis 6 darf lesend ohne Upgrade geöffnet
+  werden. Unvollständige Pflichttabellen und unbekannte Versionen werden abgewiesen. Leser
+  migrieren nie.
+- **Datenrevision für Caches** (`core::revision`, Schema 7): `data_revision(domain,
+  revision)` mit drei Bereichen; Trigger erhöhen den Zähler in derselben Transaktion wie die
+  Änderung. `files`: Einfügen, Löschen und Projektionsspalten von `files` und `meta` (dieselben
+  Trigger wie `metadata_photos`). `faces`: Gesichter mit Person (Einfügen, Löschen, Ändern von
+  Person, Zuordnungsart, Ignorieren, Behalten), `face_rejections`, `training_set`,
+  `face_settings`. `people`: `persons`, `person_attrs`, `relations`, `relation_types`.
+  Erkennung ohne Person, Merkmale, Gruppen, Aufträge und `face_review` zählen nicht: sie
+  entstehen in Massen, und kein Cache hängt daran. `revision::read` liest Identität
+  (`collection.id`) und alle Zähler mit einer Abfrage; ein Cache merkt sich den Schlüssel der
+  Bereiche, aus denen er gebaut ist, und gilt nur bei Gleichheit. Nutzer: Startansicht und
+  Zählungen (`files`), Personengraph (alle drei), Rückfragen „dieselbe Person“ (`faces`,
+  `people`), Personendetails (`files`, `faces`), Zeitreise (`faces`, `people`). Ohne Tabelle
+  (Schema 6, nur lesend) gibt es keine Revision, und nichts wird wiederverwendet. Kosten je
+  Zeile statt Zählung im Schreibcode, weil so auch jeder künftige Schreibweg zählt:
+  Messung 2026-11-21 (`examples/revision_bench.rs`, Release, 100.000 synthetische Zeilen,
+  Median aus 3 Runden, vorher/nachher): Bestand 23,7/23,2 s, Metadaten 39,9/39,9 s, Analyse
+  20,2/21,9 s (Streuung 17,7 bis 24,3 s), Abgleich mit 100.000 geänderten Zuordnungen
+  10,8/12,2 s (rund 14 µs je geänderter Zuordnung).
 - **Additive Indizes ohne Versionssprung:** Reine Zusatzindizes auf abgeleiteten Daten stehen
   in `schema.sql` und `migrations::ADDITIVE_INDEXES` (Test prüft Gleichheit) und entstehen beim
   Öffnen mit Schreibrecht per `CREATE INDEX IF NOT EXISTS`. Tabellen, Spalten und Trigger
@@ -141,7 +162,10 @@ teuer (Statistik der Personentabelle, Gruppenladen für das Zusammenführen; Wer
 
 ## Beim Ändern beachten
 
-Neue Varianten- oder Metadatenfelder ändern Projektion und Trigger gemeinsam. Wer
+Neue Varianten- oder Metadatenfelder ändern Projektion und Trigger gemeinsam. Neue Tabellen,
+aus denen ein Cache liest, bekommen Revisionstrigger ihres Bereichs (`revision::TABLES`,
+Test je Tabelle); neue Caches über Sammlungsdaten verwenden `revision::read`, keine eigenen
+Zähler oder Fingerabdrücke. Wer
 `metadata_photos` anders als über Einfügen, Löschen oder `relpath` ändert oder die
 Ordnerformel ändert, passt die `folder_counts`-Trigger an (Test vergleicht Tabelle und
 Zählung über `files.dir` nach jeder Änderungsart). Trigger auf

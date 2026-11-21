@@ -139,13 +139,13 @@
   - **Lokaler Cache und Fingerabdruck** (`relationship_graph::signature`, `refresh`): Der
     zuletzt berechnete Graph liegt mit seinem Fingerabdruck im lokalen Cache
     (`graph-<Hash>.json`) und erscheint beim ersten Öffnen sofort („wird aktualisiert …“).
-    Der Worker prüft den Fingerabdruck (Stand der Sammlung, Personen, Personenangaben,
-    Beziehungen, Beziehungstypen, Anzahl und Summen bestätigter Gesichter über die Teilindizes
-    `ix_faces_user_counts` und `ix_faces_reference`) und rechnet nur bei Abweichung neu; so
-    auch nach Schreibaufträgen, die den Graphen nicht berühren. „Aktualisieren“ rechnet immer
-    neu. Messung 2026-11-21 an `E:\Bilder`: bisher kalt rund 8 s ohne Konkurrenz (Paare 3,2 s,
-    Porträts mit Vektoren 4,5 s), im Log 43 s neben anderen Aufträgen; Fingerabdruck warm
-    unter 20 ms. Berechnete Verwandtschaft wird nie als Kante gezeigt
+    Der Fingerabdruck ist die Datenrevision der Sammlung (`core::revision`: Identität und die
+    Zähler `files`, `faces`, `people`, eine Abfrage); der Worker rechnet nur bei Abweichung
+    neu, so auch nach Schreibaufträgen, die den Graphen nicht berühren (etwa neue Gesichter
+    ohne Person aus der Analyse). Ohne Revision (Schema 6, nur lesend) rechnet er immer.
+    „Aktualisieren“ rechnet immer neu. Messung 2026-11-21 an `E:\Bilder`: kalt rund 8 s ohne
+    Konkurrenz (Paare 3,2 s, Porträts mit Vektoren 4,5 s), im Log 43 s neben anderen
+    Aufträgen. Berechnete Verwandtschaft wird nie als Kante gezeigt
   (Ausnahme wie bisher: Geschwister aus gemeinsamen Eltern).
   - **Layout-Gewicht** (`relationship_graph::layout_weight`): gemeinsame Fotos `1 + ln(n)`,
     eingetragene Beziehung `+1,5`, mal Nähefaktor der engsten Beziehung des Paares

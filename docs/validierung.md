@@ -626,3 +626,21 @@ Zeitreise sofort (lokale Liste) bzw. nach rund 0,15 s statt 25 bis 52 s; Graph b
 Regressionen: `tests/timeline.rs` (`load_person` liest nur die gewählte Person),
 `tests/relationship_graph.rs` (Fingerabdruck und Cache), `core::local_cache`,
 `ui::app::time_view` (Auswahl ohne Ladeauftrag, Speicher und Verwerfen, Ablösen beim Wechsel).
+
+## Datenrevision bei Massenarbeit (2026-11-21)
+
+`cargo run --release --example revision_bench -- tmp/bench-revision 100000 3`: frische
+synthetische Sammlung je Runde, Schreibmuster von Bestand (Stapel 500), Metadaten (Stapel 128,
+`meta` plus `meta_state`), Analyse (Gesichter ohne Person plus Merkmale, Stapel 32) und
+Abgleich (Zuordnung `auto`, Stapel 512); Median aus 3 Runden, Windows, Release.
+
+| Lauf (100.000 Zeilen) | vorher (Schema 6) | nachher (Schema 7) |
+|---|---|---|
+| Bestand | 23,7 s | 23,2 s |
+| Metadaten | 39,9 s | 39,9 s |
+| Analyse | 20,2 s | 21,9 s (Runden 17,7 bis 24,3 s) |
+| Abgleich | 10,8 s | 12,2 s |
+
+Bestand und Metadaten ersetzen nur den bisherigen Zähler. Die Analyse feuert keinen
+Revisionstrigger (Gesichter ohne Person); ihr Unterschied liegt in der Streuung. Der Abgleich
+zahlt rund 14 µs je geänderter Zuordnung; echte Läufe schreiben nur geänderte Vorschläge.

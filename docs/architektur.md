@@ -22,7 +22,7 @@ flowchart TB
     UI -->|Nur nach Klick| Runtime[Runtime-Download mit SHA-256-Prüfung]
     Runtime -->|DLL im Benutzerprofil| ONNX
     Writer --> Lock[Exklusive Host/PID-Sperrdatei]
-    Query --> DB[(SQLite .myfotomanager · Schema 6)]
+    Query --> DB[(SQLite .myfotomanager · Schema 7)]
     Graph --> DB
     Index --> DB
     Faces --> DB

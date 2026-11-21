@@ -63,10 +63,10 @@ den Modellordner im Benutzerprofil. [Modellanleitung](models/README.md)
 
 Originale werden ausschließlich gelesen. Vollständige Kopien werden unter freien
 Zielnamen veröffentlicht. Vorhandene Zieldateien bleiben erhalten.
-Bekannte Schema-Stände 1–5 werden beim ersten Schreibzugriff nach einer vorherigen
-Datensicherung auf Schema 6 aktualisiert. IDs und Nutzerentscheidungen bleiben
+Bekannte Schema-Stände 1–6 werden beim ersten Schreibzugriff nach einer vorherigen
+Datensicherung auf Schema 7 aktualisiert. IDs und Nutzerentscheidungen bleiben
 erhalten. Unvollständige Pflicht-Quelltabellen und unbekannte Versionen werden
-abgewiesen. Schema 4/5 kann zunächst lesend geöffnet werden.
+abgewiesen. Schema 4 bis 6 kann zunächst lesend geöffnet werden.
 
 Arbeitsplatzeinstellungen: `%APPDATA%\FotoImporter\settings.json`, atomar
 geschrieben. Für isolierte Tests überschreibt `FOTO_IMPORTER_SETTINGS` den Pfad.
