@@ -7,7 +7,20 @@ Konzept und offene Ideen: [docs/konzept-zeitreise.md](../docs/konzept-zeitreise.
 - **Lesende Ansicht der gewählten Person:** Die Zeitreise hat keinen eigenen Hauptpunkt;
   sie ist unter „Personen“ die Ansicht „Zeitreise“ und öffnet sich für die in der Tabelle
   gewählte Person (auch über „Zeitreise zeigen“ in den Details). Ihre eigene Personenauswahl
-  bleibt zum Wechseln und wählt die Person für alle Personenansichten.
+  bleibt zum Wechseln und wählt die Person für alle Personenansichten. Ohne gewählte Person
+  wird nichts vorgewählt und kein Gesicht gelesen.
+- **Personenauswahl sofort, Gesichter nur der gewählten Person:** Die Auswahl zeigt die
+  Personen aus dem eigenen kleinen Auftrag „Personen für die Zeitreise lesen“ (`faces::people`,
+  nur Personen-, Namens- und Zähltabellen über `ix_faces_user_counts`), bis dahin die schon
+  geladenen Personen der Personenansichten oder die zuletzt gelesene Liste aus dem lokalen
+  Cache (`personen-<Hash>.json`, `core::local_cache`). Erst nach der Wahl liest „Zeitreise
+  lesen“ (`timeline::load_person`) Gesichter, Geburt und Entscheidungen nur dieser Person.
+  Eine neue Wahl ersetzt den laufenden Auftrag (Abbruch, Revision). Gelesene Personen bleiben
+  im Speicher (`config::TIMELINE_CACHED_PEOPLE`, 12); der Wechsel zurück rechnet nur neu.
+  Jede Änderung am Bestand (Benennen, Rücknahme, eigene Entscheidungen) verwirft diesen
+  Speicher (`TimeUi::invalidate`, Datenstand `data_serial`); ältere Antworten kommen nicht
+  mehr hinein. Messung 2026-11-21 an `E:\Bilder` (USB-Festplatte): Personenliste kalt 0,15 s,
+  Gesichter einer Person kalt 3,3 s (408 Gesichter) bis 10,9 s (3 595), warm 9 bis 54 ms.
 - **Inhalt:** Gesichter einer Person über die Zeit (`core/timeline.rs`,
   `ui/app/time_view.rs`) mit den Reitern Zeitstrahl, Lücken, Zeitraffer & Export. Alles wird
   zur Laufzeit berechnet; es gibt keine Schemaänderung, nur den additiven Teilindex

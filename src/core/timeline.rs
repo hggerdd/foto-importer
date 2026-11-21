@@ -4,7 +4,7 @@
 //! prüft sie gegen einstellbare Schwellen, bildet Zeitabschnitte (Jahr, Monat, Altersjahr)
 //! und wählt je Abschnitt das beste Gesicht. Nutzerentscheidungen (festnageln, ausblenden)
 //! liegen in `face_settings`; Datumskorrekturen werden nie in Dateien geschrieben.
-use super::{collection::Collection, kinship::Family};
+use super::{collection::Collection, faces::Person, kinship::Family};
 use crate::config;
 use anyhow::{Result, bail};
 use rusqlite::{OptionalExtension, params};
@@ -111,6 +111,47 @@ impl DateQuality {
     pub fn uncertain(self) -> bool {
         self != DateQuality::Exif
     }
+}
+
+/// Alles, was die Zeitreise für eine Person liest: ein Leseauftrag nur für diese Person.
+#[derive(Clone, Debug, Default)]
+pub struct PersonData {
+    pub person: i64,
+    pub raw: Vec<TimeFace>,
+    pub birth: Option<Birth>,
+    pub decisions: Decisions,
+    pub relatives: Vec<(i64, &'static str)>,
+}
+
+/// Liest Gesichter, Geburt, Entscheidungen und Verwandte einer Person in einer
+/// Lesetransaktion. Andere Personen werden nicht gelesen.
+pub fn load_person(collection: &Collection, person: i64) -> Result<PersonData> {
+    collection.db.execute_batch("BEGIN")?;
+    let result = (|| {
+        Ok(PersonData {
+            person,
+            raw: load(collection, person)?,
+            birth: birth(collection, person)?,
+            decisions: load_decisions(collection, person)?,
+            relatives: relatives(&super::relations::load_family(collection)?, person),
+        })
+    })();
+    collection.db.execute_batch("ROLLBACK")?;
+    result
+}
+
+/// Art und Format der lokal gespeicherten Personenliste (`core::local_cache`).
+const PEOPLE_CACHE: (&str, u32) = ("personen", 1);
+
+/// Zuletzt gelesene Personenliste der Sammlung aus dem lokalen Cache, sofort zum Anzeigen,
+/// bis die frisch gelesene sie ersetzt.
+pub fn cached_people(dir: &std::path::Path, collection: &str) -> Option<Vec<Person>> {
+    super::local_cache::load(dir, PEOPLE_CACHE.0, PEOPLE_CACHE.1, collection)
+}
+
+/// Legt die frisch gelesene Personenliste im lokalen Cache ab.
+pub fn store_people(dir: &std::path::Path, collection: &str, people: &[Person]) {
+    super::local_cache::store(dir, PEOPLE_CACHE.0, PEOPLE_CACHE.1, collection, &people);
 }
 
 /// Ein Gesicht mit allem, was die Zeitreise braucht.

@@ -36,6 +36,10 @@ pub(super) struct RelationshipView {
     /// Daten sind veraltet (Sammlung wurde geändert) und werden neu berechnet.
     pub(super) stale: bool,
     attempted: bool,
+    /// Fingerabdruck der Daten, zu denen `data` gehört (`relationship_graph::signature`).
+    signature: Option<String>,
+    /// `data` kommt aus dem lokalen Cache und wird noch geprüft.
+    pub(super) from_cache: bool,
     pub(super) selected: Option<i64>,
     centre: [f32; 2],
     scale: f32,
@@ -61,6 +65,8 @@ impl Default for RelationshipView {
             data: None,
             stale: false,
             attempted: false,
+            signature: None,
+            from_cache: false,
             selected: None,
             centre: [0.0, 0.0],
             scale: 40.0,
@@ -79,6 +85,16 @@ impl Default for RelationshipView {
 }
 
 impl RelationshipView {
+    /// Antwort des Prüf- und Rechenauftrags: ein neuer Graph oder die Bestätigung, dass der
+    /// gezeigte noch gilt.
+    pub(super) fn refreshed(&mut self, signature: String, network: Option<Network>) {
+        if let Some(network) = network {
+            self.accept(network);
+        }
+        self.signature = Some(signature);
+        self.from_cache = false;
+    }
+
     /// Wählt die Person und holt sie beim nächsten Zeichnen in den Ausschnitt.
     pub(super) fn show_person(&mut self, person: i64) {
         self.selected = Some(person);
@@ -239,12 +255,25 @@ fn node_radius(photos: usize, max: usize) -> f32 {
 }
 
 impl PhotoApp {
+    /// Zeigt sofort den zuletzt gespeicherten Graphen (lokaler Cache) und prüft auf einem
+    /// Worker per Fingerabdruck, ob er noch gilt; nur bei Änderungen wird neu berechnet und
+    /// gespeichert.
     fn load_relationship_graph(&mut self) {
-        self.relationship_graph.revision += 1;
-        self.relationship_graph.stale = false;
-        self.relationship_graph.attempted = true;
-        let revision = self.relationship_graph.revision;
-        let root = self.settings.collection.clone();
+        let graph = &mut self.relationship_graph;
+        graph.revision += 1;
+        graph.stale = false;
+        graph.attempted = true;
+        if graph.data.is_none()
+            && let Some(cached) =
+                relationship_graph::cached(&self.cache_dir, &self.settings.collection)
+        {
+            graph.accept(cached.network);
+            graph.signature = Some(cached.signature);
+            graph.from_cache = true;
+        }
+        let revision = graph.revision;
+        let known = graph.signature.clone();
+        let (root, cache) = (self.settings.collection.clone(), self.cache_dir.clone());
         self.launch(
             "Personengraph berechnen",
             false,
@@ -252,11 +281,16 @@ impl PhotoApp {
             move |control| {
                 let collection = Collection::open(Path::new(&root), false)?;
                 collection.cancel_with(&control);
-                collection.db.execute_batch("BEGIN")?;
-                Ok(Outcome::RelationshipGraph(
-                    revision,
-                    relationship_graph::network(&collection)?,
-                ))
+                let (signature, network) =
+                    relationship_graph::refresh(&collection, known.as_deref())?;
+                if let Some(network) = &network {
+                    let cached = relationship_graph::Cached {
+                        signature: signature.clone(),
+                        network: network.clone(),
+                    };
+                    relationship_graph::store(&cache, &root, &cached);
+                }
+                Ok(Outcome::RelationshipGraph(revision, signature, network))
             },
         );
     }
@@ -322,6 +356,8 @@ impl PhotoApp {
             self.relation_from = Some(person);
         }
         if refresh {
+            // Ausdrücklich aktualisieren rechnet immer neu, auch bei gleichem Fingerabdruck.
+            self.relationship_graph.signature = None;
             self.relationship_graph.stale = true;
         }
         if let Some(people) = photos {
@@ -473,6 +509,9 @@ fn toolbar(
         }
         if loading {
             ui.spinner();
+            if view.from_cache {
+                ui.label(RichText::new("wird aktualisiert …").color(theme::MUTED));
+            }
         }
     });
     let mut info = format!(

@@ -178,7 +178,12 @@ enum Outcome {
     Indexed(bool),
     Suggestions(u64, i64, crate::core::recognition::Suggestions),
     Report(String),
-    RelationshipGraph(u64, crate::core::relationship_graph::Network),
+    /// Revision, Fingerabdruck und neu berechneter Graph (`None`: unverändert).
+    RelationshipGraph(
+        u64,
+        String,
+        Option<crate::core::relationship_graph::Network>,
+    ),
     /// Zusätzliche Angaben der Personendetails (Revision der Personenseite).
     PersonInsights(u64, crate::core::person_insights::Insights),
     /// Rückfragen „Möglicherweise dieselbe Person“ (Revision der Personenseite).
@@ -1465,10 +1470,16 @@ impl PhotoApp {
             Outcome::Suggestions(revision, id, _) => {
                 *revision != self.naming_revision || self.naming != Some(*id)
             }
-            Outcome::RelationshipGraph(revision, _) => {
+            Outcome::RelationshipGraph(revision, ..) => {
                 *revision != self.relationship_graph.revision
                     || running.collection != self.settings.collection
             }
+            // Antworten der Zeitreise prüfen ihre Revisionen selbst; die Sammlung muss stimmen.
+            Outcome::Time(
+                time_view::TimeOutcome::People(..)
+                | time_view::TimeOutcome::Loaded(_)
+                | time_view::TimeOutcome::Computed { .. },
+            ) => running.collection != self.settings.collection,
             Outcome::PersonInsights(..) | Outcome::Duplicates(..) | Outcome::Named(_) => {
                 running.collection != self.settings.collection
             }
@@ -1623,10 +1634,20 @@ impl PhotoApp {
                         self.time_ui.failed(format!("{e:#}"));
                     }
                 }
-                Ok(Outcome::Time(outcome)) => self.accept_time(outcome),
+                Ok(Outcome::Time(outcome)) => {
+                    if running.collection == self.settings.collection
+                        || matches!(outcome, time_view::TimeOutcome::Exported(_))
+                    {
+                        self.accept_time(outcome);
+                    }
+                }
                 // Fehlende Zusatzangaben der Personendetails sind kein Fehler für den Nutzer;
                 // die Abschnitte bleiben dann leer und werden mit dem nächsten Stand neu gelesen.
-                Err(_) if matches!(running.kind, "person-insights" | "person-duplicates") => {}
+                Err(_)
+                    if matches!(
+                        running.kind,
+                        "person-insights" | "person-duplicates" | "timeline-people"
+                    ) => {}
                 Ok(Outcome::Duplicates(revision, duplicates))
                     if running.collection == self.settings.collection =>
                 {
@@ -1876,7 +1897,7 @@ impl PhotoApp {
                     if running.write && running.collection == self.settings.collection {
                         self.relationship_graph.stale = true;
                         if running.kind == "undo" {
-                            self.time_ui.need_load = true;
+                            self.time_ui.invalidate();
                         }
                         self.requery_collection();
                         self.refresh_faces();
@@ -1896,13 +1917,14 @@ impl PhotoApp {
                         self.select_person(id);
                         self.people_ui.scroll_to_person(id);
                         self.relationship_graph.stale = true;
+                        self.time_ui.need_people = true;
                         self.refresh_faces();
                     }
                 }
                 Ok(Outcome::Named(undo)) if running.collection == self.settings.collection => {
                     self.relationship_graph.stale = true;
                     // Die Zeitreise zeigt bestätigte Gesichter; beim nächsten Zeigen neu lesen.
-                    self.time_ui.need_load = true;
+                    self.time_ui.invalidate();
                     self.prepare_group_advance(&undo);
                     let saved = optimistic::decision_message(undo.summary());
                     self.undo.push(undo);
@@ -1919,11 +1941,11 @@ impl PhotoApp {
                     }
                 }
                 Ok(Outcome::Report(text)) => self.report = Some(text),
-                Ok(Outcome::RelationshipGraph(revision, graph))
+                Ok(Outcome::RelationshipGraph(revision, signature, graph))
                     if running.collection == self.settings.collection
                         && revision == self.relationship_graph.revision =>
                 {
-                    self.relationship_graph.accept(graph);
+                    self.relationship_graph.refreshed(signature, graph);
                 }
                 Ok(Outcome::RuntimeDownloaded(path)) => {
                     let previous = std::mem::replace(

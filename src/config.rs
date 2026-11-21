@@ -36,6 +36,9 @@ pub const THUMB_CACHE_TOUCH: std::time::Duration = std::time::Duration::from_sec
 /// Gespeicherte Startansicht der Sammlung (`core::start_view`): größere Dateien werden
 /// ignoriert (48 Fotos sind rund 20 KB).
 pub const START_VIEW_MAX_BYTES: u64 = 1024 * 1024;
+/// Weitere lokale Ableitungen (`core::local_cache`: Personenliste, Personengraph); größere
+/// Dateien werden ignoriert (56 Personen mit Graph sind rund 60 KB).
+pub const LOCAL_CACHE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
 pub const THUMBNAIL_WORKERS: usize = 4;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
@@ -92,6 +95,9 @@ pub const GRAPH_DISTANT: f32 = 0.35;
 /// Personendetails: so viele Personen nennt „Häufig zusammen mit“ (meiste gemeinsame Fotos).
 /// Höchstens `relationship_graph::NEIGHBOR_LIMIT`.
 pub const PERSON_COMPANIONS: usize = 8;
+/// Zeitreise: so viele zuletzt gelesene Personen bleiben im Speicher, damit der Wechsel zurück
+/// ohne Datenbank geht (je Person höchstens einige tausend Gesichter, rund 1 MB).
+pub const TIMELINE_CACHED_PEOPLE: usize = 12;
 /// Personendetails, „Fotos je Jahr“: plausible Aufnahmejahre. Andere Werte (z. B. 0000 aus
 /// nicht gestellten Kamerauhren) zählen als „ohne Datum“, damit das Diagramm keine
 /// Jahrhunderte überspannt.

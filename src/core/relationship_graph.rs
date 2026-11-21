@@ -1,6 +1,7 @@
 use super::{collection::Collection, metadata::PHOTO_FORMATS};
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 pub const NEIGHBOR_LIMIT: usize = 12;
 
@@ -91,7 +92,7 @@ pub const MAX_NODES: usize = 600;
 pub const MAX_EDGES: usize = 6000;
 
 /// Eingetragene Beziehung aus Sicht der ersten Person einer Kante.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Recorded {
     /// Die erste Person ist Elternteil der zweiten.
     Parent,
@@ -130,7 +131,7 @@ impl Recorded {
 }
 
 /// Ausschnitt eines Gesichts für die Darstellung im Knoten.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Portrait {
     /// Relativer Pfad des Fotos in der Sammlung.
     pub source: String,
@@ -138,15 +139,17 @@ pub struct Portrait {
     pub bbox: [f32; 4],
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub person: i64,
     pub name: String,
-    /// Typischstes Gesicht der Person, falls vorhanden.
+    /// Porträt wie in der Personentabelle (bestes bestätigtes Gesicht), falls vorhanden.
     pub portrait: Option<Portrait>,
     /// Eindeutige Fotos mit bestätigter Zuordnung (wie in der Sammlungssuche).
     pub photos: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     /// Indizes in `Network::nodes`, `a < b`.
     pub a: usize,
@@ -157,6 +160,7 @@ pub struct Edge {
     pub recorded: Vec<Recorded>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Network {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -183,6 +187,47 @@ fn photo_people() -> String {
             WHERE f.retained=0 AND f.assignment='user' AND x.merged_into IS NULL AND {PHOTO_FORMATS}
         )"
     )
+}
+
+/// Fotos je Person und gemeinsame Fotos je Personenpaar (kleinere ID zuerst) aus einem
+/// einzigen Lesen der Paare Foto–Person. Das Lesen trifft jedes bestätigte Gesicht und sein
+/// Foto (verstreute Seiten); es geschieht deshalb nur einmal.
+type PhotoCounts = (
+    std::collections::HashMap<i64, usize>,
+    Vec<(i64, i64, usize)>,
+);
+
+fn photo_counts(collection: &Collection) -> Result<PhotoCounts> {
+    use std::collections::{BTreeMap, HashMap};
+    let mut statement = collection.db.prepare(&format!(
+        "WITH {} SELECT photo, person FROM photo_people ORDER BY photo, person",
+        photo_people()
+    ))?;
+    let mut rows = statement.query([])?;
+    let mut counts: HashMap<i64, usize> = HashMap::new();
+    let mut pairs: BTreeMap<(i64, i64), usize> = BTreeMap::new();
+    let mut photo: Option<i64> = None;
+    let mut on_photo: Vec<i64> = Vec::new();
+    let mut flush = |on_photo: &mut Vec<i64>| {
+        for (i, a) in on_photo.iter().enumerate() {
+            for b in &on_photo[i + 1..] {
+                *pairs.entry((*a, *b)).or_default() += 1;
+            }
+        }
+        on_photo.clear();
+    };
+    while let Some(row) = rows.next()? {
+        let (this, person): (i64, i64) = (row.get(0)?, row.get(1)?);
+        if photo != Some(this) {
+            flush(&mut on_photo);
+            photo = Some(this);
+        }
+        *counts.entry(person).or_default() += 1;
+        on_photo.push(person);
+    }
+    flush(&mut on_photo);
+    let shared = pairs.into_iter().map(|((a, b), n)| (a, b, n)).collect();
+    Ok((counts, shared))
 }
 
 /// Alle Personen mit gemeinsamen Fotos und eingetragenen Beziehungen samt Layout.
@@ -266,26 +311,7 @@ pub fn network(collection: &Collection) -> Result<Network> {
         )?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let counts: HashMap<i64, usize> = collection
-        .db
-        .prepare(&format!(
-            "WITH {} SELECT person, count(*) FROM photo_people GROUP BY person",
-            photo_people()
-        ))?
-        .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as usize)))?
-        .collect::<rusqlite::Result<_>>()?;
-    let shared: Vec<(i64, i64, usize)> = collection
-        .db
-        .prepare(&format!(
-            "WITH {} SELECT a.person, b.person, count(*) FROM photo_people a
-             JOIN photo_people b ON a.photo=b.photo AND a.person<b.person
-             GROUP BY a.person, b.person",
-            photo_people()
-        ))?
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as usize))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let (counts, shared) = photo_counts(collection)?;
     let relations: Vec<(i64, String, String, i64)> = collection
         .db
         .prepare(
@@ -331,14 +357,11 @@ pub fn network(collection: &Collection) -> Result<Network> {
         *degree.entry(*a).or_default() += 1;
         *degree.entry(*b).or_default() += 1;
     }
+    // Porträts wie in der Personentabelle: eine Fensterabfrage ohne Merkmalsvektoren (die
+    // Vektoren aller bestätigten Gesichter kosteten kalt auf der USB-Platte rund 4,5 s).
     // Fehlende Gesichter dürfen den Graphen nicht verhindern.
-    let embedder = super::faces::setting(collection, "rust.embedder_key")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
     let ids: Vec<i64> = people.iter().map(|(id, _)| *id).collect();
-    let mut portraits =
-        super::faces::person_portraits(collection, &embedder, &ids).unwrap_or_default();
+    let mut portraits = super::faces::person_portraits(collection, "", &ids).unwrap_or_default();
     let mut nodes: Vec<Node> = people
         .into_iter()
         .map(|(person, name)| Node {
@@ -403,4 +426,76 @@ pub fn network(collection: &Collection) -> Result<Network> {
         hidden_people,
         hidden_edges,
     })
+}
+
+/// Fingerabdruck aller Daten, aus denen der Graph entsteht: Stand der Sammlung (Identität,
+/// Projektionsrevision für Fotoformate), Personen, Personenangaben, Beziehungen, ihre Typen
+/// und die bestätigten Gesichter (Anzahl und Summen über zwei Teilindizes, ohne die
+/// Gesichtstabelle zu lesen). Gleicher Fingerabdruck heißt: der gespeicherte Graph gilt.
+pub fn signature(collection: &Collection) -> Result<String> {
+    let mut hash = blake3::Hasher::new();
+    let stamp = super::start_view::stamp(collection)?;
+    hash.update(format!("{stamp:?}").as_bytes());
+    for sql in [
+        // ix_faces_user_counts: Zuordnungen der Fotozählung.
+        "SELECT count(*),coalesce(sum(id),0),coalesce(sum(id*person_id),0) FROM faces
+         WHERE assignment='user' AND retained=0",
+        // ix_faces_reference: Kandidaten der Porträts.
+        "SELECT count(*),coalesce(sum(id),0),coalesce(sum(id*person_id),0) FROM faces
+         WHERE assignment='user' AND ignored=0",
+    ] {
+        let row: (i64, i64, i64) = collection
+            .db
+            .query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        hash.update(format!("{row:?};").as_bytes());
+    }
+    for table in ["persons", "person_attrs", "relations", "relation_types"] {
+        let mut statement = collection.db.prepare(&format!("SELECT * FROM {table}"))?;
+        let columns = statement.column_count();
+        let mut rows = statement.query([])?;
+        hash.update(table.as_bytes());
+        while let Some(row) = rows.next()? {
+            for i in 0..columns {
+                hash.update(format!("{:?}|", row.get_ref(i)?).as_bytes());
+            }
+            hash.update(b"\n");
+        }
+    }
+    Ok(hash.finalize().to_hex().to_string())
+}
+
+/// Graph mit dem Fingerabdruck, zu dem er gehört.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Cached {
+    pub signature: String,
+    pub network: Network,
+}
+
+/// Art und Format des lokal gespeicherten Graphen (`core::local_cache`).
+const CACHE: (&str, u32) = ("graph", 1);
+
+/// Zuletzt berechneter Graph der Sammlung aus dem lokalen Cache.
+pub fn cached(dir: &std::path::Path, collection: &str) -> Option<Cached> {
+    super::local_cache::load(dir, CACHE.0, CACHE.1, collection)
+}
+
+/// Legt den berechneten Graphen im lokalen Cache ab.
+pub fn store(dir: &std::path::Path, collection: &str, cached: &Cached) {
+    super::local_cache::store(dir, CACHE.0, CACHE.1, collection, cached);
+}
+
+/// Prüft in einer Lesetransaktion den Fingerabdruck und berechnet den Graphen nur, wenn er
+/// sich gegenüber `known` geändert hat (`None` = unverändert).
+pub fn refresh(collection: &Collection, known: Option<&str>) -> Result<(String, Option<Network>)> {
+    collection.db.execute_batch("BEGIN")?;
+    let result = (|| {
+        let signature = signature(collection)?;
+        if known == Some(signature.as_str()) {
+            return Ok((signature, None));
+        }
+        let network = network(collection)?;
+        Ok((signature, Some(network)))
+    })();
+    collection.db.execute_batch("ROLLBACK")?;
+    result
 }

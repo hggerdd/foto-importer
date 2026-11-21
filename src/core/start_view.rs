@@ -13,7 +13,6 @@
 
 use super::{
     collection::{Collection, CollectionStatus},
-    files,
     metadata::{self, Photo, Search},
 };
 use anyhow::Result;
@@ -159,8 +158,7 @@ impl Snapshot {
 
 /// Datei der Startansicht einer Sammlung im Cache-Ordner.
 pub fn file(dir: &Path, collection: &str) -> PathBuf {
-    let key = blake3::hash(files::fold(collection).as_bytes()).to_hex();
-    dir.join(format!("start-{}.json", &key[..20]))
+    super::local_cache::file(dir, "start", collection)
 }
 
 /// Liest die Startansicht; `None` bei fehlender, fremder, zu großer oder kaputter Datei.
