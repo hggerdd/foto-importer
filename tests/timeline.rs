@@ -599,3 +599,23 @@ fn a_person_with_100000_faces_loads_and_computes_quickly() -> anyhow::Result<()>
     assert!(computing.as_secs_f32() < limit);
     Ok(())
 }
+
+#[test]
+fn load_person_reads_only_the_chosen_person() -> anyhow::Result<()> {
+    let (_t, c) = fresh()?;
+    person(&c, 1, "A", Some("2010"))?;
+    person(&c, 2, "B", None)?;
+    face(&c, 1, 1, &Spec::default())?;
+    face(&c, 2, 1, &Spec::default())?;
+    face(&c, 3, 2, &Spec::default())?;
+    let data = timeline::load_person(&c, 2)?;
+    assert_eq!(data.person, 2);
+    assert_eq!(data.raw.iter().map(|f| f.id).collect::<Vec<_>>(), [3]);
+    assert_eq!(data.birth, None);
+    let data = timeline::load_person(&c, 1)?;
+    let mut ids: Vec<i64> = data.raw.iter().map(|f| f.id).collect();
+    ids.sort();
+    assert_eq!(ids, [1, 2]);
+    assert_eq!(data.birth.map(|b| b.year), Some(2010));
+    Ok(())
+}

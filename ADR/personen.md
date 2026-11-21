@@ -73,8 +73,8 @@
   sie (`set_person_mode`); neben dem Umschalter steht ihr Name. Wer in einer dieser Ansichten
   eine andere Person wählt, wählt sie für alle. Ohne gewählte Person nennen die drei
   Ansichten den Weg zur Auswahl und arbeiten wie zuvor mit ihrer eigenen Vorgabe
-  (Stammbaum: Person mit den meisten Familienbeziehungen; Graph: alle; Zeitreise: Person
-  mit den meisten Gesichtern). Die Auswahl endet mit dem Wechsel der Sammlung.
+  (Stammbaum: Person mit den meisten Familienbeziehungen; Graph: alle; Zeitreise: keine,
+  die Personenauswahl steht sofort bereit). Die Auswahl endet mit dem Wechsel der Sammlung.
 - **Übersicht (Personen & Beziehungen):** sortierbare, virtualisierte Tabelle links (Porträt, Name,
   Fotos, Gesichter, Geburt und Alter, Geschlecht, Beziehungen, Familie, erstes und letztes
   Foto, Hinweise; Spalten entfallen bei wenig Breite nach Priorität), Details der gewählten
@@ -129,7 +129,19 @@
   unterschieden) und gemeinsame Fotos (Linienstärke logarithmisch, Schwelle „ab Fotos“).
   Gemeinsame Fotos zählen wie die Sammlungssuche: eindeutige Fotos, bestätigte Zuordnungen,
   keine historischen Gesichter. Berechnung auf einem Worker mit Revision; Layout
-  deterministisch (`graph_layout`). Berechnete Verwandtschaft wird nie als Kante gezeigt
+  deterministisch (`graph_layout`). Die Paare Foto–Person werden einmal gelesen; Fotos je
+  Person und gemeinsame Fotos je Paar zählt Rust. Porträts wie in der Personentabelle
+  (bestes bestätigtes Gesicht, ohne Merkmalsvektoren).
+  - **Lokaler Cache und Fingerabdruck** (`relationship_graph::signature`, `refresh`): Der
+    zuletzt berechnete Graph liegt mit seinem Fingerabdruck im lokalen Cache
+    (`graph-<Hash>.json`) und erscheint beim ersten Öffnen sofort („wird aktualisiert …“).
+    Der Worker prüft den Fingerabdruck (Stand der Sammlung, Personen, Personenangaben,
+    Beziehungen, Beziehungstypen, Anzahl und Summen bestätigter Gesichter über die Teilindizes
+    `ix_faces_user_counts` und `ix_faces_reference`) und rechnet nur bei Abweichung neu; so
+    auch nach Schreibaufträgen, die den Graphen nicht berühren. „Aktualisieren“ rechnet immer
+    neu. Messung 2026-11-21 an `E:\Bilder`: bisher kalt rund 8 s ohne Konkurrenz (Paare 3,2 s,
+    Porträts mit Vektoren 4,5 s), im Log 43 s neben anderen Aufträgen; Fingerabdruck warm
+    unter 20 ms. Berechnete Verwandtschaft wird nie als Kante gezeigt
   (Ausnahme wie bisher: Geschwister aus gemeinsamen Eltern).
   - **Layout-Gewicht** (`relationship_graph::layout_weight`): gemeinsame Fotos `1 + ln(n)`,
     eingetragene Beziehung `+1,5`, mal Nähefaktor der engsten Beziehung des Paares

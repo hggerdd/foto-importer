@@ -226,3 +226,63 @@ fn siblings_follow_from_shared_parents_without_being_recorded() -> anyhow::Resul
     assert!(distance(3, 4) < distance(3, 9));
     Ok(())
 }
+
+#[test]
+fn graph_is_recomputed_only_when_its_data_changes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::write(root.path().join("a.jpg"), b"photo")?;
+    let mut collection = Collection::open(root.path(), true)?;
+    collection.quick_scan(false, &Control::default())?;
+    let photo = metadata::search(&collection, &Search::default(), "")?.photos[0].id;
+    collection.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2),(3);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');",
+    )?;
+    for person in [1, 2] {
+        collection.db.execute(
+            "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+             VALUES(?,'a.jpg','det',?,'user',0.1,0.1,0.5,0.5)",
+            rusqlite::params![photo, person],
+        )?;
+    }
+    let (signature, network) = relationship_graph::refresh(&collection, None)?;
+    let network = network.expect("erstes Lesen berechnet");
+    // Lokaler Cache: gleicher Graph samt Fingerabdruck zurück, nur für diese Sammlung.
+    let cache = tempfile::tempdir()?;
+    let key = root.path().to_string_lossy().into_owned();
+    let cached = relationship_graph::Cached {
+        signature: signature.clone(),
+        network: network.clone(),
+    };
+    relationship_graph::store(cache.path(), &key, &cached);
+    assert_eq!(
+        relationship_graph::cached(cache.path(), &key),
+        Some(cached.clone())
+    );
+    assert_eq!(relationship_graph::cached(cache.path(), "anders"), None);
+    // Unverändert: nichts wird berechnet.
+    let (same, none) = relationship_graph::refresh(&collection, Some(&signature))?;
+    assert_eq!((same.as_str(), none), (signature.as_str(), None));
+    // Jede Änderung an Zuordnungen, Namen, Beziehungen oder Personen ändert den Fingerabdruck.
+    let changes = [
+        "INSERT INTO faces(photo_id,source_relpath,detector_id,person_id,assignment,bbox_x1,bbox_y1,bbox_x2,bbox_y2)
+         VALUES(1,'a.jpg','det',3,'user',0.1,0.1,0.5,0.5)",
+        "UPDATE faces SET person_id=2 WHERE person_id=3",
+        "UPDATE person_attrs SET value='Anne' WHERE person_id=1 AND key='name'",
+        "INSERT INTO relations VALUES(1,3,2)",
+        "UPDATE persons SET merged_into=1 WHERE id=3",
+    ];
+    let mut previous = signature;
+    for change in changes {
+        let change = change.replace("VALUES(1,", &format!("VALUES({photo},"));
+        collection.db.execute_batch(&change)?;
+        let (next, network) = relationship_graph::refresh(&collection, Some(&previous))?;
+        assert_ne!(next, previous, "{change}");
+        assert!(network.is_some(), "{change}");
+        previous = next;
+    }
+    let network = relationship_graph::network(&collection)?;
+    let anna = network.index_of(1).expect("Anna");
+    assert_eq!(network.nodes[anna].name, "Anne");
+    Ok(())
+}

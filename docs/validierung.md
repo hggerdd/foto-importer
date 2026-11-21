@@ -565,3 +565,36 @@ die ganze App gegen `E:\Bilder` (wird dort nicht gestartet). Regressionen:
 erster Seite; Filter auf `meta` und Gesichter nie), `core::thumb_cache` (Schlüssel folgt dem
 Original, kaputte Einträge, Aufräumen nur eigener Dateien), `src/ui/app/tests.rs` (Seite vor
 Zählung, Startansicht vor jedem Lesen, Personen erst nach der Sammlung).
+
+## Zeitreise und Personengraph (2026-11-21)
+
+Diagnose-Logs (`%APPDATA%\FotoImporter\logs`, Sammlung `E:\Bilder`, USB-Festplatte): „Zeitreise
+lesen“ 31,8 s (2026-11-19), 24,9 s und 52,2 s (2026-11-21, neben „Personen und Gesichter lesen“
+44,1 s und Benennungen); „Personengraph berechnen“ 43,2 s, 15,6 s, warm 0,4 s. Der Auftrag der
+Zeitreise las Personenliste und Gesichter der vorgewählten Person (die mit den meisten
+Gesichtern) in einem Zug; die Auswahl erschien erst danach.
+
+Nur lesend an `E:\Bilder\.myfotomanager` (Python `sqlite3`, `mode=ro`), erste Messung (kalt,
+soweit der Dateicache es erlaubt), zweite direkt danach (warm):
+
+| Abfrage | kalt | warm |
+|---|---|---|
+| Personen und Namen (57 Personen) | 39 ms | 0 ms |
+| Bestätigte Gesichter je Person (`ix_faces_user_counts`) | 114 ms | 1 ms |
+| Gesichter einer Person, 408 Gesichter (`ix_faces_person`, je Gesicht `files`, `meta`, `metadata_photos`) | 3,3 s | 9 ms |
+| dieselbe Abfrage, 3 595 Gesichter | 10,9 s | 54 ms |
+| Graph: Paare Foto–Person (je Gesicht `metadata_photos`) | 3,2 s bis 11,0 s | 62 bis 68 ms |
+| Graph: Porträts mit Merkmalsvektoren | 4,5 s | 92 ms |
+| Graph: Porträts ohne Vektoren (wie Personentabelle) | 42 ms | 40 ms |
+| Graph: Fingerabdruck, Gesichtssummen über `ix_faces_reference` | 101 ms | 1 ms |
+
+Daraus: Personenliste als eigener kleiner Auftrag und lokal gespeichert, Gesichter nur nach
+der Wahl und nur für diese Person (ADR Zeitreise); Graph mit einmal gelesenen Paaren,
+Porträts ohne Vektoren und lokal gespeichertem Ergebnis, das nur bei geändertem Fingerabdruck
+neu berechnet wird (ADR Personen). Geschätzt, nicht in der App auf `E:` gemessen: Auswahl der
+Zeitreise sofort (lokale Liste) bzw. nach rund 0,15 s statt 25 bis 52 s; Graph beim ersten
+Öffnen sofort aus dem Cache, Prüfung rund 0,1 s kalt; Neuberechnung kalt rund 3 bis 11 s statt
+8 s bis 43 s. Die Gesichter einer großen Person bleiben kalt teuer (verstreute Zeilen).
+Regressionen: `tests/timeline.rs` (`load_person` liest nur die gewählte Person),
+`tests/relationship_graph.rs` (Fingerabdruck und Cache), `core::local_cache`,
+`ui::app::time_view` (Auswahl ohne Ladeauftrag, Speicher und Verwerfen, Ablösen beim Wechsel).

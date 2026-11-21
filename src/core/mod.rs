@@ -18,6 +18,7 @@ pub mod inference;
 pub mod jobs;
 pub mod kinship;
 pub mod known_files;
+pub mod local_cache;
 pub mod maintenance;
 pub mod matching;
 pub mod metadata;

@@ -14,7 +14,7 @@ use std::{
     path::Path,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Person {
     pub id: i64,
     pub name: String,

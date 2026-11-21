@@ -8,13 +8,13 @@ use super::*;
 use crate::core::timeline_export;
 use crate::core::{
     faces::Person,
-    relations,
     timeline::{
-        self, Axis, Birth, Computed, DateQuality, Decisions, Grain, Params, Section, Thresholds,
-        TimeFace,
+        self, Axis, Birth, Computed, DateQuality, Decisions, Grain, Params, PersonData, Section,
+        Thresholds, TimeFace,
     },
 };
 use crate::ui::select::{self, Choice, FilterSelect};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 const TILE: f32 = 112.0;
@@ -27,19 +27,37 @@ pub(super) enum Tab {
     Lapse,
 }
 
-/// Ergebnis des Ladeauftrags: Personen, Gesichter der Person und die erste Berechnung.
-pub(super) struct Loaded {
-    revision: u64,
-    person: Option<i64>,
-    people: Vec<Person>,
-    relatives: Vec<(i64, &'static str)>,
+/// Gelesene Daten einer Person; bleiben je Person im Speicher, bis sich der Bestand ändert.
+#[derive(Clone)]
+pub(super) struct PersonCache {
     raw: Arc<Vec<TimeFace>>,
     birth: Option<Birth>,
     decisions: Decisions,
+}
+
+impl From<PersonData> for PersonCache {
+    fn from(data: PersonData) -> Self {
+        Self {
+            raw: Arc::new(data.raw),
+            birth: data.birth,
+            decisions: data.decisions,
+        }
+    }
+}
+
+/// Ergebnis des Ladeauftrags: Gesichter der gewählten Person und die erste Berechnung.
+pub(super) struct Loaded {
+    revision: u64,
+    /// Datenstand (`TimeUi::data_serial`) beim Start; nur dann darf das Ergebnis in den Cache.
+    serial: u64,
+    person: i64,
+    data: PersonCache,
     computed: Computed,
 }
 
 pub(super) enum TimeOutcome {
+    /// Personenliste der Auswahl (klein, eigener Auftrag, nie mit Gesichtern zusammen).
+    People(u64, Vec<Person>),
     Loaded(Box<Loaded>),
     Computed {
         revision: u64,
@@ -62,13 +80,20 @@ enum Decision {
 pub(super) struct TimeUi {
     collection: String,
     pub person: Option<i64>,
-    loaded_person: Option<i64>,
+    pub(super) loaded_person: Option<i64>,
     people: Vec<Person>,
-    relatives: Vec<(i64, &'static str)>,
+    /// Personenliste frisch aus der Sammlung (sonst aus dem lokalen Cache oder leer).
+    people_fresh: bool,
+    pub(super) need_people: bool,
+    people_revision: u64,
     raw: Option<Arc<Vec<TimeFace>>>,
     birth: Option<Birth>,
     decisions: Decisions,
     computed: Option<Arc<Computed>>,
+    /// Zuletzt gelesene Personen (neueste hinten), höchstens `TIMELINE_CACHED_PEOPLE`.
+    cache: VecDeque<(i64, PersonCache)>,
+    /// Erhöht bei jeder Änderung am Bestand; ältere Ladeergebnisse kommen nicht in den Cache.
+    data_serial: u64,
     pub axis: Axis,
     pub grain: Option<Grain>,
     include_auto: bool,
@@ -95,11 +120,15 @@ impl Default for TimeUi {
             person: None,
             loaded_person: None,
             people: Vec::new(),
-            relatives: Vec::new(),
+            people_fresh: false,
+            need_people: true,
+            people_revision: 0,
             raw: None,
             birth: None,
             decisions: Decisions::default(),
             computed: None,
+            cache: VecDeque::new(),
+            data_serial: 0,
             axis: Axis::Date,
             grain: None,
             include_auto: false,
@@ -156,6 +185,51 @@ impl TimeUi {
     pub(super) fn failed(&mut self, error: String) {
         self.error = error;
     }
+    /// Der Bestand hat sich geändert: Personenliste und gewählte Person neu lesen, gemerkte
+    /// Personen verwerfen. Laufende Ladeaufträge dürfen nicht mehr in den Cache.
+    pub(super) fn invalidate(&mut self) {
+        self.cache.clear();
+        self.data_serial += 1;
+        self.need_load = true;
+        self.need_people = true;
+    }
+    fn cached(&self, person: i64) -> Option<PersonCache> {
+        self.cache
+            .iter()
+            .find(|(id, _)| *id == person)
+            .map(|(_, data)| data.clone())
+    }
+    fn remember(&mut self, person: i64, data: PersonCache) {
+        self.cache.retain(|(id, _)| *id != person);
+        self.cache.push_back((person, data));
+        while self.cache.len() > config::TIMELINE_CACHED_PEOPLE {
+            self.cache.pop_front();
+        }
+    }
+    /// Zeigt die Daten dieser Person (Berechnung folgt).
+    fn show(&mut self, person: i64, data: PersonCache) {
+        self.loaded_person = Some(person);
+        self.raw = Some(data.raw);
+        self.birth = data.birth;
+        self.decisions = data.decisions;
+    }
+    /// Nichts von einer anderen Person zeigen, solange die gewählte gelesen wird.
+    fn clear_shown(&mut self) {
+        self.loaded_person = None;
+        self.raw = None;
+        self.birth = None;
+        self.decisions = Decisions::default();
+        self.computed = None;
+    }
+    /// Personen der Auswahl: frisch gelesen, sonst die der Personenansichten, sonst die
+    /// zuletzt lokal gespeicherte Liste.
+    fn choices<'a>(&'a self, shared: &'a [Person]) -> &'a [Person] {
+        if self.people_fresh || shared.is_empty() {
+            &self.people
+        } else {
+            shared
+        }
+    }
 }
 
 fn face_request(root: &str, face: &TimeFace, edge: u32) -> PreviewRequest {
@@ -205,7 +279,8 @@ fn dashed_border(ui: &egui::Ui, rect: egui::Rect) {
 
 impl PhotoApp {
     /// Hält die Zeitreise mit Sammlung und Einstellungen im Gleichklang. Langsames läuft nur
-    /// auf einem Worker; ein zweiter Auftrag startet erst, wenn der erste zurück ist.
+    /// auf Workern: die Personenliste in einem eigenen kleinen Auftrag, die Gesichter nur für
+    /// die gewählte Person. Ein neuer Ladeauftrag ersetzt den laufenden (Revision).
     pub(super) fn sync_time(&mut self) {
         if self.settings.collection.is_empty() {
             return;
@@ -219,71 +294,108 @@ impl PhotoApp {
                 person: if keep { person } else { None },
                 axis: if keep { axis } else { Axis::Date },
                 grain: if keep { grain } else { None },
+                people: timeline::cached_people(&self.cache_dir, &self.settings.collection)
+                    .unwrap_or_default(),
                 ..TimeUi::default()
             };
         }
-        if self.tasks.iter().any(|t| t.kind == "timeline") {
-            return;
-        }
+        self.sync_time_people();
         let min_px = self.settings.timeline_min_px;
-        let root = PathBuf::from(&self.settings.collection);
         if self.time_ui.need_load {
-            self.time_ui.revision += 1;
-            let revision = self.time_ui.revision;
             self.time_ui.need_load = false;
             self.time_ui.need_compute = false;
-            let person = self.time_ui.person;
-            let params = self.time_ui.params(min_px);
-            self.launch("Zeitreise lesen", false, "timeline", move |control| {
+            let Some(person) = self.time_ui.person else {
+                // Ohne gewählte Person wird nichts Schweres gelesen.
+                self.time_ui.revision += 1;
+                self.time_ui.clear_shown();
+                return;
+            };
+            match self.time_ui.cached(person) {
+                Some(data) => {
+                    self.time_ui.show(person, data);
+                    self.launch_time_compute(min_px);
+                }
+                None => self.launch_time_load(person, min_px),
+            }
+            return;
+        }
+        // Eine Berechnung würde einen laufenden Ladeauftrag ersetzen: erst danach rechnen.
+        if self.time_ui.need_compute && !self.tasks.iter().any(|t| t.kind == "timeline") {
+            self.launch_time_compute(min_px);
+        }
+    }
+
+    /// Liest die Personenliste (kleine Tabellen, kalt auf der USB-Platte rund 0,15 s) und legt
+    /// sie für den nächsten Start im lokalen Cache ab.
+    fn sync_time_people(&mut self) {
+        if !self.time_ui.need_people || self.tasks.iter().any(|t| t.kind == "timeline-people") {
+            return;
+        }
+        self.time_ui.need_people = false;
+        self.time_ui.people_revision += 1;
+        let revision = self.time_ui.people_revision;
+        let root = PathBuf::from(&self.settings.collection);
+        let (cache, collection) = (self.cache_dir.clone(), self.settings.collection.clone());
+        self.launch(
+            "Personen für die Zeitreise lesen",
+            false,
+            "timeline-people",
+            move |control| {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
-                control.checkpoint()?;
                 let people = faces::people(&c)?;
-                let person = person
-                    .filter(|p| people.iter().any(|x| x.id == *p))
-                    .or_else(|| people.iter().max_by_key(|p| p.count).map(|p| p.id));
-                let (raw, birth, decisions, relatives) = match person {
-                    Some(person) => (
-                        timeline::load(&c, person)?,
-                        timeline::birth(&c, person)?,
-                        timeline::load_decisions(&c, person)?,
-                        timeline::relatives(&relations::load_family(&c)?, person),
-                    ),
-                    None => Default::default(),
-                };
-                control.checkpoint()?;
-                let params = Params {
-                    birth,
-                    decisions: decisions.clone(),
-                    ..params
-                };
-                let computed = timeline::compute(&raw, &params);
-                Ok(Outcome::Time(TimeOutcome::Loaded(Box::new(Loaded {
-                    revision,
-                    person,
-                    people,
-                    relatives,
-                    raw: Arc::new(raw),
-                    birth,
-                    decisions,
-                    computed,
-                }))))
-            });
-        } else if self.time_ui.need_compute
-            && let Some(raw) = self.time_ui.raw.clone()
-        {
-            self.time_ui.need_compute = false;
-            self.time_ui.revision += 1;
-            let revision = self.time_ui.revision;
-            let params = self.time_ui.params(min_px);
-            self.launch("Zeitreise berechnen", false, "timeline", move |control| {
-                control.checkpoint()?;
-                Ok(Outcome::Time(TimeOutcome::Computed {
-                    revision,
-                    computed: timeline::compute(&raw, &params),
-                }))
-            });
-        }
+                timeline::store_people(&cache, &collection, &people);
+                Ok(Outcome::Time(TimeOutcome::People(revision, people)))
+            },
+        );
+    }
+
+    /// Liest die Gesichter nur dieser Person; ersetzt einen laufenden Ladeauftrag.
+    fn launch_time_load(&mut self, person: i64, min_px: u32) {
+        self.time_ui.revision += 1;
+        let (revision, serial) = (self.time_ui.revision, self.time_ui.data_serial);
+        self.time_ui.clear_shown();
+        let params = self.time_ui.params(min_px);
+        let root = PathBuf::from(&self.settings.collection);
+        self.launch("Zeitreise lesen", false, "timeline", move |control| {
+            let c = Collection::open(&root, false)?;
+            c.cancel_with(&control);
+            control.phase("Gesichter der Person lesen", "");
+            let data = timeline::load_person(&c, person)?;
+            control.checkpoint()?;
+            control.phase("Zeitreise berechnen", "");
+            let params = Params {
+                birth: data.birth,
+                decisions: data.decisions.clone(),
+                ..params
+            };
+            let computed = timeline::compute(&data.raw, &params);
+            Ok(Outcome::Time(TimeOutcome::Loaded(Box::new(Loaded {
+                revision,
+                serial,
+                person,
+                data: data.into(),
+                computed,
+            }))))
+        });
+    }
+
+    /// Rechnet die geladenen Gesichter mit den aktuellen Einstellungen neu (ohne Datenbank).
+    fn launch_time_compute(&mut self, min_px: u32) {
+        let Some(raw) = self.time_ui.raw.clone() else {
+            return;
+        };
+        self.time_ui.need_compute = false;
+        self.time_ui.revision += 1;
+        let revision = self.time_ui.revision;
+        let params = self.time_ui.params(min_px);
+        self.launch("Zeitreise berechnen", false, "timeline", move |control| {
+            control.checkpoint()?;
+            Ok(Outcome::Time(TimeOutcome::Computed {
+                revision,
+                computed: timeline::compute(&raw, &params),
+            }))
+        });
     }
 
     /// Öffnet die Zeitreise für diese Person; geladen wird auf einem Worker.
@@ -300,23 +412,23 @@ impl PhotoApp {
     pub(super) fn accept_time(&mut self, outcome: TimeOutcome) {
         let ui = &mut self.time_ui;
         match outcome {
+            TimeOutcome::People(revision, people) => {
+                if revision == ui.people_revision {
+                    ui.people = people;
+                    ui.people_fresh = true;
+                }
+            }
             TimeOutcome::Loaded(loaded) => {
+                let loaded = *loaded;
+                // Auch eine überholte Antwort ist für ihre Person richtig: merken.
+                if loaded.serial == ui.data_serial {
+                    ui.remember(loaded.person, loaded.data.clone());
+                }
                 if loaded.revision != ui.revision {
                     return;
                 }
-                let loaded = *loaded;
                 ui.error.clear();
-                ui.people = loaded.people;
-                ui.relatives = loaded.relatives;
-                ui.raw = Some(loaded.raw);
-                ui.birth = loaded.birth;
-                ui.decisions = loaded.decisions;
-                ui.loaded_person = loaded.person;
-                if ui.person.is_none() || ui.person == loaded.person {
-                    ui.person = loaded.person;
-                }
-                // Die Person wurde während des Ladens gewechselt: noch einmal laden.
-                ui.need_load = ui.need_load || ui.person != ui.loaded_person;
+                ui.show(loaded.person, loaded.data);
                 ui.axis = loaded.computed.axis;
                 ui.apply(loaded.computed);
             }
@@ -327,7 +439,7 @@ impl PhotoApp {
                 ui.axis = computed.axis;
                 ui.apply(computed);
             }
-            TimeOutcome::Decided => ui.need_load = true,
+            TimeOutcome::Decided => ui.invalidate(),
             TimeOutcome::Exported(path) => {
                 let text = path.map_or_else(
                     || "Export abgebrochen.".to_owned(),
@@ -374,6 +486,33 @@ impl PhotoApp {
             });
     }
 
+    /// Name der gewählten Person aus der Auswahlliste.
+    fn time_person_name(&self) -> Option<String> {
+        let person = self.time_ui.person?;
+        self.time_ui
+            .choices(&self.face_page.people)
+            .iter()
+            .find(|p| p.id == person)
+            .map(|p| p.name.clone())
+    }
+
+    /// Platzhalter, solange nichts berechnet ist: ohne Person der Weg zur Auswahl, sonst der
+    /// laufende Ladeauftrag der gewählten Person.
+    fn time_waiting(&self, ui: &mut egui::Ui) {
+        ui.add_space(24.0);
+        if self.time_ui.person.is_none() {
+            ui.label("Wähle oben eine Person. Ihre Gesichter werden erst dann gelesen.");
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(match self.time_person_name() {
+                Some(name) => format!("Gesichter von {name} werden gelesen …"),
+                None => "Zeitreise wird gelesen …".to_owned(),
+            });
+        });
+    }
+
     fn decide(&mut self, decision: Decision) {
         let Some(person) = self.time_ui.loaded_person else {
             return;
@@ -392,7 +531,8 @@ impl PhotoApp {
     }
 
     fn time_header(&mut self, ui: &mut egui::Ui) {
-        let items: Vec<Choice<i64>> = select::person_choices(&self.time_ui.people, None);
+        let items: Vec<Choice<i64>> =
+            select::person_choices(self.time_ui.choices(&self.face_page.people), None);
         let mut person = self.time_ui.person;
         let (mut load, mut compute) = (false, false);
         ui.horizontal_wrapped(|ui| {
@@ -580,11 +720,7 @@ impl PhotoApp {
 
     fn strip_tab(&mut self, ui: &mut egui::Ui) {
         let Some(computed) = self.time_ui.computed.clone() else {
-            ui.add_space(30.0);
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Zeitreise wird gelesen …");
-            });
+            self.time_waiting(ui);
             return;
         };
         if computed.sections.is_empty() {
@@ -977,10 +1113,8 @@ impl PhotoApp {
             .filter(|r| !r.1.is_empty())
             .collect();
         let name = self
-            .time_ui
-            .person
-            .and_then(|id| self.time_ui.people.iter().find(|p| p.id == id))
-            .map_or_else(|| "Person".to_owned(), |p| p.name.clone());
+            .time_person_name()
+            .unwrap_or_else(|| "Person".to_owned());
         let stem = format!("Zeitreise-{}", timeline_export::safe_stem(&name));
         let (root, exiftool) = (
             PathBuf::from(&self.settings.collection),
@@ -1040,8 +1174,7 @@ impl PhotoApp {
 
     fn lapse_tab(&mut self, ui: &mut egui::Ui) {
         let Some(computed) = self.time_ui.computed.clone() else {
-            ui.add_space(20.0);
-            ui.label("Zeitreise wird gelesen …");
+            self.time_waiting(ui);
             return;
         };
         let tiles = self.lapse_tiles(&computed);
@@ -1130,8 +1263,7 @@ impl PhotoApp {
 
     fn gaps_tab(&mut self, ui: &mut egui::Ui) {
         let Some(computed) = self.time_ui.computed.clone() else {
-            ui.add_space(20.0);
-            ui.label("Zeitreise wird gelesen …");
+            self.time_waiting(ui);
             return;
         };
         ui.add_space(8.0);
@@ -1218,8 +1350,17 @@ mod tests {
         let mut app = PhotoApp::with_settings(&creation, Settings::default());
         app.settings.collection = root.path().to_string_lossy().into_owned();
         settle(&mut app, &ctx);
-        // Die Person mit den meisten Gesichtern wird vorgewählt, alles kam vom Worker.
-        assert_eq!(app.time_ui.person, Some(1));
+        // Ohne gewählte Person steht die Personenliste bereit, Gesichter werden nicht gelesen.
+        assert_eq!(app.time_ui.person, None);
+        assert_eq!(app.time_ui.people.len(), 1);
+        assert!(app.time_ui.people_fresh);
+        assert!(app.time_ui.raw.is_none() && app.time_ui.computed.is_none());
+        // Die Liste liegt für den nächsten Start im lokalen Cache.
+        let cached = timeline::cached_people(&app.cache_dir, &app.settings.collection);
+        assert_eq!(cached.as_deref(), Some(app.time_ui.people.as_slice()));
+        app.show_time_for(1);
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.loaded_person, Some(1));
         let computed = app.time_ui.computed.clone().expect("computed");
         assert_eq!(computed.sections.len(), 3);
         assert_eq!(computed.axis, Axis::Date);
@@ -1243,6 +1384,123 @@ mod tests {
             &before,
             app.time_ui.computed.as_ref().expect("computed")
         ));
+        Ok(())
+    }
+
+    /// Zwei Personen mit je einem Gesicht in einer temporären Sammlung.
+    fn two_people() -> anyhow::Result<tempfile::TempDir> {
+        let root = tempfile::tempdir()?;
+        let c = Collection::open(root.path(), true)?;
+        for (id, name) in [(1, "Anna"), (2, "Ben")] {
+            c.db.execute("INSERT INTO persons(id) VALUES(?)", [id])?;
+            c.db.execute(
+                "INSERT INTO person_attrs VALUES(?,?,?)",
+                rusqlite::params![id, "name", name],
+            )?;
+        }
+        for (id, person) in [(1, 1), (2, 2)] {
+            let rel = format!("2020/{id}.jpg");
+            c.db.execute(
+                "INSERT INTO photos(id,status) VALUES(?,?)",
+                rusqlite::params![id, "present"],
+            )?;
+            c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status,meta_state) VALUES(?,?,?,?,?,?,?,1,0,?,?,?)", rusqlite::params![id, rel, rel, "2020", format!("{id}.jpg"), id.to_string(), "jpg", id, "present", "done"])?;
+            c.db.execute("INSERT INTO meta(file_id,dt_original,width,height,orientation) VALUES(?,?,800,600,1)", rusqlite::params![id, "2020:06:01 12:00:00"])?;
+            c.db.execute("INSERT INTO faces(id,photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality,person_id,assignment) VALUES(?,?,?,?,?,0.3,0.2,0.7,0.8,?,0.95,0.9,?,?)", rusqlite::params![id, id, id, rel, "d", "[[300.0,200.0],[400.0,200.0],[350.0,260.0],[310.0,320.0],[390.0,320.0]]", person, "user"])?;
+        }
+        Ok(root)
+    }
+
+    #[test]
+    fn switching_back_uses_the_remembered_person_until_the_data_changes() -> anyhow::Result<()> {
+        let root = two_people()?;
+        let ctx = egui::Context::default();
+        let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = PhotoApp::with_settings(&creation, Settings::default());
+        app.settings.collection = root.path().to_string_lossy().into_owned();
+        app.show_time_for(1);
+        settle(&mut app, &ctx);
+        app.show_time_for(2);
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.loaded_person, Some(2));
+        // Zurück zu Anna: aus dem Speicher, nur die Berechnung läuft auf einem Worker.
+        app.show_time_for(1);
+        app.sync_time();
+        assert_eq!(
+            app.time_ui.loaded_person,
+            Some(1),
+            "sofort aus dem Speicher"
+        );
+        let labels: Vec<&str> = app
+            .tasks
+            .iter()
+            .filter(|t| t.kind == "timeline")
+            .map(|t| t.task.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Zeitreise berechnen"], "keine Datenbankabfrage");
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.computed.as_ref().map(|c| c.total), Some(1));
+        // Eine Änderung am Bestand verwirft alles Gemerkte; Anna wird neu gelesen.
+        app.time_ui.invalidate();
+        assert!(app.time_ui.cached(2).is_none());
+        app.sync_time();
+        let labels: Vec<&str> = app
+            .tasks
+            .iter()
+            .filter(|t| t.kind == "timeline")
+            .map(|t| t.task.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Zeitreise lesen"]);
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.loaded_person, Some(1));
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_choice_supersedes_the_running_load_and_old_answers_are_not_shown() -> anyhow::Result<()>
+    {
+        let root = two_people()?;
+        let ctx = egui::Context::default();
+        let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = PhotoApp::with_settings(&creation, Settings::default());
+        app.settings.collection = root.path().to_string_lossy().into_owned();
+        app.show_time_for(1);
+        app.sync_time();
+        let first = app.time_ui.revision;
+        // Wechsel während des Ladens: sofort ein neuer Auftrag, der alte wird abgebrochen.
+        app.show_time_for(2);
+        app.sync_time();
+        assert!(app.time_ui.revision > first);
+        let loads = app
+            .tasks
+            .iter()
+            .filter(|t| t.task.label == "Zeitreise lesen")
+            .count();
+        assert!(loads >= 1);
+        settle(&mut app, &ctx);
+        assert_eq!(app.time_ui.loaded_person, Some(2));
+        // Eine verspätete Antwort für Anna wird gemerkt, aber nicht gezeigt.
+        let late = Loaded {
+            revision: first,
+            serial: app.time_ui.data_serial,
+            person: 1,
+            data: PersonData::default().into(),
+            computed: timeline::compute(&[], &Params::default()),
+        };
+        app.accept_time(TimeOutcome::Loaded(Box::new(late)));
+        assert_eq!(app.time_ui.loaded_person, Some(2));
+        assert!(app.time_ui.cached(1).is_some());
+        // Ergebnisse von vor einer Änderung kommen nicht in den Speicher.
+        app.time_ui.invalidate();
+        let old = Loaded {
+            revision: 0,
+            serial: app.time_ui.data_serial - 1,
+            person: 1,
+            data: PersonData::default().into(),
+            computed: timeline::compute(&[], &Params::default()),
+        };
+        app.accept_time(TimeOutcome::Loaded(Box::new(old)));
+        assert!(app.time_ui.cached(1).is_none());
         Ok(())
     }
 
