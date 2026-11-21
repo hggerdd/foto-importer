@@ -46,11 +46,24 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 
 - Nur vom Nutzer bestätigte Gesichter ab Qualität 0,5 können Referenz sein. Automatische
   Zuordnungen lernen nie.
-- Je Person höchstens 100 Auswahlen aus höchstens 2048 Kandidaten: Ausreißer- und
-  Duplikatfilter (0,92), Serienfilter, Verteilung über Jahre, qualitätsgewichtete Auswahl
-  möglichst verschiedener Gesichter. Rund 20 % werden als Validierung zurückgehalten und
-  zählen nie im Referenzvergleich. Pins des Nutzers zählen auf das Limit, Ausschlüsse gelten.
+- Die Auswahlgröße je Person folgt allein der Zahl `n` ihrer bestätigten Gesichter mit
+  Merkmalen und sättigt (`config::reference_limit`): `ceil(800·(1−exp(−n/800)))`, höchstens
+  `n`, ohne feste Untergrenze (30 → 30, 100 → 95, 500 → 372, 1000 → 571, 5000 → 799).
+  Ausgewählt wird aus höchstens 2048 Kandidaten (`config::REFERENCE_CANDIDATES_MAX`, je Jahr
+  nach Qualität im Wechsel; Pins kommen hinzu): Ausreißer- und Duplikatfilter (0,92),
+  Serienfilter, Verteilung über Jahre, qualitätsgewichtete Auswahl möglichst verschiedener
+  Gesichter. Pins zählen auf die Grenze, gehen aber nie verloren (die Grenze wächst bei Bedarf
+  auf ihre Zahl); Ausschlüsse gelten.
+- **Validierung** (`config::reference_validation`): 20 % der Auswahl, höchstens 40, und erst ab
+  50 Ausgewählten; seltene Personen nutzen alle Gesichter als Referenz. Validierungsgesichter
+  zählen nie im Abgleich und dienen nur „Validierung auswerten“ (`maintenance::calibrate`).
   Die Auswahl ist reproduzierbar (Seed 42, BLAKE3 über Gesichts-ID).
+- **Regelwechsel:** `config::REFERENCE_POLICY` benennt die geltende Regel; die Sammlung merkt sie
+  sich je Modell (`rust.reference_policy:<Modell>`). Weicht sie beim Öffnen mit Schreibrecht ab
+  (`recognition::renew_outdated_references`), werden alle Personen mit Auswahl als geändert
+  markiert und der Abgleich vorgemerkt; die nächste Wartung wählt neu aus. Pins, Ausschlüsse
+  und Zuordnungen bleiben; der Zwischenspeicher des Abgleichs rechnet die Spalten der Personen
+  mit geänderten Referenzen neu.
 - Nach einer Bestätigung werden nur geänderte Personen neu ausgewählt.
 
 **Abgleich** (`recognition::rematch`)
@@ -132,18 +145,40 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Offene Gesichter werden zu Beginn jedes Referenz- und Abgleichlaufs gruppiert, nicht erst
   an dessen Ende.
 
-**Messung 2026-11-15** (eine Sammlung, SFace, 4.501 bestätigte Gesichter, 1.537 Referenzen,
-35 Personen; Person-auslassen-Test, daher obere Schätzung für Fehlannahmen):
+**Messung 2026-11-21: Referenzgrenze** (`examples/reference_limit_eval.rs`, nur lesend; eine
+Sammlung, SFace, 17.023 bestätigte Gesichter, 50 Personen). Je Person sind rund 20 % der
+Aufnahmetage (BLAKE3 über Person und Tag) eine feste Testmenge von 2.931 Gesichtern, die in
+keiner Variante Kandidat ist; die Auswahl läuft im Speicher. „richtig“: eigene Person wird mit
+Abstand 0,05 vorgeschlagen; „falsch“: eine andere; „unbekannt“: Person-auslassen-Test (obere
+Schätzung). Gruppen nach bestätigten Gesichtern der Person (Testgesichter: <30: 48, 30–100: 82,
+100–500: 569, >500: 2.232).
 
-| Schwelle | richtige Person erreicht sie | unbekannte Person wird trotzdem zugeordnet |
-|---|---|---|
-| 0,363 | 99,7 % | 75 % |
-| 0,50 | 98,1 % | 43 % |
-| 0,60 | 90,8 % | 14 % |
-| 0,65 | 81 % | 4,5 % |
-| 0,70 | 61 % | 1 % |
+| Variante | Refs | richtig 0,60 / 0,70 (>500) | falsch 0,60 (>500 / 100–500) | richtig 0,60 / 0,70 (<30; 30–100) | gesamt richtig 0,60 / 0,70 | gesamt falsch 0,60 | unbekannt 0,60 / 0,70 |
+|---|---|---|---|---|---|---|---|
+| fest 100 (bis 2026-11-21) | 2.083 | 63 % / 29 % | 5,4 % / 0 % | 83 % / 58 %; 77 % / 67 % | 68 % / 38 % | 4,1 % | 17,9 % / 4,8 % |
+| fest 400 | 4.755 | 86 % / 71 % | 1,5 % / 0 % | 81 % / 58 %; 77 % / 67 % | 87 % / 72 % | 1,1 % | 16,7 % / 5,3 % |
+| sättigend 600 | 5.358 | 88 % / 76 % | 0,7 % / 0,2 % | wie oben | 88 % / 75 % | 0,5 % | 16,2 % / 5,2 % |
+| sättigend 800 | 5.862 | 90 % / 78 % | 0,2 % / 0,5 % | wie oben | 89 % / 77 % | 0,3 % | 16,0 % / 5,3 % |
+| sättigend 1200 | 6.488 | 91 % / 80 % | 0,2 % / 1,4 % | wie oben | 90 % / 79 % | 0,4 % | 15,5 % / 5,3 % |
+| alle (ohne Kandidatengrenze) | 7.973 | 93 % / 83 % | 0,1 % / 1,6 % | wie oben | 92 % / 81 % | 0,4 % | 15,1 % / 5,4 % |
+| **gewählt:** sättigend 800, Validierung neu | 6.612 | 90 % / 79 % | 0,1 % / 0,5 % | 83 % / 63 %; 77 % / 70 % | 90 % / 78 % | 0,2 % | 15,7 % / 5,4 % |
 
-Reproduzierbar mit `cargo run --example face_eval -- <Sammlungsordner>` (öffnet nur lesend; zusätzlich Anteile mit 0,05 Abstand zur zweitbesten Person).
+Ohne Kandidatengrenze war die Auswahl bei gleicher Größe schlechter (sättigend 800: 76 % statt
+78 % bei 0,70, >500), weil die Jahresverteilung verloren geht. Über 800 hinaus steigen die
+Verwechslungen mittlerer Personen mit häufigen. Ein zusätzlicher Mittelwertvektor je Person
+(Prototyp) half seltenen Personen bei 0,70 (<30: 71 % statt 63 %), ließ aber unbekannte
+Personen häufiger zugeordnet werden (30–100 bei 0,70: 12,2 % statt 8,5 %); nicht übernommen.
+Gespiegelte oder gedrehte Ausschnitte als zusätzliche Referenzen sind nicht gemessen. Die
+Gruppen unter 100 Gesichtern haben wenige Testgesichter; ihre Unterschiede sind unsicher.
+Laufzeit (Release, 4 Threads): Auswahl aller 50 Personen 0,9 s; Abgleich aller offenen
+Gesichter hochgerechnet 0,9 s (fest 100) bzw. 2,6 s (gewählt), einfache Skalarprodukte.
+
+**Messung 2026-11-15** (Schwellen; 4.501 bestätigte Gesichter, 1.537 Referenzen, 35 Personen,
+Person-auslassen-Test): Die richtige Person erreicht 0,60 in 90,8 %, 0,70 in 61 %; eine
+unbekannte Person überschreitet 0,60 in 14 %, 0,70 in 1 %. Die Schwellen 0,60 / 0,70 / 0,05
+bleiben; die neue Messung zeigt bei 0,70 rund 5 % unbekannte Zuordnungen (vorher 4,8 % mit
+fest 100), unabhängig von der Referenzgrenze. Reproduzierbar mit
+`cargo run --example face_eval -- <Sammlungsordner>`.
 
 ## Grenzen
 
@@ -155,7 +190,9 @@ andere ersetzt, erkennt er geänderte Vektoren nur an Gesichts-ID und `rowid`.
 
 ## Beim Ändern beachten
 
-Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Namenszuordnung
+Ändert sich Referenzgrenze, Kandidatengrenze oder Validierung, `config::REFERENCE_POLICY`
+erhöhen und mit `reference_limit_eval` messen (`--check` prüft, dass die Auswahl im Speicher
+der gespeicherten gleicht). Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Namenszuordnung
 getrennt halten. Neue Abfragen auf aktive Gesichter prüfen `ignored=0`, nicht
 `ignored<>1`, sonst kehren „Kein Gesicht“-Entscheidungen zurück. Nie automatische Zuordnungen als Referenz oder Trainingsdaten verwenden, nie
 das abgefragte Gesicht als eigene Referenz zählen. Schwellen nur mit Messung ändern.
