@@ -100,15 +100,7 @@ pub fn encode(image: &DynamicImage) -> Result<Vec<u8>> {
 /// Fehler werden ignoriert. Nach `THUMB_CACHE_TRIM_EVERY` neuen Einträgen wird aufgeräumt.
 pub fn put(dir: &Path, key: &str, bytes: &[u8]) {
     let path = entry(dir, key);
-    let Some(folder) = path.parent() else { return };
-    if std::fs::create_dir_all(folder).is_err() {
-        return;
-    }
-    let Ok(mut temp) = tempfile::NamedTempFile::new_in(folder) else {
-        return;
-    };
-    if std::io::Write::write_all(&mut temp, bytes).is_ok() && temp.persist_noclobber(&path).is_ok()
-    {
+    if super::files::write_atomic(&path, bytes, super::files::Mode::NoClobber, false).is_ok() {
         let written = WRITES.fetch_add(1, Ordering::Relaxed) + 1;
         if written.is_multiple_of(crate::config::THUMB_CACHE_TRIM_EVERY) {
             trim(dir, crate::config::THUMB_CACHE_BYTES);

@@ -1,6 +1,6 @@
-use super::{inference, jobs::Control};
+use super::{inference, jobs::Control, recognition};
 use anyhow::{Result, bail};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Maximum-weight assignment, with caller-supplied unknown columns.
 pub fn assignment(scores: &[Vec<f32>]) -> Result<Vec<usize>> {
@@ -155,14 +155,13 @@ pub fn select_references(
         if n < 4 || row.pinned || medoid_scores[i] >= 0.2 {
             continue;
         }
-        let mut scores: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != i)
-            .filter_map(|(_, r)| inference::cosine(&row.vector, &r.vector))
-            .collect();
-        scores.sort_by(|a, b| b.total_cmp(a));
-        let nearest = scores.iter().take(3).sum::<f32>() / scores.len().clamp(1, 3) as f32;
+        let nearest = recognition::top3_mean(
+            rows.iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .filter_map(|(_, r)| inference::cosine(&row.vector, &r.vector)),
+        )
+        .unwrap_or(0.0);
         if nearest < 0.2 {
             outliers.insert(i);
         }
@@ -284,17 +283,4 @@ pub fn select_references(
         validation: validation.iter().map(|i| rows[*i].id).collect(),
         outliers: outliers.iter().map(|i| rows[*i].id).collect(),
     })
-}
-
-pub fn top_three(scores: impl Iterator<Item = (i64, f32)>) -> BTreeMap<i64, f32> {
-    let mut map: BTreeMap<i64, Vec<f32>> = BTreeMap::new();
-    for (id, score) in scores {
-        let top = map.entry(id).or_default();
-        top.push(score);
-        top.sort_by(|a, b| b.total_cmp(a));
-        top.truncate(3);
-    }
-    map.into_iter()
-        .map(|(id, v)| (id, v.iter().sum::<f32>() / v.len() as f32))
-        .collect()
 }

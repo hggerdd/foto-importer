@@ -628,9 +628,9 @@ fn steps(template: &Path, work: &Path, without_stats: bool) -> anyhow::Result<()
     timed("timeline::load (größte Person)", || {
         foto_importer::core::timeline::load(&c, biggest).map(|_| ())
     })?;
-    timed("person_portraits (alle, mit Merkmalen)", || {
+    timed("person_portraits (alle)", || {
         let ids: Vec<i64> = faces::people(&c)?.iter().map(|p| p.id).collect();
-        faces::person_portraits(&c, EMBEDDER, &ids).map(|_| ())
+        faces::person_portraits(&c, &ids).map(|_| ())
     })?;
     let changed = |c: &Collection| -> anyhow::Result<i64> {
         Ok(c.db.query_row(

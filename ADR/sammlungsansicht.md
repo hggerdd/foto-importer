@@ -34,7 +34,9 @@
   Text, keine Personen, kein Gesichtszustand, keine Regel auf `meta` oder Gesichter). Auf der
   ersten Seite müssen zusätzlich die Foto-IDs mit denen beim Zählen übereinstimmen.
 - **Startansicht:** Die erste Seite ohne Filter wird mit ihren Zählungen und dem Stand als
-  kleine JSON-Datei (`start-<Hash des Pfads>.json`) im lokalen Cache-Ordner abgelegt
+  kleine JSON-Datei (`start-<Hash des Pfads>.json`, über `core::local_cache` mit dessen
+  Formatnummer und Größengrenze; ältere Formate gelten als fehlend und werden neu
+  geschrieben) im lokalen Cache-Ordner abgelegt
   (`Settings::cache_dir`, `%LOCALAPPDATA%\FotoImporter\cache`, nie in der Sammlung) und beim
   Start (und Sammlungswechsel) sofort gezeigt, bevor die Datenbank geöffnet ist, markiert mit
   „wird aktualisiert …“. Die frisch gelesene Seite ersetzt sie immer; ihre Zählungen gelten

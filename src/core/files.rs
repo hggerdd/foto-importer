@@ -454,3 +454,63 @@ pub fn convert_dng(
     }
     copy_one(&generated, output, control)
 }
+
+/// Verhalten von [`write_atomic`] bei vorhandenem Ziel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Ersetzt ein vorhandenes Ziel (eigene Ableitungen: Einstellungen, Caches, Berichte).
+    Replace,
+    /// Lässt ein vorhandenes Ziel unverändert; Fehler `AlreadyExists`.
+    NoClobber,
+}
+
+/// Schreibt `bytes` atomar nach `path`: Zwischendatei (`.tmp…`) im Zielordner, optional
+/// `sync_all`, dann Umbenennen. Legt den Zielordner an. Bei jedem Fehler wird die
+/// Zwischendatei entfernt; ein Leser sieht nie eine halb geschriebene Datei.
+pub fn write_atomic(path: &Path, bytes: &[u8], mode: Mode, sync: bool) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("Ungültiger Ausgabepfad"))?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(bytes)?;
+    if sync {
+        temporary.as_file().sync_all()?;
+    }
+    match mode {
+        Mode::Replace => temporary.persist(path).map(drop),
+        Mode::NoClobber => temporary.persist_noclobber(path).map(drop),
+    }
+    .map_err(|e| e.error)
+}
+
+#[cfg(test)]
+mod atomic_tests {
+    use super::*;
+
+    #[test]
+    fn replace_overwrites_and_leaves_no_temporary_file() {
+        let dir = tempfile::tempdir().expect("Ordner");
+        let path = dir.path().join("neu").join("a.json");
+        write_atomic(&path, b"eins", Mode::Replace, true).expect("schreiben");
+        write_atomic(&path, b"zwei", Mode::Replace, false).expect("ersetzen");
+        assert_eq!(fs::read(&path).expect("lesen"), b"zwei");
+        assert_eq!(
+            fs::read_dir(dir.path().join("neu"))
+                .expect("Ordner")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn no_clobber_keeps_the_existing_file_and_cleans_up() {
+        let dir = tempfile::tempdir().expect("Ordner");
+        let path = dir.path().join("a.jpg");
+        write_atomic(&path, b"alt", Mode::NoClobber, false).expect("anlegen");
+        let error = write_atomic(&path, b"neu", Mode::NoClobber, false).expect_err("vorhanden");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).expect("lesen"), b"alt");
+        assert_eq!(fs::read_dir(dir.path()).expect("Ordner").count(), 1);
+    }
+}

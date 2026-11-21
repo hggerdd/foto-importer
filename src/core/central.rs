@@ -15,6 +15,7 @@ pub use rels::{
     remove_relation_synced, resolve_relation, sync_relations,
 };
 
+use crate::config::{CENTRAL_MAX_REFERENCE_BYTES, CENTRAL_MAX_REFERENCES_PER_PERSON};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, TransactionBehavior, params};
 use std::{
@@ -29,9 +30,6 @@ pub const SCHEMA_VERSION: i64 = 2;
 pub const FIELDS: [&str; 4] = ["name", "gender", "birth_year", "note"];
 const GLOBAL_ID: &str = "global_id";
 const DISTINCT: &str = "global_distinct";
-/// Obergrenzen für zentrale Referenzausschnitte (klein halten, Datenschutz).
-pub const MAX_REFERENCE_BYTES: usize = 128 * 1024;
-pub const MAX_REFERENCES_PER_PERSON: i64 = 64;
 
 /// Ort und Optionen des zentralen Bestands; stammt aus den Einstellungen.
 #[derive(Clone, Debug)]
@@ -326,7 +324,7 @@ impl Central {
         if !self.images {
             bail!("Zentrale Referenzbilder sind nicht aktiviert");
         }
-        if jpeg.is_empty() || jpeg.len() > MAX_REFERENCE_BYTES {
+        if jpeg.is_empty() || jpeg.len() > CENTRAL_MAX_REFERENCE_BYTES {
             bail!("Referenzausschnitt hat eine unzulässige Größe");
         }
         if model_key.trim().is_empty() {
@@ -345,9 +343,9 @@ impl Central {
         }
         let count: i64 =
             tx.query_row("SELECT count(*) FROM refs WHERE gid=?", [gid], |r| r.get(0))?;
-        if count >= MAX_REFERENCES_PER_PERSON {
+        if count >= CENTRAL_MAX_REFERENCES_PER_PERSON {
             bail!(
-                "Je Person sind höchstens {MAX_REFERENCES_PER_PERSON} zentrale Ausschnitte erlaubt"
+                "Je Person sind höchstens {CENTRAL_MAX_REFERENCES_PER_PERSON} zentrale Ausschnitte erlaubt"
             );
         }
         tx.execute(

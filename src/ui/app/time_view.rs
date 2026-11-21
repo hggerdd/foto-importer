@@ -892,7 +892,7 @@ impl PhotoApp {
         if let Some(ord) = hovered {
             let count = density.counts[(ord - density.first) as usize];
             let label = timeline::label(computed.axis, computed.grain, ord);
-            let response = response.clone().on_hover_text(format!(
+            let response = response.on_hover_text(format!(
                 "{label} · {count} geeignete Gesicht{}",
                 if count == 1 { "" } else { "er" }
             ));

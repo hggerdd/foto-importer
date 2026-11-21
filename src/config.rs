@@ -33,11 +33,9 @@ pub const THUMB_CACHE_QUALITY: u8 = 85;
 pub const THUMB_CACHE_TRIM_EVERY: usize = 256;
 /// Ein Treffer frischt die Änderungszeit eines Eintrags höchstens so oft auf.
 pub const THUMB_CACHE_TOUCH: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
-/// Gespeicherte Startansicht der Sammlung (`core::start_view`): größere Dateien werden
-/// ignoriert (48 Fotos sind rund 20 KB).
-pub const START_VIEW_MAX_BYTES: u64 = 1024 * 1024;
-/// Weitere lokale Ableitungen (`core::local_cache`: Personenliste, Personengraph); größere
-/// Dateien werden ignoriert (56 Personen mit Graph sind rund 60 KB).
+/// Lokale Ableitungen (`core::local_cache`: Startansicht, Personenliste, Personengraph);
+/// größere Dateien werden ignoriert (Startansicht mit 48 Fotos rund 20 KB, 56 Personen mit
+/// Graph rund 60 KB).
 pub const LOCAL_CACHE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
 pub const THUMBNAIL_WORKERS: usize = 4;
@@ -52,6 +50,23 @@ pub const THUMBNAIL_STALE_FRAMES: u64 = 2;
 pub const HOVER_PREVIEW_EDGE: u32 = 960;
 /// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
 pub const GROUP_MAX: usize = 28;
+/// Gruppenbildung (`faces::prepare_groups`): Ein Gesicht tritt einer Gruppe nur bei, wenn es
+/// mit allen Mitgliedern mindestens diesen Kosinuswert erreicht (Complete-Link).
+pub const GROUP_JOIN_MIN: f32 = 0.6;
+/// Nachlauf `grouping::merge_small_groups`: Gruppen bis zu dieser Größe gelten als klein und
+/// werden an die ähnlichste größere Gruppe gehängt.
+pub const GROUP_SMALL: usize = 2;
+/// Nötige mittlere Ähnlichkeit fürs Anhängen (je Modell überschreibbar,
+/// `rust.thresholds.<Modell>.group_merge`); kein Paar darf unter `GROUP_MERGE_MIN_PAIR` liegen.
+pub const GROUP_MERGE_MEAN: f32 = 0.5;
+pub const GROUP_MERGE_MIN_PAIR: f32 = 0.3;
+/// So viele Gruppen mit dem ähnlichsten Mittelpunkt werden paarweise geprüft.
+pub const GROUP_MERGE_CANDIDATES: usize = 8;
+/// Mindestgüte eines Gesichts für Merkmale, Referenzen, Abgleich und Gruppen. SQL-Texte nennen
+/// den Wert wörtlich (`quality>=0.5`, `quality<0.5`); ein Test prüft jeden gegen diese Konstante.
+pub const FACE_QUALITY_MIN: f32 = 0.5;
+/// Längere Bildkante für die Nachberechnung kleiner, klar erkannter Gesichter.
+pub const FACE_HIRES_EDGE: u32 = 3200;
 /// So viele Gesichter einer Gruppe fließen in ihren gemeinsamen Namensvorschlag ein.
 /// Gemessen am 2026-11-16 mit `face_save_bench` (synthetisch, 200.000 Gesichter), Seite
 /// „Benennen“ nach dem Speichern: 3 Gesichter 139 ms, 5 Gesichter 153 ms, 8 Gesichter 172 ms.
@@ -121,6 +136,25 @@ pub const PERSON_YEARS: std::ops::RangeInclusive<i32> = 1826..=2200;
 pub const DUPLICATE_PERSON_MIN: f32 = 0.55;
 /// Höchstzahl gleichzeitig gezeigter Rückfragen „Möglicherweise dieselbe Person“.
 pub const DUPLICATE_PERSON_MAX: usize = 20;
+/// Höchstzahl gleichzeitig angezeigter Rückfragen zu Lücken im Stammbaum (`gaps`).
+pub const GAPS_MAX_SUGGESTIONS: usize = 30;
+/// Verwandtschaft (`kinship`): Höchstzahl Generationen je Richtung (aufwärts zum gemeinsamen
+/// Vorfahren und abwärts). Cousins bis zum 7. Grades sind damit auffindbar.
+pub const KINSHIP_MAX_GENERATIONS: u8 = 8;
+/// Höchstzahl Einträge je Gruppe in `Family::relatives_of`; der Rest steht in `more`.
+pub const KINSHIP_MAX_PER_GROUP: usize = 100;
+/// Verschwägerung wird nur über nahe Blutsverwandte berechnet (Summe der Schritte).
+pub const KINSHIP_AFFINITY_MAX_STEPS: u8 = 4;
+/// Zentraler Personenbestand: Obergrenzen für Referenzausschnitte (klein halten, Datenschutz).
+pub const CENTRAL_MAX_REFERENCE_BYTES: usize = 128 * 1024;
+pub const CENTRAL_MAX_REFERENCES_PER_PERSON: i64 = 64;
+/// Fortschritt (`progress`): Messpunkte näher beieinander werden zusammengefasst, damit die
+/// Schätzung ruhig bleibt.
+pub const PROGRESS_SAMPLE_GAP: std::time::Duration = std::time::Duration::from_millis(500);
+/// Messpunkte, bevor eine Restzeit gezeigt wird; vorher „wird geschätzt“.
+pub const PROGRESS_SAMPLES_FOR_ESTIMATE: usize = 4;
+/// Gewicht des neuesten Messpunkts im gleitenden Mittel.
+pub const PROGRESS_SMOOTHING: f64 = 0.3;
 /// Diagnose-Log (`core::diag`): Größe einer Logdatei und Grenze aller Logdateien zusammen;
 /// darüber wird die älteste Datei gelöscht (10 Dateien zu 30 MB).
 pub const DIAG_FILE_BYTES: u64 = 30 * 1024 * 1024;
@@ -364,14 +398,50 @@ impl Settings {
     }
     fn write(&self) -> anyhow::Result<()> {
         let path = Self::path();
-        let parent = path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Einstellungspfad ungültig"))?;
-        std::fs::create_dir_all(parent)?;
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer_pretty(&mut file, self)?;
-        file.as_file().sync_all()?;
-        file.persist(path)?;
+        let bytes = serde_json::to_vec_pretty(self)?;
+        crate::core::files::write_atomic(&path, &bytes, crate::core::files::Mode::Replace, true)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// SQL-Texte nennen die Mindestgüte wörtlich (Vergleich `>=` oder `<` direkt nach
+    /// `quality`); jeder solche Wert in `src/` muss `FACE_QUALITY_MIN` sein.
+    #[test]
+    fn sql_quality_literals_match_the_constant() {
+        let expected = super::FACE_QUALITY_MIN.to_string();
+        let mut found = 0;
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(path) = stack.pop() {
+            if path.is_dir() {
+                for entry in std::fs::read_dir(&path).expect("Ordner") {
+                    stack.push(entry.expect("Eintrag").path());
+                }
+                continue;
+            }
+            if !path.extension().is_some_and(|e| e == "rs" || e == "sql") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("Quelltext");
+            for (at, word) in text.match_indices("quality") {
+                let rest = text[at + word.len()..].trim_start();
+                let Some(rest) = rest.strip_prefix(">=").or_else(|| rest.strip_prefix('<')) else {
+                    continue;
+                };
+                let number: String = rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
+                if number.is_empty() {
+                    continue;
+                }
+                assert_eq!(number, expected, "{} bei Byte {at}", path.display());
+                found += 1;
+            }
+        }
+        // 12 SQL-Stellen und die Doku der Konstante.
+        assert!(found >= 13, "nur {found} Stellen gefunden");
     }
 }

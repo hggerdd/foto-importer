@@ -4,12 +4,7 @@
 //! `PhaseState` that every `Control::progress` call feeds; the UI only reads `Progress`.
 use std::time::{Duration, Instant};
 
-/// Rate samples closer together than this are merged to keep the estimate calm.
-const SAMPLE_GAP: Duration = Duration::from_millis(500);
-/// Samples needed before a remaining time is shown; earlier it is "wird geschätzt".
-const SAMPLES_FOR_ESTIMATE: usize = 4;
-/// Weight of the newest sample in the exponential moving average.
-const SMOOTHING: f64 = 0.3;
+use crate::config::{PROGRESS_SAMPLE_GAP, PROGRESS_SAMPLES_FOR_ESTIMATE, PROGRESS_SMOOTHING};
 
 #[derive(Clone, Debug, Default)]
 pub struct Meter {
@@ -37,12 +32,12 @@ impl Meter {
             return;
         }
         let gap = at.saturating_sub(last_at);
-        if gap < SAMPLE_GAP {
+        if gap < PROGRESS_SAMPLE_GAP {
             return;
         }
         let instant = (done - self.last_done) as f64 / gap.as_secs_f64();
         self.rate = Some(match self.rate {
-            Some(rate) => SMOOTHING * instant + (1.0 - SMOOTHING) * rate,
+            Some(rate) => PROGRESS_SMOOTHING * instant + (1.0 - PROGRESS_SMOOTHING) * rate,
             None => instant,
         });
         self.samples += 1;
@@ -57,7 +52,7 @@ impl Meter {
     pub fn eta(&self, done: usize, total: usize) -> Option<Duration> {
         let rate = self
             .rate()
-            .filter(|r| *r > 0.0 && self.samples >= SAMPLES_FOR_ESTIMATE)?;
+            .filter(|r| *r > 0.0 && self.samples >= PROGRESS_SAMPLES_FOR_ESTIMATE)?;
         (total > done).then(|| Duration::from_secs_f64((total - done) as f64 / rate))
     }
 }
@@ -201,11 +196,15 @@ pub fn group(number: usize) -> String {
     }
     text
 }
+/// Dezimalzahl mit `digits` Nachkommastellen und deutschem Komma („0,62“).
+pub fn decimal(value: impl Into<f64>, digits: usize) -> String {
+    format!("{:.digits$}", value.into()).replace('.', ",")
+}
 pub fn format_rate(rate: f64) -> String {
     if rate >= 10.0 {
         group(rate.round() as usize)
     } else {
-        format!("{rate:.1}").replace('.', ",")
+        decimal(rate, 1)
     }
 }
 /// Minutes are rounded up so the estimate is never shorter than the shown value.

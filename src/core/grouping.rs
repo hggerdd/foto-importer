@@ -11,14 +11,10 @@ use super::{
     inference,
     jobs::Control,
 };
+use crate::config::{GROUP_MERGE_CANDIDATES, GROUP_MERGE_MEAN, GROUP_MERGE_MIN_PAIR, GROUP_SMALL};
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
-
-pub const SMALL_GROUP: usize = 2;
-const DEFAULT_MEAN: f32 = 0.5;
-const MIN_PAIR: f32 = 0.3;
-const CENTROID_CANDIDATES: usize = 8;
 
 struct Group {
     members: Vec<(i64, i64, Vec<f32>)>,
@@ -46,7 +42,7 @@ fn link(a: &Group, b: &Group) -> Option<f32> {
     for (_, _, x) in &a.members {
         for (_, _, y) in &b.members {
             let score = inference::cosine(x, y)?;
-            if score < MIN_PAIR {
+            if score < GROUP_MERGE_MIN_PAIR {
                 return None;
             }
             sum += score;
@@ -69,7 +65,7 @@ fn threshold(collection: &Collection, key: &str) -> f32 {
         .ok()
         .flatten()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_MEAN)
+        .unwrap_or(GROUP_MERGE_MEAN)
 }
 
 /// Gibt die Zahl der verschwundenen kleinen Gruppen zurück.
@@ -107,7 +103,7 @@ pub fn merge_small_groups(
     }
     let small: Vec<i64> = groups
         .iter()
-        .filter(|(_, g)| g.members.len() <= SMALL_GROUP)
+        .filter(|(_, g)| g.members.len() <= GROUP_SMALL)
         .map(|(id, _)| *id)
         .collect();
     let mut merged = 0;
@@ -125,7 +121,7 @@ pub fn merge_small_groups(
             .filter_map(|(id, g)| Some((inference::cosine(&source.centroid, &g.centroid)?, *id)))
             .collect();
         nearest.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-        nearest.truncate(CENTROID_CANDIDATES);
+        nearest.truncate(GROUP_MERGE_CANDIDATES);
         let best = nearest
             .iter()
             .filter_map(|(_, id)| Some((link(source, &groups[id])?, *id)))

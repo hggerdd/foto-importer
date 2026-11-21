@@ -298,8 +298,12 @@ fn reference_images_are_opt_in_and_wipeable() -> anyhow::Result<()> {
         "Modellschlüssel Pflicht"
     );
     assert!(
-        on.add_reference(&gid, "k", &vec![0; central::MAX_REFERENCE_BYTES + 1])
-            .is_err()
+        on.add_reference(
+            &gid,
+            "k",
+            &vec![0; foto_importer::config::CENTRAL_MAX_REFERENCE_BYTES + 1]
+        )
+        .is_err()
     );
     assert_eq!(on.references(&gid)?.len(), 1);
     assert!(

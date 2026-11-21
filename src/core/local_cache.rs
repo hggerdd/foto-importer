@@ -1,6 +1,6 @@
 //! Kleine JSON-Ableitungen einer Sammlung im lokalen Cache-Ordner des Arbeitsplatzes
-//! (`Settings::cache_dir`, nie in der Sammlung): Personenliste der Zeitreise und
-//! Personengraph. Sie sind reine Beschleunigung: fehlt, verdirbt oder veraltet eine Datei,
+//! (`Settings::cache_dir`, nie in der Sammlung): Startansicht, Personenliste der Zeitreise
+//! und Personengraph. Sie sind reine Beschleunigung: fehlt, verdirbt oder veraltet eine Datei,
 //! wird nur langsamer gelesen. Jede Datei gehört über den Pfad zu genau einer Sammlung und
 //! trägt eine Formatnummer; andere Formate, fremde Sammlungen und zu große Dateien gelten
 //! als fehlend.
@@ -46,17 +46,17 @@ pub fn save<T: Serialize>(
     collection: &str,
     value: &T,
 ) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-    serde_json::to_writer(
-        &mut temp,
-        &Entry {
-            format,
-            collection: collection.to_owned(),
-            value,
-        },
+    let bytes = serde_json::to_vec(&Entry {
+        format,
+        collection: collection.to_owned(),
+        value,
+    })?;
+    files::write_atomic(
+        &file(dir, kind, collection),
+        &bytes,
+        files::Mode::Replace,
+        false,
     )?;
-    temp.persist(file(dir, kind, collection))?;
     Ok(())
 }
 

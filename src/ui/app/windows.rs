@@ -92,7 +92,7 @@ impl PhotoApp {
                             if let Some((person, name, score)) =
                                 self.name_suggestions.get(index).cloned()
                             {
-                                let detail = format!("{score:.2}").replace('.', ",");
+                                let detail = crate::core::progress::decimal(score, 2);
                                 if Self::suggestion_chip(
                                     &mut self.thumbnails,
                                     ui,

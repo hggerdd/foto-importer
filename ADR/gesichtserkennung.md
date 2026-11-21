@@ -24,8 +24,10 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Analyse liest vorher Metadaten mit denselben Regeln.
 - **Präsenz:** Schwelle 0,60 (YuNet) bzw. 0,55 (SCRFD); größere Bilder erhalten zusätzlich
   vier überlappende Ausschnitte. Jeder Treffer bleibt als Vorkommen gespeichert.
-- **Namensmerkmale** entstehen nur ab Qualität 0,5. Klar erkannte, aber kleine Gesichter
-  (Erkennung ab 0,8) werden aus einer 3200-Pixel-Fassung nachgerechnet.
+- **Namensmerkmale** entstehen nur ab Qualität 0,5 (`config::FACE_QUALITY_MIN`; SQL-Texte nennen
+  den Wert wörtlich, ein Test in `config.rs` gleicht jeden mit der Konstante ab). Klar
+  erkannte, aber kleine Gesichter (Erkennung ab 0,8) werden aus einer 3200-Pixel-Fassung
+  nachgerechnet (`config::FACE_HIRES_EDGE`).
 - **Neuanalyse** ordnet Gesichter innerhalb derselben Quelle über die Überdeckung (IoU ab
   0,5) zu. Nicht wiedergefundene bestätigte oder ignorierte Gesichter bleiben als historisch
   (`retained`) erhalten; übrige werden gelöscht. Vor einem Detektorwechsel entsteht eine Sicherung.
@@ -67,7 +69,7 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `set_review_threshold` setzt die
   Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
   Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
-  `suggest` aus Manifest und Sammlung wertet der Abgleich nicht mehr aus.
+  `suggest` aus dem Manifest werden weder ausgewertet noch in die Sammlung geschrieben.
 - Jede Änderung an Bestätigungen erhöht `generation` (und setzt den Foto-Cursor des
   vollständigen Laufs zurück). Ein Lauf schreibt nur, solange die Generation die vom Beginn
   ist, und schließt nur dann ab; eine Änderung währenddessen lässt den Auftrag für einen
@@ -120,10 +122,11 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 
 **Gruppen unbenannter Gesichter** (`faces::prepare_groups`, `grouping`)
 
-- Ein Gesicht tritt der ersten Gruppe bei, in der alle Mitglieder Kosinus 0,6 erreichen und
+- Ein Gesicht tritt der ersten Gruppe bei, in der alle Mitglieder Kosinus 0,6 erreichen
+  (`config::GROUP_JOIN_MIN`) und
   kein Mitglied aus demselben Foto stammt; höchstens 28 Mitglieder (`config::GROUP_MAX`).
 - Gruppen mit höchstens zwei Gesichtern werden der ähnlichsten Gruppe angeschlossen
-  (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3).
+  (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3; `config::GROUP_SMALL`, `GROUP_MERGE_*`).
 - Gruppen sind abgeleitet und jederzeit neu erzeugbar; Trigger pflegen die Mitgliedschaft.
   Offene Gesichter werden zu Beginn jedes Referenz- und Abgleichlaufs gruppiert, nicht erst
   an dessen Ende.
