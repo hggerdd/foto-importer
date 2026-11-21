@@ -1,6 +1,6 @@
 //! Kleine JSON-Ableitungen einer Sammlung im lokalen Cache-Ordner des Arbeitsplatzes
-//! (`Settings::cache_dir`, nie in der Sammlung): Personenliste der Zeitreise und
-//! Personengraph. Sie sind reine Beschleunigung: fehlt, verdirbt oder veraltet eine Datei,
+//! (`Settings::cache_dir`, nie in der Sammlung): Startansicht, Personenliste der Zeitreise
+//! und Personengraph. Sie sind reine Beschleunigung: fehlt, verdirbt oder veraltet eine Datei,
 //! wird nur langsamer gelesen. Jede Datei gehört über den Pfad zu genau einer Sammlung und
 //! trägt eine Formatnummer; andere Formate, fremde Sammlungen und zu große Dateien gelten
 //! als fehlend.

@@ -33,11 +33,9 @@ pub const THUMB_CACHE_QUALITY: u8 = 85;
 pub const THUMB_CACHE_TRIM_EVERY: usize = 256;
 /// Ein Treffer frischt die Änderungszeit eines Eintrags höchstens so oft auf.
 pub const THUMB_CACHE_TOUCH: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
-/// Gespeicherte Startansicht der Sammlung (`core::start_view`): größere Dateien werden
-/// ignoriert (48 Fotos sind rund 20 KB).
-pub const START_VIEW_MAX_BYTES: u64 = 1024 * 1024;
-/// Weitere lokale Ableitungen (`core::local_cache`: Personenliste, Personengraph); größere
-/// Dateien werden ignoriert (56 Personen mit Graph sind rund 60 KB).
+/// Lokale Ableitungen (`core::local_cache`: Startansicht, Personenliste, Personengraph);
+/// größere Dateien werden ignoriert (Startansicht mit 48 Fotos rund 20 KB, 56 Personen mit
+/// Graph rund 60 KB).
 pub const LOCAL_CACHE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Höchstzahl paralleler Vorschau-Arbeiter (ADR 0068); weniger bei weniger Kernen.
 pub const THUMBNAIL_WORKERS: usize = 4;

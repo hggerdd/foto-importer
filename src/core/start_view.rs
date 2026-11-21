@@ -13,6 +13,7 @@
 
 use super::{
     collection::{Collection, CollectionStatus},
+    local_cache,
     metadata::{self, Photo, Search},
 };
 use anyhow::Result;
@@ -20,8 +21,9 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Formatnummer der gespeicherten Startansicht; andere Nummern werden ignoriert.
-const FORMAT: u32 = 1;
+/// Art und Formatnummer der Startansicht im lokalen Cache (`core::local_cache`); andere
+/// Nummern und die Dateien vor Format 2 (ohne Hülle von `local_cache`) gelten als fehlend.
+const CACHE: (&str, u32) = ("start", 2);
 
 /// Stand einer Sammlung: Identität (`collection.id`) und Projektionsrevision.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,7 +139,6 @@ impl Known {
 /// Gespeicherte Startansicht einer Sammlung.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
-    pub format: u32,
     /// Sammlungspfad wie in den Einstellungen.
     pub collection: String,
     pub known: Known,
@@ -148,7 +149,6 @@ impl Snapshot {
     /// Nur die Suche ohne Filter auf ihrer ersten Seite ist eine Startansicht.
     pub fn new(collection: &str, known: Known, photos: Vec<Photo>) -> Option<Self> {
         (known.filters == Search::default()).then(|| Self {
-            format: FORMAT,
             collection: collection.to_owned(),
             known,
             photos,
@@ -158,40 +158,26 @@ impl Snapshot {
 
 /// Datei der Startansicht einer Sammlung im Cache-Ordner.
 pub fn file(dir: &Path, collection: &str) -> PathBuf {
-    super::local_cache::file(dir, "start", collection)
+    local_cache::file(dir, CACHE.0, collection)
 }
 
 /// Liest die Startansicht; `None` bei fehlender, fremder, zu großer oder kaputter Datei.
 pub fn load(dir: &Path, collection: &str) -> Option<Snapshot> {
-    let path = file(dir, collection);
-    if path.metadata().ok()?.len() > crate::config::START_VIEW_MAX_BYTES {
-        return None;
-    }
-    let snapshot: Snapshot = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    (snapshot.format == FORMAT
-        && snapshot.collection == collection
-        && snapshot.known.filters == Search::default()
-        && snapshot.photos.len() <= crate::config::PAGE_SIZE)
-        .then_some(snapshot)
+    local_cache::load::<Snapshot>(dir, CACHE.0, CACHE.1, collection).filter(|snapshot| {
+        snapshot.collection == collection
+            && snapshot.known.filters == Search::default()
+            && snapshot.photos.len() <= crate::config::PAGE_SIZE
+    })
 }
 
-/// Schreibt die Startansicht atomar (Zwischendatei, dann Umbenennen).
+/// Schreibt die Startansicht atomar ([`local_cache::save`]).
 pub fn save(dir: &Path, snapshot: &Snapshot) -> Result<()> {
-    let bytes = serde_json::to_vec(snapshot)?;
-    super::files::write_atomic(
-        &file(dir, &snapshot.collection),
-        &bytes,
-        super::files::Mode::Replace,
-        false,
-    )?;
-    Ok(())
+    local_cache::save(dir, CACHE.0, CACHE.1, &snapshot.collection, snapshot)
 }
 
 /// Wie [`save`], Fehler nur ins Diagnose-Log: die Startansicht ist eine Beschleunigung.
 pub fn store(dir: &Path, snapshot: &Snapshot) {
-    if let Err(e) = save(dir, snapshot) {
-        log::warn!(target: "sammlung", "startansicht_speichern fehler={:?}", format!("{e:#}"));
-    }
+    local_cache::store(dir, CACHE.0, CACHE.1, &snapshot.collection, snapshot);
 }
 
 #[cfg(test)]
