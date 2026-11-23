@@ -384,7 +384,7 @@ impl PhotoApp {
                 if let Some(revisions) = &page.revisions {
                     self.time_ui.observe(revisions);
                 }
-                self.face_page = page;
+                self.face_page = *page;
                 // Noch nicht geschriebene Entscheidungen bleiben ausgeblendet (ADR 0068).
                 self.hide_pending_faces();
                 self.face_page_serial += 1;

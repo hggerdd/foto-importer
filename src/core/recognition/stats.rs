@@ -20,6 +20,53 @@ pub struct PersonScores {
     pub rejected: Vec<f32>,
 }
 
+/// Personenscore für `person` je Gesicht aus `faces` (Personenseite „Nicht X“): derselbe Wert,
+/// mit dem die Statistik abgelehnte Gesichter zeigt (gewöhnlicher Personenscore gegen die
+/// Referenzen der Person, das Gesicht selbst zählt nie als eigene Referenz). Gesichter ohne
+/// Vektor des Modells oder eine Person ohne Referenzen fehlen im Ergebnis. Nur lesend; der
+/// Wert einer Person hängt allein von ihren eigenen Referenzen ab, daher genügt ihre Spalte.
+pub fn person_face_scores(
+    collection: &Collection,
+    key: &str,
+    person: i64,
+    faces: &[i64],
+) -> Result<BTreeMap<i64, f32>> {
+    let mut found = BTreeMap::new();
+    if faces.is_empty() {
+        return Ok(found);
+    }
+    let (entries, people) = References::load_entries(collection, key)?;
+    let Some(column) = people.iter().position(|p| p.0 == person) else {
+        return Ok(found);
+    };
+    let own = entries
+        .into_iter()
+        .filter(|entry| entry.1 == column)
+        .map(|(face, _, vector)| (face, 0, vector))
+        .collect();
+    let single = References::from_entries(own, vec![people[column].clone()]);
+    for chunk in faces.chunks(500) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut values: Vec<rusqlite::types::Value> = vec![key.to_string().into()];
+        values.extend(chunk.iter().map(|id| rusqlite::types::Value::from(*id)));
+        let mut statement = collection.db.prepare(&format!(
+            "SELECT face_id,vec FROM face_embeddings WHERE embedder_id=? AND face_id IN ({marks})"
+        ))?;
+        let mut rows = statement.query(rusqlite::params_from_iter(values))?;
+        while let Some(row) = rows.next()? {
+            let face: i64 = row.get(0)?;
+            let Some(bytes) = row.get::<_, Option<Vec<u8>>>(1)? else {
+                continue;
+            };
+            let score = single.scores(&decode(&bytes)?, face)[0];
+            if !score.is_nan() {
+                found.insert(face, score);
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// Personenscores aller Personen mit Referenzen für die Statistik. Die Werte offener Gesichter
 /// kommen aus dem Zwischenspeicher des Abgleichs, wenn er für Sammlung und Modell bereitliegt
 /// (wie [`person_candidates`]); sonst rechnet ein Durchgang über die Vektoren.

@@ -237,13 +237,94 @@ fn probable_page(
     }
     Ok(result)
 }
+/// Gesichter mit Ablehnung „nicht `person`“, die die Seite „person-rejected“ zeigt: aktiv
+/// (nicht ignoriert, nicht „Kein Gesicht“, nicht historisch). Ignorierte sind schon entschieden
+/// und zählen auch in der Statistik nicht als Gegenbeispiel.
+const REJECTED_ROWS: &str = "SELECT r.face_id FROM face_rejections r JOIN faces f ON f.id=r.face_id WHERE r.person_id=? AND f.retained=0 AND f.ignored=0 ORDER BY r.face_id";
+/// Zahl der Gesichter der Seite „person-rejected“ für `person` (Umschalter „Nicht X“).
+fn rejected_count(collection: &Collection, person: i64) -> Result<usize> {
+    Ok(collection.db.query_row(
+        "SELECT count(*) FROM face_rejections r JOIN faces f ON f.id=r.face_id WHERE r.person_id=? AND f.retained=0 AND f.ignored=0",
+        [person],
+        |r| r.get(0),
+    )?)
+}
+/// Seite des Reiters „person-rejected“ (Gruppen der Seite und was die Seite dazu zeigt).
+struct RejectedPage {
+    groups: Vec<Vec<Face>>,
+    total_groups: usize,
+    faces_total: usize,
+    confirmed_as: BTreeMap<i64, i64>,
+}
+/// Seite des Reiters „person-rejected“ („Nicht X“): Gesichter mit Ablehnung „nicht `person`“
+/// ([`REJECTED_ROWS`]), nach Personenscore für `person` absteigend (ähnlichste zuerst, dort
+/// stehen versehentliche Ablehnungen), bei Gleichstand nach ID; Gesichter ohne Wert (ohne
+/// Vektor oder die Person ohne Referenzen) zuletzt. Der Wert ist der der Personenstatistik
+/// (`recognition::person_face_scores`). Wie in „probable“ trägt jedes Gesicht für die Seite
+/// `person` und seinen Wert als `score`; bestätigte Gesichter einer anderen Person stehen mit
+/// dieser in `confirmed_as`.
+fn rejected_page(
+    collection: &Collection,
+    embedder: &str,
+    person: i64,
+    page: usize,
+    size: usize,
+) -> Result<RejectedPage> {
+    let ids: Vec<i64> = collection
+        .db
+        .prepare_cached(REJECTED_ROWS)?
+        .query_map([person], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let scores = if embedder.is_empty() {
+        BTreeMap::new()
+    } else {
+        crate::core::recognition::person_face_scores(collection, embedder, person, &ids)?
+    };
+    let mut ordered: Vec<(Option<f32>, i64)> = ids
+        .iter()
+        .map(|id| (scores.get(id).copied(), *id))
+        .collect();
+    ordered.sort_by(|a, b| match (a.0, b.0) {
+        (Some(x), Some(y)) => y.total_cmp(&x).then(a.1.cmp(&b.1)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.1.cmp(&b.1),
+    });
+    let per_page = crate::config::face_groups_per_page(size);
+    let parts: Vec<&[(Option<f32>, i64)]> = ordered.chunks(size).collect();
+    let mut groups = Vec::new();
+    let mut confirmed_as = BTreeMap::new();
+    for part in parts.iter().skip(page * per_page).take(per_page) {
+        let ids: Vec<i64> = part.iter().map(|(_, id)| *id).collect();
+        let mut rows = faces_in_order(collection, &ids)?;
+        for face in &mut rows {
+            if face.assignment.as_deref() == Some("user")
+                && let Some(other) = face.person.filter(|other| *other != person)
+            {
+                confirmed_as.insert(face.id, other);
+            }
+            face.person = Some(person);
+            face.score = scores.get(&face.id).copied().unwrap_or(f32::NAN);
+        }
+        if !rows.is_empty() {
+            groups.push(rows);
+        }
+    }
+    Ok(RejectedPage {
+        groups,
+        total_groups: parts.len(),
+        faces_total: ordered.len(),
+        confirmed_as,
+    })
+}
 /// Seite `page` des Reiters `mode` mit der voreingestellten Gruppengröße.
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     page_filtered(collection, mode, page, None)
 }
 /// Wie [`page`], zusätzlich mit Personenfilter: `person` beschränkt die Reiter „review“,
 /// „confirmed“ und „ignored“ auf Gesichter dieser Person und wählt die Person der Reiter
-/// „probable“ und „person-confirmed“ (ohne Person leer); andere Reiter beachten ihn nicht.
+/// „probable“, „person-confirmed“ und „person-rejected“ (ohne Person leer); andere Reiter
+/// beachten ihn nicht.
 pub fn page_filtered(
     collection: &Collection,
     mode: &str,
@@ -281,6 +362,7 @@ pub fn page_with(
     let mut review_people = BTreeMap::new();
     let mut probable_others = 0;
     let mut better = BTreeMap::new();
+    let mut confirmed_as = BTreeMap::new();
     if matches!(mode, "persons" | "tree" | "graph") {
         // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
         let (relations, family, questions) = tree_state(collection)?;
@@ -303,6 +385,8 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            rejected_total: 0,
+            confirmed_as: BTreeMap::new(),
             group_size: size,
             revisions: None,
         });
@@ -325,6 +409,8 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            rejected_total: 0,
+            confirmed_as: BTreeMap::new(),
             group_size: size,
             revisions: None,
         });
@@ -337,8 +423,15 @@ pub fn page_with(
         (groups, total_groups, faces_total) =
             (probable.groups, probable.total_groups, probable.faces_total);
         (probable_others, better) = (probable.others, probable.better);
-    } else if mode == "person-confirmed" && person.is_none() {
+    } else if matches!(mode, "person-confirmed" | "person-rejected") && person.is_none() {
         total_groups = 0;
+    } else if mode == "person-rejected"
+        && let Some(person) = person
+    {
+        let rejected = rejected_page(collection, &status.embedder, person, page, size)?;
+        (groups, total_groups, faces_total) =
+            (rejected.groups, rejected.total_groups, rejected.faces_total);
+        confirmed_as = rejected.confirmed_as;
     } else if mode == "unknown" && !status.embedder.is_empty() {
         (groups, total_groups) = unknown_page(collection, &status.embedder, page, size)?;
     } else if mode == "review" {
@@ -411,7 +504,18 @@ pub fn page_with(
     let people = people(collection)?;
     let (rows, mut portraits) =
         table_state(collection, mode, &people, &relations, &family, &questions)?;
-    if matches!(mode, "review" | "probable" | "person-confirmed") && !status.embedder.is_empty() {
+    // Der Umschalter der Personenseite nennt die Zahl „Nicht X“ auf jeder ihrer Seiten.
+    let rejected_total = match person {
+        Some(person) if matches!(mode, "probable" | "person-confirmed" | "person-rejected") => {
+            rejected_count(collection, person)?
+        }
+        _ => 0,
+    };
+    if matches!(
+        mode,
+        "review" | "probable" | "person-confirmed" | "person-rejected"
+    ) && !status.embedder.is_empty()
+    {
         for id in groups.iter().filter_map(|group| group[0].person) {
             // Ein fehlendes Bild darf die Seite nicht verhindern.
             if !portraits.contains_key(&id)
@@ -437,6 +541,8 @@ pub fn page_with(
         faces_total,
         probable_others,
         better,
+        rejected_total,
+        confirmed_as,
         group_size: size,
         revisions: None,
     })

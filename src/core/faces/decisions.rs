@@ -156,6 +156,53 @@ pub fn name_group(
     }
     Ok(undo)
 }
+/// Hebt die gespeicherte Ablehnung „nicht `person`“ für diese Gesichter auf (Personenseite
+/// „Nicht X“, Kreuz bzw. „Ablehnung aufheben“). Zuordnung, Ignorieren und Referenzauswahl
+/// bleiben unberührt; das Gesicht ist danach wieder offen für `person` und kann vorgeschlagen
+/// werden. Weil keine Zuordnung wechselt, löst kein Trigger den Abgleich aus: Er wird hier für
+/// die betroffenen Modelle vorgemerkt (wie beim Löschen eines Gesichts). Rücknahme über
+/// [`undo`] stellt die Ablehnung exakt wieder her. Gesichter ohne diese Ablehnung bleiben
+/// unverändert.
+pub fn lift_rejection(collection: &mut Collection, ids: &[i64], person: i64) -> Result<Undo> {
+    collection.writable()?;
+    let max = crate::config::GROUP_SIZE_MAX;
+    if ids.is_empty() || ids.len() > max {
+        bail!("Gruppe muss 1 bis {max} sichtbare Gesichter enthalten");
+    }
+    let tx = collection.db.transaction()?;
+    let before = ids
+        .iter()
+        .map(|id| snapshot(&tx, *id))
+        .collect::<Result<Vec<_>>>()?;
+    for id in ids {
+        let removed = tx.execute(
+            "DELETE FROM face_rejections WHERE face_id=? AND person_id=?",
+            params![id, person],
+        )?;
+        if removed > 0 {
+            mark_rematch(&tx, *id)?;
+        }
+    }
+    let after = ids
+        .iter()
+        .map(|id| snapshot(&tx, *id))
+        .collect::<Result<Vec<_>>>()?;
+    tx.commit()?;
+    Ok(Undo {
+        before,
+        after,
+        created: None,
+    })
+}
+/// Merkt den Abgleich für die Modelle dieses Gesichts vor (neue Generation), wenn sich nur
+/// seine Ablehnungen ändern; Zuordnungswechsel erledigt der Trigger `user_face_maintenance`.
+fn mark_rematch(db: &rusqlite::Connection, id: i64) -> Result<()> {
+    db.execute(
+        "INSERT INTO face_maintenance SELECT embedder_id,0,1 FROM face_embeddings WHERE face_id=? ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",
+        [id],
+    )?;
+    Ok(())
+}
 /// „Kein Gesicht“ (z. B. ein Muster auf der Tapete): eine dauerhafte Nutzerentscheidung
 /// je Gesicht ([`NOT_A_FACE`]). Das Vorkommen bleibt gespeichert, damit eine erneute Analyse
 /// es wiederfindet und die Entscheidung behält; jede Zuordnung und Referenz entfällt. Das
@@ -225,6 +272,8 @@ pub struct DecisionSummary {
     pub ignored: usize,
     /// Als „Kein Gesicht“ markiert (zählt nicht als ignoriert).
     pub not_face: usize,
+    /// Ablehnung aufgehoben, ohne dass das Gesicht bestätigt wurde (Personenseite „Nicht X“).
+    pub lifted: usize,
 }
 impl Undo {
     pub fn summary(&self) -> DecisionSummary {
@@ -238,6 +287,12 @@ impl Undo {
                     || before.ignored)
             {
                 summary.confirmed += 1;
+            } else if before
+                .rejections
+                .iter()
+                .any(|person| !after.rejections.contains(person))
+            {
+                summary.lifted += 1;
             }
             if after
                 .rejections
@@ -258,16 +313,31 @@ impl Undo {
 pub fn undo(collection: &mut Collection, undo: &Undo) -> Result<()> {
     collection.writable()?;
     let tx = collection.db.transaction()?;
+    // Ein Vorschlag des Abgleichs ist keine Nutzeränderung: Hat er seit der Entscheidung eine
+    // maschinelle Zuordnung gesetzt oder entfernt (etwa nach einer aufgehobenen Ablehnung),
+    // hindert das die Rücknahme nicht; sie stellt den Stand davor wieder her.
+    let machine = |s: &FaceSnapshot| s.assignment.as_deref() != Some("user");
+    let mut rematch = Vec::new();
     for expected in &undo.after {
         let current = snapshot(&tx, expected.id)?;
-        if current.person != expected.person
-            || current.assignment != expected.assignment
+        let assignment_changed =
+            current.person != expected.person || current.assignment != expected.assignment;
+        if (assignment_changed && !(machine(&current) && machine(expected)))
             || current.ignored_value() != expected.ignored_value()
             || current.rejections != expected.rejections
             || current.pins != expected.pins
         {
             bail!("Spätere Nutzeränderung verhindert Rücknahme");
         }
+        if let Some(before) = undo.before.iter().find(|b| b.id == expected.id)
+            && before.rejections != current.rejections
+        {
+            rematch.push(expected.id);
+        }
+    }
+    // Nur geänderte Ablehnungen lösen keinen Trigger aus; der Abgleich beachtet sie neu.
+    for id in rematch {
+        mark_rematch(&tx, id)?;
     }
     for before in &undo.before {
         tx.execute(
@@ -330,7 +400,7 @@ pub fn delete_face(collection: &mut Collection, photo: i64, id: i64) -> Result<(
         bail!("Gesicht gehört nicht mehr zum ausgewählten Foto");
     }
     tx.execute("INSERT OR IGNORE INTO face_reference_dirty SELECT e.embedder_id,f.person_id FROM face_embeddings e JOIN faces f ON f.id=e.face_id WHERE f.id=? AND f.person_id IS NOT NULL",[id])?;
-    tx.execute("INSERT INTO face_maintenance SELECT embedder_id,0,1 FROM face_embeddings WHERE face_id=? ON CONFLICT(embedder_id) DO UPDATE SET after_photo=0,generation=generation+1",[id])?;
+    mark_rematch(&tx, id)?;
     delete_face_rows(&tx, id)?;
     tx.commit()?;
     Ok(())

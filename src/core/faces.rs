@@ -26,7 +26,8 @@ pub use analysis::{analyze, analyze_scoped, decode, encode, prepare_groups};
 mod decisions;
 use decisions::delete_face_rows;
 pub use decisions::{
-    DecisionSummary, FaceSnapshot, Undo, delete_face, mark_not_face, name_group, undo,
+    DecisionSummary, FaceSnapshot, Undo, delete_face, lift_rejection, mark_not_face, name_group,
+    undo,
 };
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -125,6 +126,12 @@ pub struct FacePage {
     /// Reiter „probable“: beste andere Person (ID, Personenscore) je Gesicht der Seite aus dem
     /// zweiten Abschnitt. Gruppen mischen die Abschnitte nie.
     pub better: BTreeMap<i64, (i64, f32)>,
+    /// Gesichter mit Ablehnung „nicht X“ der gewählten Person (Umschalter „Nicht X“), gezählt
+    /// auf den Seiten „probable“, „person-confirmed“ und „person-rejected“; sonst 0.
+    pub rejected_total: usize,
+    /// Reiter „person-rejected“: Gesichter der Seite, die einer anderen Person bestätigt
+    /// gehören (Gesichts-ID → Person); die Seite selbst trägt X als Person jedes Gesichts.
+    pub confirmed_as: BTreeMap<i64, i64>,
     /// Anzeigegröße, mit der die Seite geschnitten wurde (`config::group_size`); bestimmt mit
     /// `config::face_groups_per_page` die Seitenzahl. 0 nur vor dem ersten Lesen.
     pub group_size: usize,

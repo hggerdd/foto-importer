@@ -181,7 +181,7 @@ enum Outcome {
     Counts(u64, Option<Stamp>, Counts, Search, Option<Vec<i64>>),
     /// Ordnerübersicht eines Lesens; ein Fehler wird mitgeliefert, damit er dem Lesen zuzuordnen ist.
     Folders(u64, std::result::Result<Vec<(String, usize)>, String>),
-    Faces(u64, usize, FacePage),
+    Faces(u64, usize, Box<FacePage>),
     Detail(u64, String, Vec<Face>, bool),
     Done(String),
     Imported(files::ImportReport),
@@ -352,7 +352,8 @@ pub struct PhotoApp {
     done_mode: &'static str,
     /// Ansicht der gewählten Person unter „Personen“.
     person_mode: PersonMode,
-    /// Seite der Ansicht „Gesichter“ unter „Personen“: `probable` oder `person-confirmed`.
+    /// Seite der Ansicht „Gesichter“ unter „Personen“: `probable`, `person-confirmed` oder
+    /// `person-rejected`.
     person_face_mode: &'static str,
     face_index: usize,
     /// Personenfilter im Reiter „Vorschläge prüfen“.
@@ -1056,7 +1057,7 @@ impl PhotoApp {
     fn page_person(&self) -> Option<i64> {
         match self.page_mode() {
             "review" => self.review_person,
-            "probable" | "person-confirmed" => self.relation_from,
+            "probable" | "person-confirmed" | "person-rejected" => self.relation_from,
             _ => None,
         }
     }
@@ -1104,7 +1105,8 @@ impl PhotoApp {
         self.reset_face_page();
         self.refresh_faces();
     }
-    /// Wählt die Seite der Gesichterseite einer Person (`probable` oder `person-confirmed`).
+    /// Wählt die Seite der Gesichterseite einer Person (`probable`, `person-confirmed` oder
+    /// `person-rejected`).
     fn set_person_face_mode(&mut self, mode: &'static str) {
         self.person_face_mode = mode;
         self.reset_face_page();
@@ -1301,7 +1303,7 @@ impl PhotoApp {
                 }
                 // Derselbe Lesestand wie die Seite (gleiche Lesetransaktion).
                 snapshot.revisions = crate::core::revision::read(&c.db)?;
-                Ok(Outcome::Faces(revision, index, snapshot))
+                Ok(Outcome::Faces(revision, index, Box::new(snapshot)))
             },
         );
     }

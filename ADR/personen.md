@@ -103,8 +103,8 @@
     `config::PERSON_YEARS` und fehlende Daten zählen als „ohne Datum“.
 - **Gesichter einer Person** (`person_faces_view`, „Gesichter prüfen“ unter dem Namen in den
   Personendetails oder der Umschalter): oben eine Personenauswahl (gilt wie die Tabellenwahl
-  für alle Ansichten), darunter „Wahrscheinlich X · N | Bestätigt · N“. Beide Seiten nutzen
-  die Gruppenkarten, die gewählte Gruppengröße samt Seitengröße (siehe
+  für alle Ansichten), darunter „Wahrscheinlich X · N | Bestätigt · N | Nicht X · N“. Alle
+  Seiten nutzen die Gruppenkarten, die gewählte Gruppengröße samt Seitengröße (siehe
   [Gesichter benennen](gesichter-benennen.md)), Rücknahme, sofortiges Ausblenden und den Leser
   der Ansicht „Gesichter“ (`faces::page_with`, Revision `face_revision`).
   - **Wahrscheinlich X** (Modus `probable`, `recognition::person_candidates`, siehe
@@ -121,6 +121,23 @@
     abwählen, dann „N abgewählte sind nicht X“: nur diese erhalten die Ablehnung und werden
     unbenannt (unter „Benennen“); die übrigen bleiben samt Referenzauswahl unberührt.
     „Keines ist X“ gilt für die ganze Karte.
+  - **Nicht X** (Modus `person-rejected`): zum Prüfen versehentlicher Ablehnungen alle
+    Gesichter mit Ablehnung „nicht X“ (`face_rejections`), ohne ignorierte, „Kein Gesicht“ und
+    historische (sie sind entschieden und zählen auch in der Statistik nicht). Nach
+    Personenscore für X absteigend, ähnlichste zuerst; Wert wie die rote Hälfte der Statistik
+    (`recognition::person_face_scores`: Referenzen von X, das Gesicht nie eigene Referenz);
+    Gesichter ohne Merkmale oder X ohne Referenzen zuletzt, Gleichstand nach ID. Die Zahl im
+    Umschalter (`FacePage::rejected_total`) lesen alle drei Seiten mit. Gehört ein Gesicht
+    bestätigt einer anderen Person, steht „bestätigt: Y“ darunter. Haken (Doppelklick) und
+    „Alle N sind X“ / „N sind X“: Ablehnung aufheben und als X bestätigen (`user`, derselbe
+    Weg wie „Bestätigen“, nur die ausgewählten; abgewählte bleiben unberührt abgelehnt).
+    Kreuz (Doppelklick) und „Ablehnung aufheben“ / „Für alle N Ablehnung aufheben“: nur die
+    Ablehnung entfällt (`faces::lift_rejection`), Zuordnung und Referenzauswahl bleiben, das
+    Gesicht ist wieder offen und kann vorgeschlagen werden; der Abgleich wird für sein Modell
+    vorgemerkt. Fragezeichen und „nicht interessiert“ wie überall; keine Tasten. Alles
+    blendet sofort aus und ist mit Strg+Z zurückzunehmen (Ablehnung und vorherige Zuordnung
+    exakt). Jede Änderung erhöht den Datenstand Gesichter, also auch den Fingerabdruck der
+    Statistik.
   - Wechsel von Person, Seite oder Ansicht verwirft die angezeigten Karten bis zum neuen
     Lesen, damit keine Karte einer anderen Seite entschieden wird.
 - **Statistik** (`person_stats`, `stats_view`, nur Anzeige): je Person eine Violine der

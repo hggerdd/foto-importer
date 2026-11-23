@@ -98,6 +98,12 @@ pub(super) fn decision_message(summary: crate::core::faces::DecisionSummary) -> 
             summary.rejected
         ));
     }
+    if summary.lifted > 0 {
+        parts.push(match summary.lifted {
+            1 => "1 Ablehnung aufgehoben".to_string(),
+            n => format!("{n} Ablehnungen aufgehoben"),
+        });
+    }
     if summary.ignored > 0 {
         parts.push(format!("{} ignoriert", summary.ignored));
     }
@@ -127,6 +133,12 @@ mod message_tests {
             ..Default::default()
         });
         assert_eq!(text, "3 als „Kein Gesicht“ markiert");
+        let text = decision_message(DecisionSummary {
+            confirmed: 1,
+            lifted: 2,
+            ..Default::default()
+        });
+        assert_eq!(text, "1 bestätigt · 2 Ablehnungen aufgehoben");
         assert_eq!(
             decision_message(DecisionSummary::default()),
             "Gesichtsentscheidung gespeichert"
