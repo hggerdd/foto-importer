@@ -1068,3 +1068,81 @@ fn person_details_open_the_faces_page_for_that_person() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Klickt an `pos` (ein Frame drücken, einer loslassen) und wartet auf alle Aufträge.
+fn click_and_settle(context: &egui::Context, app: &mut PhotoApp, pos: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame_with(
+        context,
+        app,
+        vec![egui::Event::PointerMoved(pos), press(true)],
+    );
+    frame_with(context, app, vec![press(false), egui::Event::PointerGone]);
+    settle_tasks(app, context);
+}
+
+#[test]
+fn group_size_slider_regroups_every_page_from_the_first_and_is_saved() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let c = Collection::open(root.path(), true)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+    )?;
+    for id in 1..=40_i64 {
+        c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,person_id,assignment,confidence) VALUES(?,?,?,'det',0,0,1,1,1,1,'suggested',0.7)",
+            rusqlite::params![id, id, format!("{id}.jpg")],
+        )?;
+    }
+    drop(c);
+    let (context, mut app) = review_app(root.path());
+    assert_eq!(app.settings.face_group_size, config::GROUP_SIZE_DEFAULT);
+    app.refresh_faces();
+    settle_tasks(&mut app, &context);
+    let lens = |app: &PhotoApp| {
+        app.face_page
+            .groups
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lens(&app), vec![28, 12]);
+    let slider = frame_with(&context, &mut app, Vec::new())
+        .into_iter()
+        .find(|(text, _)| text == "Gruppengröße")
+        .expect("Regler neben der Kachelgröße")
+        .1;
+    // Ganz rechts: größte Gruppen, eine Gruppe mit allen 40 Vorschlägen.
+    app.face_index = 1;
+    click_and_settle(
+        &context,
+        &mut app,
+        egui::pos2(slider.right() - 1.0, slider.center().y),
+    );
+    assert_eq!(app.settings.face_group_size, config::GROUP_SIZE_MAX);
+    assert_eq!(Settings::load().face_group_size, config::GROUP_SIZE_MAX);
+    assert_eq!(app.face_index, 0, "nach dem Wechsel ab Seite 1");
+    assert_eq!(app.face_page.group_size, config::GROUP_SIZE_MAX);
+    assert_eq!(lens(&app), vec![40]);
+    // Ganz links: kleinste Gruppen, acht je Seite.
+    click_and_settle(
+        &context,
+        &mut app,
+        egui::pos2(slider.left() + 1.0, slider.center().y),
+    );
+    assert_eq!(app.settings.face_group_size, config::GROUP_SIZE_MIN);
+    assert_eq!(lens(&app), vec![5; 8]);
+    assert_eq!(app.face_page.total_groups, 8);
+    // Alle 5 sichtbaren Gesichter der obersten Gruppe gehen in eine Entscheidung.
+    drawn_texts(&context, &mut app, Vec::new());
+    press_face_key(&context, &mut app, egui::Key::J, false);
+    assert_eq!(naming_tasks(&app), 1);
+    Ok(())
+}

@@ -165,7 +165,7 @@ impl PhotoApp {
             let pages = self
                 .face_page
                 .total_groups
-                .div_ceil(config::FACE_GROUPS_PER_PAGE);
+                .div_ceil(config::face_groups_per_page(self.face_page.group_size));
             if let Some(target) = theme::pager(ui, self.face_index, pages, !loading) {
                 self.reset_face_page();
                 self.face_index = target;
@@ -189,7 +189,37 @@ impl PhotoApp {
             if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
                 self.save();
             }
+            ui.add_space(12.0);
+            self.group_size_slider(ui);
         });
+    }
+    /// Regler „Gruppengröße“: Gesichter je Gruppe auf allen Seiten mit Gesichtsgruppen. Erst
+    /// beim Loslassen wird gespeichert und ab Seite 1 neu gelesen; Entwürfe hängen an genau
+    /// ihren Gesichtern und gelten nur für eine Gruppe mit denselben Gesichtern weiter.
+    pub(super) fn group_size_slider(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().slider_width = 160.0;
+        self.settings.face_group_size = config::group_size(self.settings.face_group_size);
+        let slider = ui
+            .add(
+                egui::Slider::new(
+                    &mut self.settings.face_group_size,
+                    config::GROUP_SIZE_MIN..=config::GROUP_SIZE_MAX,
+                )
+                .text("Gruppengröße"),
+            )
+            .on_hover_text(
+                "Höchstens so viele Gesichter je Gruppe. Große Gruppen eignen sich für sichere \
+                 Vorschläge; „Benennen“ teilt Ähnlichkeitsgruppen nur, legt sie aber nie \
+                 zusammen.",
+            );
+        let released = slider.drag_stopped() || (slider.changed() && !slider.dragged());
+        // Läuft noch ein Lesen mit anderer Größe, wird ebenfalls neu gelesen.
+        let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
+        if released && (self.settings.face_group_size != self.face_page.group_size || loading) {
+            self.save();
+            self.reset_face_page();
+            self.refresh_faces();
+        }
     }
     /// Die Gesichtsgruppen der Seite als Karten in einem Scrollbereich. Nach einer
     /// Entscheidung rückt die nächste Gruppe an die Position der entschiedenen.
@@ -1782,7 +1812,9 @@ const MAX_TILE: f32 = 220.0;
 fn tile_layout(width: f32, gap: f32, faces: usize, size: f32) -> (usize, f32) {
     let minimum = size.min(96.0);
     let fit = ((width + gap) / (minimum + gap)).floor() as usize;
-    let columns = fit.clamp(1, crate::config::GROUP_MAX).min(faces.max(1));
+    let columns = fit
+        .clamp(1, crate::config::GROUP_SIZE_MAX)
+        .min(faces.max(1));
     let tile = ((width - gap * (columns as f32 - 1.0)) / columns as f32).clamp(42.0, size);
     (columns, tile)
 }

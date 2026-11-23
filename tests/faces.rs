@@ -54,7 +54,7 @@ fn undo_rejects_later_user_decision() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
-fn complete_link_groups_never_exceed_group_max() -> anyhow::Result<()> {
+fn complete_link_groups_never_exceed_cluster_max() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let mut c = Collection::open(temp.path(), true)?;
     seed(&c, 40)?;
@@ -63,7 +63,7 @@ fn complete_link_groups_never_exceed_group_max() -> anyhow::Result<()> {
         c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
             r.get(0)
         })?;
-    assert!(maximum <= foto_importer::config::GROUP_MAX as i64);
+    assert!(maximum <= foto_importer::config::CLUSTER_MAX as i64);
     assert_eq!(
         c.db.query_row("SELECT count(*) FROM face_group_members", [], |r| r
             .get::<_, i64>(0))?,
@@ -334,17 +334,17 @@ fn small_groups_join_similar_groups_but_not_dissimilar_or_same_photo() -> anyhow
         c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
             r.get(0)
         })?;
-    assert!(largest <= foto_importer::config::GROUP_MAX as i64);
+    assert!(largest <= foto_importer::config::CLUSTER_MAX as i64);
     Ok(())
 }
 #[test]
 fn a_group_of_the_maximum_size_can_be_named_and_larger_ones_are_rejected() -> anyhow::Result<()> {
-    use foto_importer::config::GROUP_MAX;
+    use foto_importer::config::GROUP_SIZE_MAX;
     let temp = tempfile::tempdir()?;
     let mut c = Collection::open(temp.path(), true)?;
-    seed(&c, GROUP_MAX as i64 + 1)?;
-    let all: Vec<i64> = (1..=GROUP_MAX as i64).collect();
-    // Regression: die Obergrenze der Anzeige (28) muss auch beim Speichern gelten, nicht nur 14.
+    seed(&c, GROUP_SIZE_MAX as i64 + 1)?;
+    let all: Vec<i64> = (1..=GROUP_SIZE_MAX as i64).collect();
+    // Regression: die größte Anzeigegruppe (Regler bis `GROUP_SIZE_MAX`) muss sich speichern lassen.
     let selected: BTreeSet<i64> = all.iter().copied().collect();
     let undo = faces::name_group(&mut c, &all, &selected, None, "Alex", false)?;
     let named: i64 = c.db.query_row(
@@ -352,15 +352,15 @@ fn a_group_of_the_maximum_size_can_be_named_and_larger_ones_are_rejected() -> an
         [],
         |r| r.get(0),
     )?;
-    assert_eq!(named, GROUP_MAX as i64);
+    assert_eq!(named, GROUP_SIZE_MAX as i64);
     faces::undo(&mut c, &undo)?;
-    let too_many: Vec<i64> = (1..=GROUP_MAX as i64 + 1).collect();
+    let too_many: Vec<i64> = (1..=GROUP_SIZE_MAX as i64 + 1).collect();
     let selected: BTreeSet<i64> = too_many.iter().copied().collect();
     let message = match faces::name_group(&mut c, &too_many, &selected, None, "Alex", false) {
         Ok(_) => anyhow::bail!("zu große Gruppe wurde akzeptiert"),
         Err(error) => error.to_string(),
     };
-    assert!(message.contains(&GROUP_MAX.to_string()), "{message}");
+    assert!(message.contains(&GROUP_SIZE_MAX.to_string()), "{message}");
     Ok(())
 }
 #[test]

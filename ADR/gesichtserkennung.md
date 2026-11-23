@@ -138,7 +138,9 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 
 - Ein Gesicht tritt der ersten Gruppe bei, in der alle Mitglieder Kosinus 0,6 erreichen
   (`config::GROUP_JOIN_MIN`) und
-  kein Mitglied aus demselben Foto stammt; höchstens 28 Mitglieder (`config::GROUP_MAX`).
+  kein Mitglied aus demselben Foto stammt; höchstens 28 Mitglieder (`config::CLUSTER_MAX`).
+  Das ist eine Grenze der Gruppenbildung, nicht der Anzeige: Die Gruppengröße der Oberfläche
+  (`config::GROUP_SIZE_*`, siehe Gesichter benennen) ändert keine gespeicherte Gruppe.
 - Gruppen mit höchstens zwei Gesichtern werden der ähnlichsten Gruppe angeschlossen
   (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3; `config::GROUP_SMALL`, `GROUP_MERGE_*`).
 - Gruppen sind abgeleitet und jederzeit neu erzeugbar; Trigger pflegen die Mitgliedschaft.

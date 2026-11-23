@@ -1256,6 +1256,7 @@ impl PhotoApp {
         let mode = if groups { self.page_mode() } else { "tree" }.to_string();
         let page = self.face_index;
         let person = self.page_person();
+        let size = self.settings.face_group_size;
         self.launch(
             "Personen und Gesichter lesen",
             false,
@@ -1264,7 +1265,7 @@ impl PhotoApp {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
                 c.db.execute_batch("BEGIN")?;
-                let read = |index| faces::page_with(&c, &mode, index, person, &control);
+                let read = |index| faces::page_with(&c, &mode, index, person, size, &control);
                 let mut index = page;
                 let mut snapshot = read(index)?;
                 if groups && index > 0 && snapshot.groups.is_empty() {

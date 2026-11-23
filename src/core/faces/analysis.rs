@@ -434,7 +434,7 @@ pub fn prepare_groups(collection: &mut Collection, key: &str, control: &Control)
             let vector = decode(bytes)?;
             let sig = signature(&vector);
             let candidates=tx.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members<? AND (signature=? OR signature IN (?,?,?,?,?,?,?,?,?,?,?,?)) ORDER BY group_id LIMIT 32")?
-                .query_map(params![key,crate::config::GROUP_MAX as i64,sig,sig^1,sig^2,sig^4,sig^8,sig^16,sig^32,sig^64,sig^128,sig^256,sig^512,sig^1024,sig^2048],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                .query_map(params![key,crate::config::CLUSTER_MAX as i64,sig,sig^1,sig^2,sig^4,sig^8,sig^16,sig^32,sig^64,sig^128,sig^256,sig^512,sig^1024,sig^2048],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let mut matched = None;
             for group in candidates {
                 let members=tx.prepare("SELECT f.photo_id,e.vec FROM face_group_members g JOIN faces f ON f.id=g.face_id JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=g.embedder_id WHERE g.group_id=?")?.query_map([group],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;

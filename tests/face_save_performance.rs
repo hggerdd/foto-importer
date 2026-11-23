@@ -153,9 +153,10 @@ fn legacy_page(
     c: &Collection,
     predicate: &str,
     page: usize,
+    size: usize,
 ) -> anyhow::Result<(usize, Vec<Vec<i64>>)> {
-    let max = foto_importer::config::GROUP_MAX as i64;
-    let per_page = foto_importer::config::FACE_GROUPS_PER_PAGE as i64;
+    let max = size as i64;
+    let per_page = foto_importer::config::face_groups_per_page(size) as i64;
     let total: i64 = c.db.query_row(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT count(*) FROM (SELECT 1 FROM ranked GROUP BY person_id,part)"), [], |r| r.get(0))?;
     let parts=c.db.prepare(&format!("WITH ranked AS (SELECT f.person_id,(row_number() OVER(PARTITION BY f.person_id ORDER BY f.id)-1)/{max} part FROM faces f WHERE f.retained=0 AND {predicate}) SELECT person_id,part FROM ranked GROUP BY person_id,part ORDER BY count(*) DESC,person_id,part LIMIT {per_page} OFFSET ?"))?.query_map([(page as i64)*per_page],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut groups = Vec::new();
@@ -213,27 +214,41 @@ fn pages_totals_and_status_equal_the_window_queries() -> anyhow::Result<()> {
     let (_temp, c) = build()?;
     // „Vorschläge prüfen“ ordnet nach Ähnlichkeit statt nach Größe: dieselben Gruppen wie die
     // Fensterabfrage (ohne Werte bleibt die Aufteilung nach ID), nur in anderer Reihenfolge.
-    let mut expected = Vec::new();
-    let mut found = Vec::new();
-    for page in 0..3 {
-        let (total, groups) = legacy_page(
-            &c,
-            "f.assignment IN ('auto','suggested') AND f.ignored=0",
-            page,
-        )?;
-        let now = faces::page(&c, "review", page)?;
-        assert_eq!(now.total_groups, total, "review Seite {page}");
-        expected.extend(groups);
-        found.extend(
-            now.groups
-                .iter()
-                .map(|g| g.iter().map(|f| f.id).collect::<Vec<i64>>()),
-        );
+    // Jede Anzeigegröße (kleinste, voreingestellte, größte) schneidet wie die Fensterabfrage.
+    let sizes = [
+        foto_importer::config::GROUP_SIZE_MIN,
+        foto_importer::config::GROUP_SIZE_DEFAULT,
+        foto_importer::config::GROUP_SIZE_MAX,
+    ];
+    let read = |mode: &str, page: usize, size: usize| {
+        faces::page_with(&c, mode, page, None, size, &Default::default())
+    };
+    for size in sizes {
+        let mut expected = Vec::new();
+        let mut found = Vec::new();
+        for page in 0..40 {
+            let (total, groups) = legacy_page(
+                &c,
+                "f.assignment IN ('auto','suggested') AND f.ignored=0",
+                page,
+                size,
+            )?;
+            let now = read("review", page, size)?;
+            assert_eq!(now.total_groups, total, "review Größe {size} Seite {page}");
+            assert_eq!(now.group_size, size);
+            expected.extend(groups);
+            found.extend(
+                now.groups
+                    .iter()
+                    .map(|g| g.iter().map(|f| f.id).collect::<Vec<i64>>()),
+            );
+        }
+        expected.sort();
+        found.sort();
+        assert!(!found.is_empty());
+        assert!(found.iter().all(|group| group.len() <= size));
+        assert_eq!(found, expected, "review Größe {size}");
     }
-    expected.sort();
-    found.sort();
-    assert!(!found.is_empty());
-    assert_eq!(found, expected, "review");
     // Die Abfrage aller offenen Vorschläge läuft über den Teilindex, ohne Sortierschritt.
     let plan: Vec<String> =
         c.db.prepare(&format!("EXPLAIN QUERY PLAN {}", faces::REVIEW_ROWS))?
@@ -248,16 +263,18 @@ fn pages_totals_and_status_equal_the_window_queries() -> anyhow::Result<()> {
         ("ignored", "f.ignored=1"),
         ("confirmed", "f.assignment='user' AND f.ignored=0"),
     ] {
-        for page in 0..3 {
-            let (total, expected) = legacy_page(&c, predicate, page)?;
-            let now = faces::page(&c, mode, page)?;
-            assert_eq!(now.total_groups, total, "{mode} Seite {page}");
-            let ids: Vec<Vec<i64>> = now
-                .groups
-                .iter()
-                .map(|g| g.iter().map(|f| f.id).collect())
-                .collect();
-            assert_eq!(ids, expected, "{mode} Seite {page}");
+        for size in sizes {
+            for page in 0..3 {
+                let (total, expected) = legacy_page(&c, predicate, page, size)?;
+                let now = read(mode, page, size)?;
+                assert_eq!(now.total_groups, total, "{mode} Größe {size} Seite {page}");
+                let ids: Vec<Vec<i64>> = now
+                    .groups
+                    .iter()
+                    .map(|g| g.iter().map(|f| f.id).collect())
+                    .collect();
+                assert_eq!(ids, expected, "{mode} Größe {size} Seite {page}");
+            }
         }
     }
     let status = faces::status(&c)?;
