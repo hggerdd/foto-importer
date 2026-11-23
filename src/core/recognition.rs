@@ -29,8 +29,15 @@ pub use candidates::{PersonCandidate, person_candidates, person_candidates_with}
 mod stats;
 pub use stats::{PersonScores, person_face_scores, person_scores, person_scores_with};
 
-fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
+/// Einstellbarer Wert `rust.thresholds.<aktives Modell>.<name>`; ohne Eintrag die Vorgabe des
+/// Modells (`config::model_scale`).
+fn option(
+    collection: &Collection,
+    name: &str,
+    default: impl FnOnce(&crate::config::ModelScale) -> f32,
+) -> Result<f32> {
     let model = faces::setting(collection, faces::EMBEDDER_KEY)?.unwrap_or_default();
+    let default = default(crate::config::model_scale(&model));
     let name = format!(
         "rust.thresholds.{model}.{}",
         name.strip_prefix("rust.").unwrap_or(name)
@@ -46,8 +53,9 @@ fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
     Ok(raw.and_then(|v| v.parse().ok()).unwrap_or(default))
 }
 
-/// Grenzen für maschinelle Namensvorschläge im Abgleich. Vorgaben aus `config`, je Sammlung
-/// und Modell überschreibbar (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`).
+/// Grenzen für maschinelle Namensvorschläge im Abgleich. Vorgaben je Modell aus
+/// `config::model_scale`, je Sammlung und Modell überschreibbar
+/// (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `default()` sind die SFace-Werte.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     /// Mindestwert, ab dem ein Gesicht einen Vorschlag erhält.
@@ -68,11 +76,10 @@ impl Default for Limits {
 }
 impl Limits {
     pub fn load(collection: &Collection) -> Result<Self> {
-        let default = Self::default();
         Ok(Self {
-            review: option(collection, "rust.review", default.review)?,
-            margin: option(collection, "rust.margin", default.margin)?,
-            sure: option(collection, "rust.sure", default.sure)?,
+            review: option(collection, "rust.review", |s| s.review)?,
+            margin: option(collection, "rust.margin", |s| s.margin)?,
+            sure: option(collection, "rust.sure", |s| s.sure)?,
         })
     }
     /// Die Person, die ein Gesicht vorgeschlagen bekommt: die beste, wenn sie die Schwelle
@@ -94,21 +101,17 @@ impl Limits {
         items.first()
     }
 }
-/// Zulässiger Bereich der einstellbaren Vorschlagsschwelle.
-pub const REVIEW_RANGE: (f32, f32) = (0.5, 0.75);
 /// Setzt die Vorschlagsschwelle der Sammlung für das aktive Modell und stößt den Abgleich
-/// neu an. Bestätigte Namen bleiben unberührt.
+/// neu an. Bestätigte Namen bleiben unberührt. Zulässig ist der Bereich des Modells
+/// (`config::ModelScale::review_range`).
 pub fn set_review_threshold(collection: &mut Collection, value: f32) -> Result<()> {
     collection.writable()?;
-    if !value.is_finite() || value < REVIEW_RANGE.0 || value > REVIEW_RANGE.1 {
-        anyhow::bail!(
-            "Die Schwelle muss zwischen {} und {} liegen",
-            REVIEW_RANGE.0,
-            REVIEW_RANGE.1
-        );
-    }
     let key =
         faces::setting(collection, faces::EMBEDDER_KEY)?.context("Zuerst Fotos analysieren")?;
+    let (low, high) = crate::config::model_scale(&key).review_range;
+    if !value.is_finite() || value < low || value > high {
+        anyhow::bail!("Die Schwelle muss zwischen {low} und {high} liegen");
+    }
     let tx = collection.db.transaction()?;
     tx.execute(
         "INSERT OR REPLACE INTO face_settings VALUES(?,?)",
@@ -257,7 +260,7 @@ fn select_references(
                 .max(candidates.iter().filter(|c| c.pinned).count()),
             crate::config::reference_validation,
             42,
-            option(collection, "rust.duplicate", 0.92)?,
+            option(collection, "rust.duplicate", |s| s.duplicate)?,
             control,
         )?;
         let tx = collection.db.transaction()?;

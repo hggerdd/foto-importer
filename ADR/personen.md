@@ -54,8 +54,8 @@
 - **„Möglicherweise dieselbe Person“** (`duplicates`): Paare, deren Referenzgesichter (dieselbe
   Auswahl wie der Abgleich, `recognition::reference_vectors`) einander sehr ähnlich sind.
   Ähnlichkeit = Median über die Referenzen beider Personen von „Mittel der drei besten
-  Kosinuswerte gegen die andere Person“; ab `config::DUPLICATE_PERSON_MIN` (0,55, Messung
-  dort), höchstens `DUPLICATE_PERSON_MAX` Fragen, ähnlichste zuerst. Nie gefragt: Paare mit
+  Kosinuswerte gegen die andere Person“; ab `config::DUPLICATE_PERSON_MIN` (0,55 für SFace, Messung
+  dort; ArcFace 0,50, `config::model_scale`), höchstens `DUPLICATE_PERSON_MAX` Fragen, ähnlichste zuerst. Nie gefragt: Paare mit
   gemeinsam bestätigtem Foto, mit eingetragener Beziehung, abgelehnte und zusammengeführte
   Personen. Berechnung auf einem Worker mit Revision, neu nur bei geändertem Datenstand
   (Personen, Beziehungen, bestätigte Gesichter, Referenzen, Modell), nicht beim Wechsel der
@@ -151,14 +151,14 @@
   - **Alle bewerteten Gesichter:** offene Gesichter (vom Abgleich verglichen, nicht vom Nutzer
     benannt, auch Vorschläge), deren beste zulässige Person X ist (Ausschlüsse wie im
     Abgleich: abgelehnt, im Foto bestätigt, vor dem Geburtsjahr), ab
-    `config::PERSON_CANDIDATE_MIN`; Wert = Score für X.
+    `config::PERSON_CANDIDATE_MIN` (bzw. `ModelScale::candidate_min` des aktiven Modells); Wert = Score für X.
   - **Nur bestätigte:** grün die bestätigten Gesichter von X, gerechnet gegen die Referenzen
     von X ohne das Gesicht selbst und ohne Referenzen vom selben Aufnahmetag
     (`captured_at[..10]`; sonst heben Serienbilder den Wert), rot als zweite Hälfte die
     Gesichter mit Ablehnung „nicht X“ (ohne ignorierte) mit ihrem gewöhnlichen Score für X.
     t = höchster abgelehnter Wert; der Hinweis nennt „über t: 0 Ablehnungen, k von n
     bestätigten“ (in „alle bewerteten“ die offenen über t). Ohne Ablehnung kein t.
-  - Werteachse senkrecht (`config::PERSON_STATS_AXIS` 0,3 bis 1,0, Werte außerhalb am Rand),
+  - Werteachse senkrecht (`ModelScale::stats_axis` des aktiven Modells: SFace 0,3 bis 1,0, ArcFace 0,2 bis 1,0, Werte außerhalb am Rand),
     waagrechte Linien für Vorschlag und „sicher“ der Sammlung (`recognition::Limits`), Median
     als Strich, n je Hälfte unter der Spalte, Kennzahlen im Tooltip und als Tabelle („Als
     Tabelle“). Personen nach Zahl der Gesichter der Sicht absteigend, waagrecht scrollbar;

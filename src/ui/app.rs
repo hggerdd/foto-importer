@@ -204,6 +204,8 @@ enum Outcome {
     PersonAdded(i64),
     RuntimeDownloaded(PathBuf),
     ModelsInstalled(PathBuf, Vec<crate::core::inference::Manifest>),
+    /// Abdeckung des genaueren Modells (Sammlung, Stand) für „Automatik & Werkzeuge“.
+    StrongCoverage(String, crate::core::strong::Coverage),
     DngUpdate(
         String,
         Option<String>,
@@ -443,6 +445,9 @@ pub struct PhotoApp {
     /// „Gesichtserkennung einrichten“ hat die Laufzeit geladen; danach folgen die Modelle.
     setup_chain: bool,
     recognition_tools_open: bool,
+    /// Zuletzt gelesene Abdeckung des genaueren Modells (Sammlung, Zeitpunkt, Stand); gelesen
+    /// nur, solange „Automatik & Werkzeuge“ offen ist.
+    strong_coverage: Option<(String, std::time::Instant, crate::core::strong::Coverage)>,
     auto_analysis_pending: bool,
     /// Nach einem Indexlauf folgt der Metadatenlauf, wenn die Automatik an ist.
     auto_metadata_pending: bool,
@@ -580,6 +585,7 @@ impl PhotoApp {
             path_drafts: BTreeMap::new(),
             setup_chain: false,
             recognition_tools_open: false,
+            strong_coverage: None,
             auto_analysis_pending: false,
             auto_metadata_pending: false,
             live_refresh: (0, std::time::Instant::now()),
@@ -1413,6 +1419,9 @@ impl PhotoApp {
             "metadata" => "Metadaten lesen",
             "verify" => "Dateien auf Fehler prüfen",
             "analyze" => "Fotos lokal analysieren",
+            "strong" => "Gesichter genauer berechnen",
+            "strong_on" => "Genaueres Vergleichsmodell einschalten",
+            "strong_off" => "Zurück zu SFace",
             "knowledge" => "Referenzen und Namensvorschläge aktualisieren",
             "automatic" | "nightly" => "Automatische Sammlungsanalyse",
             "export" => "Referenzausschnitte exportieren",
@@ -1421,8 +1430,8 @@ impl PhotoApp {
             _ => "Sammlung öffnen",
         };
         let kind = match action.as_str() {
-            "analyze" | "automatic" | "nightly" => JobKind::FaceAnalysis,
-            "knowledge" => JobKind::FaceKnowledge,
+            "analyze" | "automatic" | "nightly" | "strong" => JobKind::FaceAnalysis,
+            "knowledge" | "strong_on" | "strong_off" => JobKind::FaceKnowledge,
             _ => JobKind::Mutation,
         };
         self.launch_write(label, kind, move |mut c, control| {
@@ -1478,6 +1487,17 @@ impl PhotoApp {
                     &scope,
                 )?,
                 "knowledge" => faces::apply_knowledge(&mut c, &control)?,
+                "strong" => crate::core::strong::compute(
+                    &mut c,
+                    Path::new(&settings.model_dir),
+                    Path::new(&settings.onnx_runtime),
+                    &settings.exiftool,
+                    &control,
+                )?,
+                "strong_on" => {
+                    crate::core::strong::activate(&mut c, Path::new(&settings.model_dir), &control)?
+                }
+                "strong_off" => crate::core::strong::deactivate(&mut c, &control)?,
                 _ => "Sammlung geöffnet".into(),
             };
             Ok(Outcome::Done(message))

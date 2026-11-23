@@ -190,7 +190,7 @@ impl PhotoApp {
             RichText::new(match view.mode {
                 Mode::Rated => format!(
                     "Offene Gesichter, die das Modell dieser Person als beste zulässige Person zuordnet (ab {}). Wert: Personenscore, das Mittel der bis zu drei besten Kosinuswerte gegen ihre Referenzen.",
-                    decimal(config::PERSON_CANDIDATE_MIN, 2)
+                    decimal(view.data.as_ref().map_or(config::PERSON_CANDIDATE_MIN, |s| s.minimum), 2)
                 ),
                 Mode::Confirmed => "Grün: bestätigte Gesichter, bewertet ohne sich selbst und ohne Referenzen vom selben Aufnahmetag. Rot: Gesichter mit Ablehnung „nicht X“, mit ihrem Wert für X. t ist der höchste abgelehnte Wert.".into(),
             })
@@ -290,12 +290,14 @@ fn table(ui: &mut egui::Ui, stats: &Stats, order: &[usize], mode: Mode) {
 
 /// Abbildung eines Werts auf die Höhe im Diagramm.
 struct Axis {
+    /// Wertebereich des Modells (`Stats::axis`).
+    range: (f32, f32),
     top: f32,
     bottom: f32,
 }
 impl Axis {
     fn y(&self, value: f32) -> f32 {
-        let (low, high) = config::PERSON_STATS_AXIS;
+        let (low, high) = self.range;
         let t = ((value - low) / (high - low)).clamp(0.0, 1.0);
         self.bottom - t * (self.bottom - self.top)
     }
@@ -311,6 +313,7 @@ fn plot(ui: &mut egui::Ui, stats: &Stats, order: &[usize], mode: Mode) {
     let plot_height = height - LABELS - 12.0;
     let top = ui.cursor().top() + 8.0;
     let axis = Axis {
+        range: stats.axis,
         top,
         bottom: top + plot_height,
     };
@@ -325,7 +328,7 @@ fn plot(ui: &mut egui::Ui, stats: &Stats, order: &[usize], mode: Mode) {
         // Achse links, außerhalb des Bildlaufs.
         let (rect, _) = ui.allocate_exact_size(Vec2::new(GUTTER, height), Sense::hover());
         let painter = ui.painter_at(rect);
-        let (low, high) = config::PERSON_STATS_AXIS;
+        let (low, high) = stats.axis;
         let steps = ((high - low) * 10.0).round() as usize;
         for i in 0..=steps {
             let value = low + i as f32 * 0.1;
@@ -347,7 +350,7 @@ fn plot(ui: &mut egui::Ui, stats: &Stats, order: &[usize], mode: Mode) {
                 let painter = ui.painter_at(rect);
                 let visible = ui.clip_rect();
                 // Gitter und Schwellen.
-                let (low, high) = config::PERSON_STATS_AXIS;
+                let (low, high) = stats.axis;
                 let steps = ((high - low) * 10.0).round() as usize;
                 for i in 0..=steps {
                     let y = axis.y(low + i as f32 * 0.1);
@@ -530,7 +533,7 @@ fn violin(
     if distribution.density.is_empty() {
         return;
     }
-    let grid = person_stats::grid();
+    let grid = person_stats::grid_on(axis.range);
     let fill = color.gamma_multiply(0.45);
     let mut mesh = egui::Mesh::default();
     let mut outline_left = Vec::new();

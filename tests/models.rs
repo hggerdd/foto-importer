@@ -49,6 +49,37 @@ fn downloads_and_installs_standard_models() -> anyhow::Result<()> {
     ));
     Ok(())
 }
+/// Genaueres Vergleichsmodell allein aus Landmarks (wie `strong::compute`); die Übereinstimmung
+/// mit InsightFace steht in docs/validierung.md.
+#[test]
+#[ignore = "Requires models/weights/w600k_r50.onnx and ONNX Runtime (FOTO_IMPORTER_ORT); no downloads"]
+fn real_strong_embedder_runs_from_landmarks() -> anyhow::Result<()> {
+    let dll =
+        std::env::var("FOTO_IMPORTER_ORT").unwrap_or_else(|_| "runtime/onnxruntime.dll".into());
+    let mut embedder = foto_importer::core::inference::Embedder::load(
+        Path::new("models"),
+        Path::new(&dll),
+        foto_importer::config::STRONG_EMBEDDER,
+        2,
+    )?;
+    let image = image::RgbImage::from_fn(200, 160, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+    });
+    let landmarks = [
+        [78.0, 61.0],
+        [113.0, 61.0],
+        [96.0, 81.0],
+        [81.0, 102.0],
+        [110.0, 102.0],
+    ];
+    let vector = embedder.embed(&image, landmarks)?;
+    assert_eq!(vector.len(), 512);
+    assert!((vector.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 0.0001);
+    // Dieselbe Eingabe ergibt denselben Vektor.
+    assert_eq!(embedder.embed(&image, landmarks)?, vector);
+    Ok(())
+}
+
 #[test]
 #[ignore = "Requires locally installed optional models and ONNX Runtime; no downloads"]
 fn real_scrfd_and_arcface_execute_on_synthetic_rgb() -> anyhow::Result<()> {

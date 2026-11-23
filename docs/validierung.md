@@ -709,3 +709,65 @@ ist damit nicht belegt; die Werte sind Information, keine Entscheidungsgrundlage
 Die übrigen gefilterten Seitenabfragen (Bestätigt, Ignoriert, Nicht X, Seiten einer Person)
 liefen über `ix_faces_photo` oder den Personenindex in unter 0,06 s (warm). Kalt nach Neustart
 der Platte in der App nicht gemessen.
+
+## Genaueres Vergleichsmodell ArcFace (2026-11-23)
+
+Ziel: zweites Vergleichsmodell (InsightFace buffalo_l `w600k_r50.onnx`, 512-d) neben SFace,
+nur per Knopf berechnet; Schwellen je Modell (`config::ARCFACE_SCALE`). Gewählt wurde ArcFace
+R50 aus buffalo_l, weil die Gewichte schon als Manifest beschrieben waren, als ONNX vorliegen und
+bei 174 MB auf der CPU in rund 85 ms je Gesicht laufen; `glintr100` (größer, rund 250 MB) und
+AdaFace (kein offizielles ONNX) wurden nicht gemessen.
+
+**Vorverarbeitung gegen InsightFace** (nur lesend, 12 Gesichter aus `E:\Bilder`):
+`strong_model_eval … --dump <Ordner>` schreibt das 1600-Pixel-Analysebild, die gespeicherten
+Landmarks und den Rust-Vektor; ein Python-Skript (ONNX Runtime 1.22, OpenCV 4.11) rechnet
+`norm_crop` (Umeyama-Ähnlichkeit auf die ArcFace-Vorlage, `cv2.warpAffine`) und
+`cv2.dnn.blobFromImages(…, 1/127.5, (112,112), 127.5, swapRB=True)` wie `insightface`.
+Ergebnis: Kosinus Rust gegen InsightFace 0,99986 bis 0,99996; mit falscher Kanalfolge (BGR)
+nur 0,94 bis 0,97. Die Testbilder wurden danach gelöscht.
+
+**Stichprobe** (`cargo run --release --example strong_model_eval -- E:\Bilder <Modellordner>
+<onnxruntime.dll> <Vektordatei außerhalb der Sammlung> --exiftool <exiftool.exe>`; Sammlung nur
+lesend, Vektoren nur in `worktrees/strong-model/tmp`, danach gelöscht): 15 Personen (MAT, LEO,
+CEL, LOU, CHA und ihre häufigsten Verwechslungen EMI, LUC, MAR ×2, ELO, ROM, TOC ×3, FEL), alle
+bestätigten Gesichter ab Qualität 0,5 und alle Gesichter mit einer Ablehnung dieser Personen:
+20.960 Gesichter; 19.928 mit beiden Vektoren (rund 1.000 RAW-Gesichter fehlen, weil der zweite
+Lauf wegen Speichermangels des Rechners beendet wurde). Testmenge 3.669 Gesichter (20 % der
+Aufnahmetage je Person), 877 Ablehnungen.
+
+| Modell, Schwelle / Abstand 0,05 | richtig | falsch | unbekannt über Schwelle | Ablehnung vorgeschlagen |
+|---|---|---|---|---|
+| SFace 0,55 | 81,7 % | 0,71 % | 40,2 % | 7,9 % |
+| SFace 0,60 (Vorschlag) | 78,5 % | 0,49 % | 33,8 % | 5,9 % |
+| SFace 0,65 | 72,1 % | 0,41 % | 23,3 % | 4,4 % |
+| SFace 0,70 (sicher) | 60,1 % | 0,22 % | 9,6 % | 2,6 % |
+| ArcFace 0,55 (Vorschlag) | 84,2 % | 0,63 % | 32,5 % | 4,1 % |
+| ArcFace 0,60 | 76,3 % | 0,46 % | 20,4 % | 3,1 % |
+| ArcFace 0,65 (sicher) | 62,4 % | 0,41 % | 9,7 % | 2,4 % |
+| ArcFace 0,70 | 41,9 % | 0,33 % | 3,7 % | 1,9 % |
+
+Paare von Testgesichtern (jedes siebte Paar, 264.859 gleiche, 697.991 verschiedene Personen):
+SFace ab 0,60 gleiche 21,1 % / verschiedene 0,163 %; ArcFace ab 0,40 55,0 % / 0,155 %, ab 0,60
+11,0 % / 0,015 %. Paare desselben Tages: Median 0,638 / 0,581, 99 % 0,949 / 0,944.
+
+Gewählt (`config::ARCFACE_SCALE`): Vorschlag 0,55, Abstand 0,05, sicher 0,65, Regler 0,45 bis
+0,70, Gruppen 0,40, Anhängen 0,28 / 0,12, Duplikate 0,91, „Wahrscheinlich X“ ab 0,35,
+„Möglicherweise dieselbe Person“ 0,50, Statistikachse 0,2 bis 1,0 (Begründung im ADR
+Gesichtserkennung).
+
+**Rechenzeit** (Release, Ryzen 7 6800U, 8 Kerne, ONNX Runtime 1.22 CPU, 4 Inferenzthreads, 3
+Ladethreads, Fotos auf USB-Platte, teils neben Kompilierläufen): 14.392 Fotos in 2.681 s; JPEG
+rund 0,23 s je Foto, RAW/DNG über ExifTool 0,55 s je Foto, Inferenz 85 ms je Gesicht; 50 bis
+80 % der Zeit wartet die Inferenz auf geladene Fotos. Hochrechnung für die ganze Sammlung (rund
+19.600 Fotos mit Gesichtern, ein Fünftel RAW): 1,5 bis 2 Stunden. GPU: Radeon 680M (integriert,
+2 GB geteilt) vorhanden; DirectML nicht eingebunden (eigene ONNX-Runtime-Ausgabe mit
+`DirectML.dll`, geringer Gewinn, weil das Laden bestimmt), nicht gemessen.
+
+**Regressionen ohne Modelldatei:** `tests/strong_model.rs` (Abbruch und Fortsetzen mit
+Ersatz-Embedder, veraltete Landmarks, Umschalten erhält Bestätigungen, Ablehnungen, Ignorieren,
+„Kein Gesicht“, Pins und Ausschlüsse, Sicherung vor dem Umschalten, Schwellen je Modell),
+`inference::preprocessing_tests` (Ausrichtung, Eingabetensor), `face_models` (Archiv als Strom,
+Manifest), `tests/originals_untouched.rs` (Lauf lässt Originale unverändert). Mit Modell:
+`cargo test --test models real_strong -- --ignored` (`FOTO_IMPORTER_ORT` zeigt auf die DLL).
+Der echte Lauf über die ganze Sammlung und das Umschalten in der App sind nicht gemessen; den
+Lauf startet der Nutzer.

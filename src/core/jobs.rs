@@ -26,6 +26,8 @@ pub enum FacePhase {
     References,
     Matching,
     Groups,
+    /// Gesichter mit dem genaueren Modell berechnen (strong::compute).
+    Precise,
 }
 fn foreground_count() -> Arc<AtomicUsize> {
     static COUNT: std::sync::OnceLock<Arc<AtomicUsize>> = std::sync::OnceLock::new();

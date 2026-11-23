@@ -12,7 +12,7 @@
 //! Nie gefragt werden Paare, die gemeinsam auf einem Foto bestätigt sind, Paare mit einer
 //! eingetragenen Beziehung und abgelehnte Paare.
 use super::{collection::Collection, faces, gaps, recognition};
-use crate::config::{DUPLICATE_PERSON_MAX, DUPLICATE_PERSON_MIN};
+use crate::config::DUPLICATE_PERSON_MAX;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -147,7 +147,8 @@ pub fn load(collection: &Collection) -> Result<Vec<Candidate>> {
         .prepare("SELECT from_person,to_person FROM relations")?
         .query_map([], |r| Ok(pair(r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let candidates = rank(&vectors, DUPLICATE_PERSON_MIN, |a, b| {
+    let minimum = crate::config::model_scale(&key).duplicate_person;
+    let candidates = rank(&vectors, minimum, |a, b| {
         declined.contains(&pair(a, b)) || related.contains(&pair(a, b))
     });
     let mut together = collection.db.prepare(

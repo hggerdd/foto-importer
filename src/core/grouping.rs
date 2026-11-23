@@ -11,7 +11,7 @@ use super::{
     inference,
     jobs::Control,
 };
-use crate::config::{GROUP_MERGE_CANDIDATES, GROUP_MERGE_MEAN, GROUP_MERGE_MIN_PAIR, GROUP_SMALL};
+use crate::config::{GROUP_MERGE_CANDIDATES, GROUP_SMALL, model_scale};
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,7 +33,7 @@ fn centroid(members: &[(i64, i64, Vec<f32>)]) -> Vec<f32> {
 }
 
 /// Mittlere Ähnlichkeit, falls kein Foto doppelt vorkommt und kein Paar zu schwach ist.
-fn link(a: &Group, b: &Group) -> Option<f32> {
+fn link(a: &Group, b: &Group, min_pair: f32) -> Option<f32> {
     let photos: BTreeSet<i64> = a.members.iter().map(|m| m.1).collect();
     if b.members.iter().any(|m| photos.contains(&m.1)) {
         return None;
@@ -42,7 +42,7 @@ fn link(a: &Group, b: &Group) -> Option<f32> {
     for (_, _, x) in &a.members {
         for (_, _, y) in &b.members {
             let score = inference::cosine(x, y)?;
-            if score < GROUP_MERGE_MIN_PAIR {
+            if score < min_pair {
                 return None;
             }
             sum += score;
@@ -65,7 +65,7 @@ fn threshold(collection: &Collection, key: &str) -> f32 {
         .ok()
         .flatten()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(GROUP_MERGE_MEAN)
+        .unwrap_or(model_scale(key).group_merge_mean)
 }
 
 /// Gibt die Zahl der verschwundenen kleinen Gruppen zurück.
@@ -76,6 +76,7 @@ pub fn merge_small_groups(
 ) -> Result<usize> {
     collection.writable()?;
     let minimum = threshold(collection, key);
+    let min_pair = model_scale(key).group_merge_min_pair;
     let mut groups: BTreeMap<i64, Group> = BTreeMap::new();
     {
         let mut statement = collection.db.prepare(
@@ -124,7 +125,7 @@ pub fn merge_small_groups(
         nearest.truncate(GROUP_MERGE_CANDIDATES);
         let best = nearest
             .iter()
-            .filter_map(|(_, id)| Some((link(source, &groups[id])?, *id)))
+            .filter_map(|(_, id)| Some((link(source, &groups[id], min_pair)?, *id)))
             .filter(|(score, _)| *score >= minimum)
             .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
         let Some((_, target_id)) = best else {

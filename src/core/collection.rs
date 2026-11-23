@@ -164,22 +164,7 @@ impl Collection {
         );
     }
     pub fn safe_path(&self, relative: &str) -> Result<PathBuf> {
-        let path = Path::new(relative);
-        if path
-            .components()
-            .any(|p| !matches!(p, std::path::Component::Normal(_)))
-        {
-            bail!("Ungültiger relativer Dateipfad");
-        }
-        let candidate = self.root.join(path);
-        if candidate.symlink_metadata()?.file_type().is_symlink() {
-            bail!("Symbolische Links werden nicht geöffnet");
-        }
-        let resolved = candidate.canonicalize()?;
-        if !resolved.starts_with(&self.root) {
-            bail!("Datei liegt außerhalb der Sammlung");
-        }
-        Ok(resolved)
+        safe_path_in(&self.root, relative)
     }
     /// Ist die Sammlung selbst noch erreichbar? Fehlt die Datenbankdatei (Laufwerk getrennt),
     /// darf keine einzelne Datei als fehlend gelten.
@@ -823,6 +808,27 @@ fn file_id(path: &Path) -> Option<String> {
 
 /// Fehlt die Datei oder ihr Ordner (`NotFound`, unter Windows Fehler 2 und 3)? Andere Fehler
 /// (Zugriff verweigert, Gerät nicht bereit) zählen nicht als fehlend.
+/// Pfad einer Datei der Sammlung unter `root` (kanonischer Sammlungsordner): nur normale
+/// Pfadteile, kein symbolischer Link, nicht außerhalb. Auch für Worker ohne Datenbank.
+pub fn safe_path_in(root: &Path, relative: &str) -> Result<PathBuf> {
+    let path = Path::new(relative);
+    if path
+        .components()
+        .any(|p| !matches!(p, std::path::Component::Normal(_)))
+    {
+        bail!("Ungültiger relativer Dateipfad");
+    }
+    let candidate = root.join(path);
+    if candidate.symlink_metadata()?.file_type().is_symlink() {
+        bail!("Symbolische Links werden nicht geöffnet");
+    }
+    let resolved = candidate.canonicalize()?;
+    if !resolved.starts_with(root) {
+        bail!("Datei liegt außerhalb der Sammlung");
+    }
+    Ok(resolved)
+}
+
 pub fn is_not_found(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause

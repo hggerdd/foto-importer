@@ -12,7 +12,50 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Hash wird beim Laden geprüft. Standard ist YuNet + SFace, wählbar SCRFD + ArcFace
   (Gewichte nur für nicht kommerzielle Forschung lizenziert).
 - Modellschlüssel enthalten ID, Version, Hash und `:rust-ort-v1`. Vektoren verschiedener
-  Schlüssel werden nie gemischt oder umgedeutet.
+  Schlüssel werden nie gemischt oder umgedeutet. `rust.embedder_key` ist das **aktive
+  Vergleichsmodell** (Referenzen, Abgleich, Gruppen, Statistik), `rust.base_embedder_key` das
+  Analysemodell (SFace, schreibt die Analyse).
+- **Skalen je Modell** (`config::model_scale`, `SFACE_SCALE`, `ARCFACE_SCALE`): Jede feste
+  Kosinusgrenze (Vorschlag, Abstand, sicher, Reglerbereich, Gruppenbildung und -anhängen,
+  Duplikatfilter, Untergrenze „Wahrscheinlich X“ und Statistik, Statistikachse, „Möglicherweise
+  dieselbe Person“) kommt aus der Skala des aktiven Modells; `rust.thresholds.<Modell>.*`
+  überschreibt je Sammlung.
+
+**Genaueres Vergleichsmodell** (`core::strong`, ArcFace `arcface_buffalo_l`, InsightFace
+buffalo_l `w600k_r50.onnx`, 512-d; nur nicht kommerziell lizenziert)
+
+- Läuft **nie im Hintergrund**, nur per Knopf „Gesichter genauer berechnen (über Nacht)“ unter
+  „Automatik & Werkzeuge“ (Auftrag der Art Fotoanalyse, Fortschritt und Abbruch in der
+  Fußleiste, Phase `FacePhase::Precise`). Einrichten lädt das Archiv als Strom und speichert nur
+  das Gewicht (`face_models::install_models`); die Oberfläche nennt die Lizenz.
+- Erkennung und Gesichter bleiben unverändert. Je Gesicht mit Qualität ab 0,5 und Landmarks
+  (außer „Kein Gesicht“, auch historische und ignorierte) entsteht aus den **gespeicherten
+  Landmarks** und derselben Analysequelle (`previews::load` 1600 Pixel; für Gesichter, die erst
+  aus der 3200-Pixel-Fassung Merkmale bekamen, diese) ein zusätzlicher Vektor. Ausrichtung:
+  Ähnlichkeitstransformation auf die ArcFace-Vorlage 112×112 (`inference::align`), Eingabe RGB
+  `(x − 127,5) / 127,5`, L2-normiert; gegen die InsightFace-Vorverarbeitung geprüft
+  (Kosinus ≥ 0,9998, siehe Validierung).
+- **Fortsetzbar:** Stand ist der Vektor selbst; ein neuer Lauf rechnet nur Gesichter ohne ihn.
+  Geschrieben wird je 32 Fotos bzw. alle 5 s, bei Abbruch das schon Gerechnete; ein Vektor wird
+  nur gespeichert, wenn das Gesicht noch dieselben Landmarks hat. Je Foto ein `face_jobs`-Eintrag
+  (`embed`, Modellschlüssel, `done`/`error`). Ein nicht lesbares Foto bricht den Lauf nicht ab
+  (Fehler gezählt und geloggt, nicht als fehlend markiert; der nächste Lauf versucht es erneut).
+  Fotos laden `config::STRONG_LOAD_THREADS` Threads, gerechnet wird auf einer Sitzung mit
+  `config::STRONG_THREADS` Threads (CPU, siehe Messung). Während des Laufs hält
+  `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` Windows wach, danach nicht mehr.
+- **Umschalten** nur durch den Nutzer: „Auf ArcFace umschalten“ erst ab
+  `config::STRONG_SWITCH_COVERAGE` (98 %) der aktiven Gesichter mit Vektor; „Zurück zu SFace“
+  jederzeit. Vor dem Umschalten auf ArcFace entsteht eine Sicherung (wie beim Detektorwechsel);
+  dann werden alle Personen mit Bestätigungen für das Modell als geändert markiert und
+  Referenzen, Abgleich und Gruppen neu gebildet (`apply_knowledge`). Bestätigungen,
+  Ablehnungen, Ignorieren, „Kein Gesicht“ hängen am Gesicht und gelten unverändert; Pins und
+  Ausschlüsse sind je Modell gespeichert und werden beim Umschalten in das Zielmodell
+  übernommen (die des bisherigen Modells bleiben). Gesichter ohne
+  ArcFace-Vektor stehen unter ArcFace bei „Ungeeignet“.
+- **Neue Gesichter:** Ist ArcFace aktiv, rechnet die normale Analyse den ArcFace-Vektor gleich
+  mit (auch bei der Nachberechnung kleiner Gesichter); ist es nicht aktiv, erst der nächste
+  ausdrückliche Lauf. Findet eine Neuanalyse ein Gesicht mit neuen Landmarks wieder, werden
+  Vektoren anderer Modelle gelöscht und später neu gerechnet.
 
 **Analyse** (`faces::analyze_scoped`)
 
@@ -73,14 +116,15 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   dem Geburtsjahr, Gesichter unter Qualität 0,5.
 - Ein Gesicht erhält nur dann einen Vorschlag, wenn die beste zulässige Person mindestens
   **0,60** erreicht **und** mindestens **0,05** vor der zweitbesten liegt
-  (`recognition::Limits`, Vorgaben in `config.rs`). Ab **0,70** heißt die Zuordnung `auto`,
+  (`recognition::Limits`, Vorgaben je Modell in `config::model_scale`; ArcFace **0,55** /
+  **0,05**, sicher ab **0,65**, Messung unten). Ab **0,70** heißt die Zuordnung `auto`,
   darunter `suggested`; beide sind Vorschläge und werden erst durch Bestätigung zu `user`.
   Nutzerzuordnungen werden nie überschrieben. Gemeinsames Auftreten gibt keinen Bonus.
 - Je Foto kommt keine Person doppelt vor: Schlagen zwei Gesichter dieselbe Person vor,
   erhält sie das ähnlichere; das andere bleibt unbenannt.
 - Die drei Werte sind je Sammlung und Modell überschreibbar
   (`rust.thresholds.<Modell>.review`, `.margin`, `.sure`). `set_review_threshold` setzt die
-  Schwelle (0,50 bis 0,75) und startet den Abgleich neu; der Regler „Strenge der
+  Schwelle im Bereich des Modells (SFace 0,50 bis 0,75, ArcFace 0,45 bis 0,70) und startet den Abgleich neu; der Regler „Strenge der
   Namensvorschläge“ unter Einstellungen (Erweitert) ruft sie auf. Die früheren Werte `auto` und
   `suggest` aus dem Manifest werden weder ausgewertet noch in die Sammlung geschrieben.
 - Jede Änderung an Bestätigungen erhöht `generation` (und setzt den Foto-Cursor des
@@ -148,15 +192,51 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
 **Gruppen unbenannter Gesichter** (`faces::prepare_groups`, `grouping`)
 
 - Ein Gesicht tritt der ersten Gruppe bei, in der alle Mitglieder Kosinus 0,6 erreichen
-  (`config::GROUP_JOIN_MIN`) und
+  (`config::GROUP_JOIN_MIN`; ArcFace 0,40, `ModelScale::group_join`) und
   kein Mitglied aus demselben Foto stammt; höchstens 28 Mitglieder (`config::CLUSTER_MAX`).
   Das ist eine Grenze der Gruppenbildung, nicht der Anzeige: Die Gruppengröße der Oberfläche
   (`config::GROUP_SIZE_*`, siehe Gesichter benennen) ändert keine gespeicherte Gruppe.
 - Gruppen mit höchstens zwei Gesichtern werden der ähnlichsten Gruppe angeschlossen
-  (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3; `config::GROUP_SMALL`, `GROUP_MERGE_*`).
+  (mittlere Ähnlichkeit ab 0,5, kein Paar unter 0,3; ArcFace 0,28 und 0,12;
+  `config::GROUP_SMALL`, `ModelScale::group_merge_*`).
 - Gruppen sind abgeleitet und jederzeit neu erzeugbar; Trigger pflegen die Mitgliedschaft.
   Offene Gesichter werden zu Beginn jedes Referenz- und Abgleichlaufs gruppiert, nicht erst
   an dessen Ende.
+
+**Messung 2026-11-23: SFace gegen ArcFace** (`examples/strong_model_eval.rs`, nur lesend; eine
+Sammlung, 15 Personen mit Geschwistern und den schwierigsten Fällen MAT, LEO, CEL, LOU, CHA
+sowie ihren häufigsten Verwechslungen, 19.928 Gesichter mit beiden Vektoren, davon 3.669
+Testgesichter und 877 Ablehnungen; Methodik wie die Referenzgrenze unten, Referenzen nach
+`config::reference_limit`). „unbekannt“ (Person-auslassen) ist hier hoch, weil die nächste
+Person meist ein Geschwister ist; die Stichprobe begünstigt SFace, weil viele Bestätigungen aus
+SFace-Vorschlägen entstanden.
+
+| Modell, Schwelle / Abstand | richtig | falsch | unbekannt über Schwelle | Ablehnung vorgeschlagen |
+|---|---|---|---|---|
+| SFace 0,60 / 0,05 (Vorschlag) | 78,5 % | 0,49 % | 33,8 % | 5,9 % |
+| ArcFace 0,55 / 0,05 (Vorschlag) | 84,2 % | 0,63 % | 32,5 % | 4,1 % |
+| SFace 0,70 / 0,05 (sicher) | 60,1 % | 0,22 % | 9,6 % | 2,6 % |
+| ArcFace 0,65 / 0,05 (sicher) | 62,4 % | 0,41 % | 9,7 % | 2,4 % |
+| ArcFace 0,60 / 0,05 | 76,3 % | 0,46 % | 20,4 % | 3,1 % |
+
+Die ArcFace-Schwellen sind so gewählt, dass unbekannte Personen so oft wie bei SFace zugeordnet
+werden; dann erreicht ArcFace bei Vorschlägen 5,7 Punkte mehr richtige und schlägt abgelehnte
+Personen ein Drittel seltener vor (je Person bei Vorschlag: CEL 87 → 95 %, EMI 53 → 65 %, MAR
+72 → 82 %, LOU 81 → 88 %; MAT bleibt schwach, 14 Testgesichter). Einzelpaare trennt ArcFace
+deutlich schärfer: Verschiedene Personen erreichen 0,40 so selten (0,16 %) wie bei SFace 0,60,
+dieselbe Person aber zu 55 % statt 21 %; daher Gruppengrenze 0,40 (Anhängen 0,28 aus demselben
+Vergleich bei 0,5, schwächstes Paar 0,12 geschätzt). Paare desselben Tages liegen bei beiden
+Modellen gleich hoch (99 %: 0,949 / 0,944), Duplikatgrenze 0,91. Untergrenze „Wahrscheinlich
+X“ 0,35, „Möglicherweise dieselbe Person“ 0,50 und Statistikachse ab 0,2 folgen der um rund 0,05
+niedrigeren Skala der Personenscores, nicht gemessen. Vorverarbeitung gegen InsightFace
+(norm_crop + `blobFromImages(swapRB)`, ONNX Runtime Python) an 12 echten Gesichtern: Kosinus
+0,9999 (falsche Kanalfolge BGR: 0,94 bis 0,97). **Rechenzeit** (CPU Ryzen 7 6800U, ONNX Runtime
+1.22, 4 Inferenz- und 3 Ladethreads, Fotos auf USB-Platte): 85 ms Inferenz je Gesicht, 0,23 s je
+JPEG-Foto, 0,55 s je RAW/DNG-Foto (Vorschau über ExifTool); die Laufzeit wird vom Laden
+bestimmt (50 bis 80 % Wartezeit auf Fotos). Die Sammlung (rund 19.600 Fotos mit Gesichtern)
+braucht damit hochgerechnet 1,5 bis 2 Stunden. Eine GPU (Radeon 680M, integriert) wird nicht
+genutzt: DirectML bräuchte eine eigene ONNX-Runtime-Ausgabe samt `DirectML.dll` und hülfe
+kaum, weil das Laden der Fotos den Lauf bestimmt.
 
 **Messung 2026-11-21: Referenzgrenze** (`examples/reference_limit_eval.rs`, nur lesend; eine
 Sammlung, SFace, 17.023 bestätigte Gesichter, 50 Personen). Je Person sind rund 20 % der
@@ -199,10 +279,19 @@ Kein Nachweis gleicher Ergebnisse wie die Python-/OpenCV-Referenz. Die Schwellen
 Zusammenführen kleiner Gruppen sind nicht gemessen. Der Zwischenspeicher des Abgleichs
 verfällt mit dem Programm; der erste Lauf nach dem Start liest alle Vektoren (auf einer
 USB-Festplatte nicht gemessen). Wird die Datenbankdatei bei laufendem Programm durch eine
-andere ersetzt, erkennt er geänderte Vektoren nur an Gesichts-ID und `rowid`.
+andere ersetzt, erkennt er geänderte Vektoren nur an Gesichts-ID und `rowid`. Die ArcFace-Skala
+ist an einer Sammlung und 15 Personen gemessen; das schwächste Anhängepaar (0,12) und die
+Grenzen für „Wahrscheinlich X“, „Möglicherweise dieselbe Person“ und die Statistikachse sind
+abgeleitet, nicht gemessen. Rund 5 % der Stichprobe (RAW-Fotos) fehlten in der Messung, weil der
+Lauf unterbrochen wurde. Ein echter Lauf in der App über die ganze Sammlung ist nicht gemessen.
 
 ## Beim Ändern beachten
 
+Feste Kosinusgrenzen nie direkt vergleichen, sondern aus `config::model_scale(<Modell>)`
+nehmen; ein neues Vergleichsmodell braucht eine eigene, mit `strong_model_eval` gemessene
+Skala. Das genauere Modell läuft nur ausdrücklich (kein automatischer Start, kein
+automatisches Umschalten); jede neue Stelle, die Landmarks oder Analysequelle eines Gesichts
+ändert, muss Vektoren anderer Modelle des Gesichts löschen.
 Ändert sich Referenzgrenze, Kandidatengrenze oder Validierung, `config::REFERENCE_POLICY`
 erhöhen und mit `reference_limit_eval` messen (`--check` prüft, dass die Auswahl im Speicher
 der gespeicherten gleicht). Labels hängen am Gesicht, nicht am Vektor. Präsenz, Merkmalsqualität und Namenszuordnung
