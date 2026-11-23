@@ -331,7 +331,9 @@ impl PhotoApp {
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    self.thumbnails.hover_image(
+                    // Dieselbe Datei und Ausrichtung wie die Kachel (`face.source`, die
+                    // Analysequelle); der normierte Rahmen passt daher direkt auf das Bild.
+                    let image = self.thumbnails.hover_image(
                         ui,
                         PreviewRequest {
                             root: Some(PathBuf::from(&root)),
@@ -344,6 +346,11 @@ impl PhotoApp {
                         &exiftool,
                         size,
                     );
+                    if let Some(frame) =
+                        image.and_then(|image| face_frame(face.bbox, image, HOVER_FRAME_MARGIN))
+                    {
+                        paint_hover_frame(ui.painter(), frame);
+                    }
                 });
             });
     }
@@ -1757,6 +1764,48 @@ mod draft_tests {
 }
 
 const PREVIEW_SIZE: (f32, f32) = (520.0, 390.0);
+/// Abstand des Rahmens um das Gesicht in der Mausvorschau, in Punkten.
+pub(super) const HOVER_FRAME_MARGIN: f32 = 4.0;
+/// Dunkler Außenstrich des Rahmens: hebt die Akzentlinie auf hellen wie dunklen Fotos ab.
+pub(super) const HOVER_FRAME_SHADE: egui::Color32 = egui::Color32::from_rgb(8, 12, 16);
+
+/// Bildschirmrechteck eines Gesichts: `bbox` ist auf das orientierte Analysebild der
+/// Quelldatei normiert (0..1, links, oben, rechts, unten; siehe ADR Gesichtserkennung), `image`
+/// die Fläche, auf der genau dieses Bild unverzerrt gezeichnet ist. `margin` erweitert den
+/// Rahmen nach außen; das Ergebnis wird an die Bildfläche geklemmt. `None` bei ungültigem
+/// oder leerem Rahmen. Gemeinsame Umrechnung für Bilddetails und Mausvorschau.
+pub(super) fn face_frame(bbox: [f32; 4], image: egui::Rect, margin: f32) -> Option<egui::Rect> {
+    if bbox.iter().any(|v| !v.is_finite()) || bbox[2] <= bbox[0] || bbox[3] <= bbox[1] {
+        return None;
+    }
+    let at = |x: f32, y: f32| {
+        egui::pos2(
+            image.left() + x * image.width(),
+            image.top() + y * image.height(),
+        )
+    };
+    let frame = egui::Rect::from_min_max(at(bbox[0], bbox[1]), at(bbox[2], bbox[3]))
+        .expand(margin.max(0.0))
+        .intersect(image);
+    frame.is_positive().then_some(frame)
+}
+
+/// Rahmen um das Gesicht in der Mausvorschau: 2 Punkte Akzentfarbe mit je 1 Punkt dunklem
+/// Strich innen und außen, ganz innerhalb von `frame`. Ohne Namen.
+fn paint_hover_frame(painter: &egui::Painter, frame: egui::Rect) {
+    painter.rect_stroke(
+        frame,
+        2.0,
+        egui::Stroke::new(4.0_f32, HOVER_FRAME_SHADE),
+        egui::StrokeKind::Inside,
+    );
+    painter.rect_stroke(
+        frame.shrink(1.0),
+        1.0,
+        egui::Stroke::new(2.0_f32, theme::ACCENT),
+        egui::StrokeKind::Inside,
+    );
+}
 
 /// Ecke links oben der Vorschau: rechts unterhalb des Zeigers, bei Platzmangel
 /// links bzw. oberhalb, immer innerhalb des Fensters.
@@ -1792,6 +1841,83 @@ mod hover_tests {
             corner.x < 1250.0 && corner.y < 780.0,
             "weicht zum Zeiger hin aus"
         );
+    }
+    #[test]
+    fn face_frame_scales_expands_and_clamps_to_the_image() {
+        let image = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 300.0));
+        let exact = face_frame([0.25, 0.5, 0.5, 0.75], image, 0.0).expect("gültig");
+        assert_eq!(
+            exact,
+            egui::Rect::from_min_max(egui::pos2(200.0, 200.0), egui::pos2(300.0, 275.0))
+        );
+        let margin = face_frame([0.25, 0.5, 0.5, 0.75], image, 4.0).expect("gültig");
+        assert_eq!(
+            margin,
+            egui::Rect::from_min_max(egui::pos2(196.0, 196.0), egui::pos2(304.0, 279.0))
+        );
+        // Am Bildrand wird der Rand abgeschnitten, nie über das Foto hinaus.
+        let edge = face_frame([0.0, 0.9, 0.1, 1.0], image, 4.0).expect("gültig");
+        assert_eq!(edge.min.x, 100.0);
+        assert_eq!(edge.max.y, 350.0);
+        assert_eq!(edge.max.x, 144.0);
+        // Ungültige oder leere Rahmen ergeben keinen Rahmen.
+        assert!(face_frame([0.5, 0.5, 0.5, 0.6], image, 4.0).is_none());
+        assert!(face_frame([f32::NAN, 0.1, 0.2, 0.3], image, 4.0).is_none());
+        assert!(face_frame([1.2, 1.2, 1.5, 1.5], image, 4.0).is_none());
+    }
+    /// Der gespeicherte Rahmen ist auf das orientierte, auf 1600 Pixel verkleinerte Analysebild
+    /// normiert; die Mausvorschau zeigt dasselbe orientierte Bild mit 960 Pixeln, eingepasst in
+    /// die Vorschaufläche. Der umgerechnete Rahmen muss genau auf der Markierung liegen.
+    #[test]
+    fn face_frame_hits_the_face_in_a_rotated_smaller_preview() {
+        use crate::core::previews::orient;
+        use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+        // Rohbild quer (Kamera hochkant gehalten, EXIF-Ausrichtung 6), rote Markierung.
+        let mut raw = RgbaImage::from_pixel(2400, 1800, Rgba([20, 20, 20, 255]));
+        for x in 300..500 {
+            for y in 1200..1400 {
+                raw.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+            }
+        }
+        let raw = DynamicImage::ImageRgba8(raw);
+        let marked = |image: &DynamicImage| {
+            let (w, h) = image.dimensions();
+            let red: Vec<(u32, u32)> = (0..w)
+                .flat_map(|x| (0..h).map(move |y| (x, y)))
+                .filter(|&(x, y)| image.get_pixel(x, y)[0] > 200)
+                .collect();
+            let x0 = red.iter().map(|p| p.0).min().expect("Markierung") as f32;
+            let x1 = red.iter().map(|p| p.0).max().expect("Markierung") as f32 + 1.0;
+            let y0 = red.iter().map(|p| p.1).min().expect("Markierung") as f32;
+            let y1 = red.iter().map(|p| p.1).max().expect("Markierung") as f32 + 1.0;
+            (x0, y0, x1, y1, w as f32, h as f32)
+        };
+        let analysis = orient(raw.clone(), 6).thumbnail(1600, 1600);
+        let (x0, y0, x1, y1, w, h) = marked(&analysis);
+        assert!(h > w, "orientiert hochkant");
+        let bbox = [x0 / w, y0 / h, x1 / w, y1 / h];
+        let preview = orient(raw, 6).thumbnail(
+            crate::config::HOVER_PREVIEW_EDGE,
+            crate::config::HOVER_PREVIEW_EDGE,
+        );
+        let area = egui::Rect::from_min_size(egui::pos2(30.0, 40.0), egui::vec2(520.0, 390.0));
+        let shown = crate::ui::thumbnails::fit(
+            area,
+            egui::vec2(preview.width() as f32, preview.height() as f32),
+        );
+        let frame = face_frame(bbox, shown, 0.0).expect("Rahmen");
+        // Zurück in Pixel der Vorschau: deckt die Markierung bis auf Rundung ab.
+        let scale = preview.width() as f32 / shown.width();
+        let (px0, py0, px1, py1, _, _) = marked(&preview);
+        let to_px = |p: egui::Pos2| ((p.x - shown.left()) * scale, (p.y - shown.top()) * scale);
+        let (fx0, fy0) = to_px(frame.min);
+        let (fx1, fy1) = to_px(frame.max);
+        for (a, b) in [(fx0, px0), (fy0, py0), (fx1, px1), (fy1, py1)] {
+            assert!(
+                (a - b).abs() <= 2.0,
+                "Rahmen {a} weicht von Markierung {b} ab"
+            );
+        }
     }
 }
 

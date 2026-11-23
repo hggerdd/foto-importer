@@ -306,17 +306,20 @@ impl Thumbnails {
         size: egui::Vec2,
     ) -> egui::Response {
         self.image_with(ui, request, exiftool, size, Priority::Tile)
+            .0
     }
     /// Wie [`Self::image`] für das Foto unter der Maus: geht allen wartenden Kacheln vor und
-    /// ersetzt eine noch wartende frühere Mausanfrage.
+    /// ersetzt eine noch wartende frühere Mausanfrage. Liefert zusätzlich die Fläche, auf
+    /// der das Bild tatsächlich gezeichnet wurde (`None`, solange es lädt oder fehlt).
     pub fn hover_image(
         &mut self,
         ui: &mut egui::Ui,
         request: PreviewRequest,
         exiftool: &str,
         size: egui::Vec2,
-    ) -> egui::Response {
+    ) -> Option<egui::Rect> {
         self.image_with(ui, request, exiftool, size, Priority::Hover)
+            .1
     }
     fn image_with(
         &mut self,
@@ -325,7 +328,8 @@ impl Thumbnails {
         exiftool: &str,
         size: egui::Vec2,
         priority: Priority,
-    ) -> egui::Response {
+    ) -> (egui::Response, Option<egui::Rect>) {
+        let mut drawn = None;
         self.tick += 1;
         request.generation = self.generation.load(Ordering::Relaxed);
         let key = cache_key(&request);
@@ -357,10 +361,9 @@ impl Thumbnails {
                 entry.frame = ui.ctx().cumulative_frame_nr();
                 let error = &entry.error;
                 if let Some(texture) = &entry.texture {
-                    let fit = texture.size_vec2();
-                    let scale = (rect.width() / fit.x).min(rect.height() / fit.y);
-                    let dest = egui::Rect::from_center_size(rect.center(), fit * scale);
+                    let dest = fit(rect, texture.size_vec2());
                     response.rect = dest;
+                    drawn = Some(dest);
                     ui.painter().image(
                         texture.id(),
                         dest,
@@ -375,7 +378,7 @@ impl Thumbnails {
                         egui::FontId::proportional(12.0),
                         egui::Color32::GRAY,
                     );
-                    return response.on_hover_text(error.as_str());
+                    return (response.on_hover_text(error.as_str()), None);
                 }
             } else {
                 ui.painter().text(
@@ -388,8 +391,14 @@ impl Thumbnails {
                 self.request(key, request, exiftool, priority);
             }
         }
-        response
+        (response, drawn)
     }
+}
+
+/// Fläche eines Bilds der Größe `image`, unverzerrt und mittig in `rect` eingepasst.
+pub fn fit(rect: egui::Rect, image: egui::Vec2) -> egui::Rect {
+    let scale = (rect.width() / image.x).min(rect.height() / image.y);
+    egui::Rect::from_center_size(rect.center(), image * scale)
 }
 
 #[cfg(test)]

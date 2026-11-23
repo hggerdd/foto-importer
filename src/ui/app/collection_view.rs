@@ -1011,20 +1011,9 @@ impl PhotoApp {
             .iter()
             .filter(|f| f.source == photo.source)
         {
-            let b = face.bbox;
-            if b.iter().any(|v| !v.is_finite()) || b[2] <= b[0] || b[3] <= b[1] {
+            let Some(frame) = faces_view::face_frame(face.bbox, rect, 0.0) else {
                 continue;
-            }
-            let frame = egui::Rect::from_min_max(
-                egui::pos2(
-                    rect.left() + b[0] * rect.width(),
-                    rect.top() + b[1] * rect.height(),
-                ),
-                egui::pos2(
-                    rect.left() + b[2] * rect.width(),
-                    rect.top() + b[3] * rect.height(),
-                ),
-            );
+            };
             ui.painter().rect_stroke(
                 frame,
                 2,

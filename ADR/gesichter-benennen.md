@@ -157,7 +157,17 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 - **Vorschau unter der Maus:** Das ganze Foto zum Gesicht unter dem Zeiger, abschaltbar,
   höchstens eine Vorschau gleichzeitig. Sie hat Vorrang vor allen Kacheln der Seite und
   nutzt die Kantenlänge des Inspektors (`HOVER_PREVIEW_EDGE` = 960), damit der lokale
-  Vorschau-Cache greift (siehe [Sammlungsansicht](sammlungsansicht.md)).
+  Vorschau-Cache greift (siehe [Sammlungsansicht](sammlungsansicht.md)). Ein Rahmen markiert
+  genau das Gesicht unter dem Zeiger (ohne Namen, keine anderen Gesichter): 2 Punkte
+  Akzentfarbe mit dunklem Strich innen und außen, 4 Punkte Abstand, an den Bildrand geklemmt,
+  erst wenn das Foto gezeichnet ist. Gemeinsame Stelle für alle Gesichterseiten
+  (`hover_photo_preview`). Der gespeicherte Rahmen ist auf das orientierte Analysebild der
+  Quelldatei normiert (0..1); die Vorschau lädt dieselbe Datei (`face.source`) mit derselben
+  Ladefunktion und Ausrichtung wie die Kachel, deshalb gilt der normierte Rahmen unabhängig
+  von der Kantenlänge direkt auf der gezeichneten Bildfläche. Dieselbe Umrechnung
+  (`faces_view::face_frame`) nutzen die Rahmen der Bilddetails. Eine andere Datei des Fotos
+  (etwa JPG statt DNG) wird für die Vorschau nicht verwendet, damit der Rahmen nie auf einem
+  anders beschnittenen Bild liegt.
 - **Kopf der Ansicht:** eine Statuszeile mit höchstens einer Hauptaktion
   (`recognition_view::status_line`, reine Funktion): was gerade läuft, sonst „Einrichten …“
   bei fehlender Laufzeit oder fehlenden Modellen, „N von M Fotos analysiert“ mit „Fotos
@@ -174,7 +184,10 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
 
 Gesichter ohne Namensmerkmale (Qualität unter 0,5) erscheinen nur unter „Ungeeignet“ und am
 Foto; noch nicht gruppierte Gesichter stehen bis zur Gruppierung ebenfalls dort. Die
-Kachelablage wächst unbegrenzt und ist löschbar. Tastatur- und
+Kachelablage wächst unbegrenzt und ist löschbar. Kachel und Mausvorschau übergeben die
+Ausrichtung 1 als Rückfall; fehlt einer Datei die eingebettete Ausrichtung, während die
+Metadaten (z. B. aus XMP) eine andere nennen, sind Kachel, Vorschau und Rahmen anders
+gedreht als das Analysebild und damit falsch (nicht gemessen, vermutlich selten). Tastatur- und
 Screenreader-Bedienung sind nicht langfristig geprüft.
 
 ## Beim Ändern beachten
