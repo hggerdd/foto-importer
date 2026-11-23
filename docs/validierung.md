@@ -771,3 +771,69 @@ Manifest), `tests/originals_untouched.rs` (Lauf lässt Originale unverändert). 
 `cargo test --test models real_strong -- --ignored` (`FOTO_IMPORTER_ORT` zeigt auf die DLL).
 Der echte Lauf über die ganze Sammlung und das Umschalten in der App sind nicht gemessen; den
 Lauf startet der Nutzer.
+## Serienbilder (2026-11-23)
+
+`E:\Bilder` nur lesend (SQLite `mode=ro`, Python-sqlite3 und NumPy mit derselben Regel wie
+`recognition::burst`, nicht die App; Skript nur im Worktree, danach gelöscht): SFace, aktive
+Gesichter ab Qualität 0,5 mit EXIF-Zeit der Analysequelle 43.603 (von rund 64.800), 372 Serien
+(Ordner × Kamera), 39.288 Kandidatenpaare (Abstand ≤ 10 s, IoU ≥ 0,2, verschiedene Fotos).
+Speicher unter 300 MB; Vektoren nur der Paargesichter.
+
+**Paare, beide bestätigt** (Anteil gleiche Person):
+
+| Abstand, IoU | Kosinus ≥ 0 | ≥ 0,4 | ≥ 0,6 |
+|---|---|---|---|
+| 1 s, 0,5 | 99,26 % (4.312) | 99,35 % | 99,36 % (4.189) |
+| 3 s, 0,3 | 98,41 % (16.419) | 98,97 % | 99,15 % (15.279) |
+| 3 s, 0,5 | 98,88 % (11.348) | 99,15 % | 99,19 % (10.835) |
+| 3 s, 0,7 | 99,34 % (5.605) | 99,37 % | 99,38 % (5.463) |
+| 10 s, 0,3 | 97,09 % (28.868) | 98,64 % | 98,92 % (25.953) |
+
+**Ketten** (Komponenten aus Paaren; je bestätigtes Gesicht Person-auslassen: Sagen die übrigen
+Bestätigten der Kette eindeutig dieselbe Person?) und Wirkung auf offene Gesichter (nicht
+bestätigt, ohne Ablehnung der Person und ohne die Person schon bestätigt im Foto):
+
+| Abstand, IoU, Kosinus | richtig / falsch (Präzision) | Kette mit 2 Personen | offene mit Serienvorschlag | davon heute ohne / gleich / anderer Vorschlag |
+|---|---|---|---|---|
+| 1 s, 0,5, 0,6 | 6.347 / 35 (99,45 %) | 30 | 73 | 51 / 22 / 0 |
+| 3 s, 0,5, 0,6 | 11.241 / 55 (99,51 %) | 130 | 143 | 92 / 46 / 5 |
+| 5 s, 0,5, 0,6 | 12.154 / 57 (99,53 %) | 154 | 157 | 102 / 50 / 5 |
+| 10 s, 0,5, 0,6 | 12.778 / 60 (99,53 %) | 242 | 177 | 116 / 56 / 5 |
+| **3 s, 0,3, 0,6 (gewählt)** | 14.258 / 68 (99,53 %) | 182 | 198 | 134 / 58 / 6 |
+| 3 s, 0,4, 0,6 | 12.943 / 62 (99,52 %) | 157 | 168 | 113 / 50 / 5 |
+| 3 s, 0,7, 0,6 | 6.750 / 45 (99,34 %) | 31 | 66 | 49 / 14 / 3 |
+| 3 s, 0,5, 0,4 | 11.663 / 69 (99,41 %) | 136 | 232 | 171 / 56 / 5 |
+| 3 s, 0,4, 0,4 | 13.497 / 90 (99,34 %) | 181 | 286 | 218 / 63 / 5 |
+
+Gegenseitig beste Zuordnung je Fotopaar oder das Verwerfen von Ketten mit zwei Gesichtern
+desselben Fotos änderten nichts (gleiche Zahlen). Die 88 falschen Paare (3 s, 0,5, 0,6) liegen
+bei Kosinus im Median 0,85 (richtige 0,89) und betreffen fast nur Geschwister (EMI/MAT 49,
+EMI/LEO 8, CHA/ROM 7, LEO/LUC 5); ein höherer Kosinus trennt sie nicht (ab 0,85 noch 44 falsche
+bei 7.265 richtigen). Wahrscheinlich sind es zum Teil Fehlbestätigungen; die Präzision ist also
+eher unterschätzt.
+
+**Modellscore der 198 Serienvorschläge** (Personenscore gegen die gespeicherten Referenzen,
+Ausschlüsse wie im Abgleich): Modell schlägt dieselbe Person sicher vor 48, als Vorschlag 37;
+Person ab 0,60 ohne Abstand 16, 0,50 bis 0,60 51, unter 0,50 41; Modell schlägt eine andere
+Person vor 5 (davon 1 sicher). Rund 110 Gesichter erhielten also nur durch die Serie einen
+Vorschlag.
+
+**Gewählt** (`config::BURST_GAP_SECONDS` 3 s, `BURST_IOU_MIN` 0,3, Kosinus
+`ModelScale::group_join`, SFace 0,6): gleiche Präzision wie die strengeren Varianten, die
+meisten Vorschläge. Serienvorschläge sind `suggested` (nie `auto`); stimmt der Modellvorschlag
+überein, bleibt dessen Art (`auto` ab der sicheren Schwelle). Weicht ein Modellvorschlag ab,
+bleibt das Gesicht offen. Voreinstellung an: Die Präzision (99,5 %) liegt im Bereich der
+Modellvorschläge ab 0,60 (0,49 % falsch, Messung ArcFace oben), und nichts wird bestätigt.
+ArcFace (Gruppengrenze 0,40) ist für Serien nicht gemessen.
+
+**Laufzeit:** Die Serienabfrage (Gesichter mit EXIF, 43.603 Zeilen) dauerte über Python kalt
+7,5 s (USB-Platte), warm 0,29 s; sie läuft in jedem Abgleich auf dem Wartungs-Worker. In der
+App nicht gemessen.
+
+**Regressionen:** `tests/burst.rs` (Kette über Zeit, Ende durch Zeitabstand, Ordner, Kamera,
+IoU und Kosinus; Ablehnung, Person im Foto bestätigt, Geburtsjahr; Widerspruch zum
+Modellvorschlag; nie `user`; Rücknahme und Ausschalten entfernen die Vorschläge; inkrementeller
+gleich vollständigem Abgleich; Seiten „Vorschläge prüfen“ und „Wahrscheinlich X“ mit Serie
+vorn und Kennzeichnung; Zusatztabelle beim Öffnen mit Schreibrecht, lesend ohne sie),
+`faces_view::burst_marks_only_for_the_person_of_the_card`,
+`settings_tests::switching_burst_suggestions_starts_one_write_task`.

@@ -238,6 +238,22 @@ pub const PERSON_STATS_GRID: usize = 141;
 pub const PERSON_STATS_MIN_VIOLIN: usize = 5;
 /// Höchstens so viele Threads rechnen im Abgleich Personenwerte (auf dem Wartungs-Worker).
 pub const MATCH_THREADS: usize = 4;
+/// Serienbilder (`recognition::burst`): Zwei Gesichter derselben Serie (gleicher Ordner und
+/// gleiche Kamera laut Hersteller, Modell und Seriennummer) gelten als verbunden, wenn ihre
+/// Aufnahmezeiten höchstens so viele Sekunden auseinanderliegen, ihre normierten Rahmen sich
+/// mindestens zu `BURST_IOU_MIN` überdecken und ihr Kosinus die Gruppengrenze des Modells
+/// erreicht (`ModelScale::group_join`). Verbindungen bilden Ketten. Gemessen am 2026-11-23
+/// (E:\Bilder nur lesend, SFace, 43.603 Gesichter mit Aufnahmezeit): Ketten mit 3 s, IoU 0,3 und
+/// Kosinus 0,6 ordnen bestätigte Gesichter per Auslassen zu 99,5 % der richtigen Person zu (fast
+/// alle Abweichungen sind Geschwister mit Kosinus um 0,85, also eher Fehlbestätigungen); siehe
+/// docs/validierung.md.
+pub const BURST_GAP_SECONDS: f64 = 3.0;
+/// Mindestüberdeckung (IoU) der normierten Gesichtsrahmen zweier Serienfotos.
+pub const BURST_IOU_MIN: f32 = 0.3;
+/// Voreinstellung der Sammlungsoption „Serienbilder“ (`face_settings` `burst_suggestions`):
+/// an, weil Serienvorschläge nie bestätigen und so präzise sind wie Modellvorschläge ab der
+/// Vorschlagsschwelle.
+pub const BURST_DEFAULT: bool = true;
 /// So lange gilt die Prüfung „Laufzeit und Modellgewichte vorhanden“ der Ansicht „Gesichter“,
 /// bevor sie die Dateien erneut ansieht (sonst nur bei geänderten Einstellungen oder nach
 /// Installation/Download); vorher lief sie in jedem Frame.

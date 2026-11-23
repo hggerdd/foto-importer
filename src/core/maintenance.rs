@@ -202,6 +202,7 @@ const BIOMETRIC_TABLES: &[&str] = &[
     "training_set",
     "training_exclusions",
     "face_review",
+    "face_burst",
     "relations",
     "person_attrs",
     "persons",

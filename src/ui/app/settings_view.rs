@@ -440,6 +440,55 @@ impl PhotoApp {
         }
     }
 
+    /// Sammlungsoption „Serienbilder“ (`recognition::set_burst_enabled`); wirkt beim Klick.
+    fn burst_setting(&mut self, ui: &mut egui::Ui) {
+        let ready =
+            !self.settings.collection.is_empty() && !self.face_page.status.embedder.is_empty();
+        let stored = self.face_page.status.burst;
+        let mut value = self
+            .burst_draft
+            .as_ref()
+            .filter(|(root, _)| *root == self.settings.collection)
+            .map_or(stored, |(_, value)| *value);
+        ui.add_space(8.0);
+        let response = ui
+            .add_enabled(
+                ready && !self.busy(),
+                egui::Checkbox::new(
+                    &mut value,
+                    "Serienbilder: Bestätigung auf Fotos derselben Serie vorschlagen",
+                ),
+            )
+            .on_hover_text(
+                "Bestätigst du ein Gesicht, erhalten Gesichter an derselben Stelle in Fotos \
+                 wenige Sekunden davor oder danach (gleiche Kamera, gleicher Ordner) diese Person \
+                 als Vorschlag – nie als Bestätigung. Gilt für diese Sammlung.",
+            );
+        if response.changed() {
+            self.save_burst(value);
+        }
+    }
+
+    /// Speichert die Option „Serienbilder“ auf einem Worker; der Abgleich läuft danach neu.
+    pub(super) fn save_burst(&mut self, value: bool) {
+        self.burst_draft = Some((self.settings.collection.clone(), value));
+        self.launch_write(
+            "Serienbilder-Einstellung speichern",
+            JobKind::Mutation,
+            move |mut collection, _| {
+                crate::core::recognition::set_burst_enabled(&mut collection, value)?;
+                Ok(Outcome::Done(
+                    if value {
+                        "Serienbilder an. Die Namensvorschläge werden neu berechnet."
+                    } else {
+                        "Serienbilder aus. Die Namensvorschläge werden neu berechnet."
+                    }
+                    .into(),
+                ))
+            },
+        );
+    }
+
     /// Speichert die Schwelle auf einem Worker; der Abgleich beginnt danach von vorn.
     pub(super) fn save_review_threshold(&mut self, value: f32) {
         let root = self.settings.collection.clone();
@@ -507,6 +556,7 @@ impl PhotoApp {
                     if self.model_weights_present() { "installiert" } else { "fehlen" },
                 ));
                 self.face_setup_button(ui);
+                self.burst_setting(ui);
                 ui.collapsing("Erweitert", |ui| {
                     for (pick, field, label, enabled) in [
                         (Pick::Runtime, PathSetting::Runtime, "Laufzeit (Programmdatei)", !downloading),

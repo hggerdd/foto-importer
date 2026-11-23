@@ -170,13 +170,24 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   alle Gesichter. Referenzen und Porträts werden je Seite einmal geladen und leben nur einen
   Lesestand lang.
 - **Reihenfolge in „Vorschläge prüfen“:** Je Person werden die Vorschläge nach Ähnlichkeit
-  absteigend in Gruppen der gewählten Größe geschnitten; alle Gruppen sind nach ihrer mittleren
+  absteigend in Gruppen der gewählten Größe geschnitten; Serienvorschläge (siehe
+  Gesichtserkennung, `faces::burst_marks`) bilden je Person eigene Gruppen, die vor allen
+  anderen stehen; innerhalb beider Teile sind die Gruppen nach ihrer mittleren
   Ähnlichkeit absteigend geordnet (Gleichstand: Person, dann Teil). Das Mittel statt des
   besten Werts, damit ein einzelner hoher Treffer keine schwache Gruppe nach vorn zieht.
   Dazu liest die Seite alle offenen Vorschläge mit einer Abfrage über `ix_faces_review`
   (`faces::REVIEW_ROWS`) und ordnet im Speicher. `faces::page_filtered` beschränkt
   „Vorschläge prüfen“, „Bestätigt“ und „Ignoriert“ auf eine Person; „Bestätigt“ und
   „Ignoriert“ bleiben nach Größe geordnet.
+- **Serienbilder:** Gesichter mit Serienvorschlag für die Person der Karte tragen unter der
+  Kachel „↻ Serie“ mit dem Hinweis „Aus Serie mit bestätigtem Foto …, nur ein Vorschlag“; die
+  Karte nennt „↻ Aus Serie mit bestätigtem Foto“ bzw. „↻ N aus Serie …“ (`FacePage::burst`,
+  `burst_summary`). In „Wahrscheinlich X“ stehen die Serienvorschläge für X als eigener
+  Abschnitt vor „am ehesten X“ (Gesichter unter der Untergrenze der Liste fehlen dort, stehen
+  aber in „Vorschläge prüfen“). Bestätigen und Ablehnen wirken wie bei jedem Vorschlag. Der
+  Schalter „Serienbilder: Bestätigung auf Fotos derselben Serie vorschlagen“ steht in den
+  Einstellungen unter „Lokale Gesichtserkennung“ (Sammlungsoption, `Status::burst`; speichert
+  auf einem Worker und merkt den Abgleich vor).
 - **Gesichtskacheln:** Ausschnitte für die Oberfläche liegen als abgeleitete Dateien unter
   `<Sammlung>/.myfotomanager_tiles/` (Schlüssel aus Pfad, Größe, Änderungszeit, Ausschnitt,
   Kantenlänge, Ausrichtung). Sie werden nie ersetzt, vom Indizieren übersprungen und von

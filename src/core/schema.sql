@@ -82,6 +82,8 @@ CREATE TABLE face_maintenance(embedder_id TEXT PRIMARY KEY,
 
 CREATE TABLE face_reference_dirty(embedder_id TEXT,person_id INTEGER,PRIMARY KEY(embedder_id,person_id));
 
+CREATE TABLE face_burst(face_id INTEGER PRIMARY KEY,embedder_id TEXT NOT NULL,person_id INTEGER NOT NULL);
+
 CREATE TABLE metadata_photos(
             file_id INTEGER,photo_id INTEGER PRIMARY KEY,relpath TEXT,name TEXT,ext TEXT,
             size INTEGER,meta_state TEXT,dt_original TEXT,model TEXT,lens TEXT,iso INTEGER,camera TEXT);

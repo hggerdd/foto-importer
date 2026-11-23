@@ -228,6 +228,33 @@ pub const ADDITIVE_INDEXES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Rein additive Tabellen mit abgeleiteten Daten, die der Abgleich jederzeit neu schreibt
+/// (`face_burst`: Serienvorschläge, siehe ADR Gesichtserkennung). Angelegt beim Öffnen mit
+/// Schreibrecht ohne Versionssprung; lesende Abfragen prüfen, ob es sie gibt. Die Definition
+/// ohne `IF NOT EXISTS` steht in `schema.sql` (Test).
+pub const ADDITIVE_TABLES: &[(&str, &str)] = &[(
+    "face_burst",
+    "CREATE TABLE IF NOT EXISTS face_burst(face_id INTEGER PRIMARY KEY,embedder_id TEXT NOT NULL,person_id INTEGER NOT NULL)",
+)];
+
+/// Legt fehlende Zusatztabellen an; wiederholbar. Nur mit Schreibrecht aufrufen.
+pub fn ensure_tables(db: &Connection) -> Result<()> {
+    for (_, ddl) in ADDITIVE_TABLES {
+        db.execute_batch(ddl)?;
+    }
+    Ok(())
+}
+
+/// Gibt es die Tabelle `name` (etwa eine Zusatztabelle in einer nur lesend geöffneten,
+/// älteren Sammlung)?
+pub fn table_exists(db: &Connection, name: &str) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+        [name],
+        |r| r.get(0),
+    )?)
+}
+
 /// Legt fehlende Zusatzindizes an; wiederholbar. Nur mit Schreibrecht aufrufen.
 /// Gibt die Zahl neu angelegter Indizes zurück.
 pub fn ensure_indexes(db: &Connection) -> Result<usize> {

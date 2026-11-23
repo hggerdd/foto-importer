@@ -1,9 +1,27 @@
 //! Abgleich aller offenen Gesichter gegen die Referenzen: inkrementell über den
 //! `MatchCache` oder vollständig Foto für Foto; Schreiben der Vorschläge je Foto.
 use super::*;
+use std::collections::HashMap;
 
 /// Maschinelle Zuordnung: Person, `auto` oder `suggested`, Wert.
 type Proposal = (i64, &'static str, f32);
+/// Eine Änderung des Abgleichs: Zuordnung eines Gesichts (`None` entfernt die maschinelle)
+/// oder seine Serienmarke (`face_burst`, `None` entfernt sie).
+pub(super) enum Change {
+    Assign(i64, Option<Proposal>),
+    Burst(i64, Option<i64>),
+}
+/// Vorschlag eines Gesichts vor der Entscheidung je Foto.
+#[derive(Clone, Copy)]
+struct Pick {
+    person: i64,
+    score: f32,
+    kind: &'static str,
+    /// Aus einer Serie mit bestätigtem Foto (`face_burst`).
+    burst: bool,
+}
+/// Rangfolge eines Gesichts (mindestens die ersten zwei) und Personenscore der Serienperson.
+type Ranked = (Vec<(i64, f32)>, Option<f32>);
 /// Ein Gesicht eines Abgleichschritts mit allem, was der Abgleich braucht.
 pub(super) struct MatchFace {
     pub(super) id: i64,
@@ -19,6 +37,8 @@ pub(super) struct MatchFace {
     pub(super) wanted: bool,
     /// Vektor nur für `wanted` (im inkrementellen Abgleich stets `None`, dort im Cache).
     pub(super) vector: Option<Vec<f32>>,
+    /// Gespeicherte Serienmarke des Modells (Person aus `face_burst`).
+    pub(super) burst: Option<i64>,
 }
 /// Gesichter (auch historische) und Ablehnungen einiger Fotos, je Foto nach ID geordnet.
 struct MatchBatch {
@@ -34,8 +54,9 @@ impl MatchBatch {
         let mut statement = collection.db.prepare_cached(&format!(
             "SELECT f.id,f.photo_id,f.person_id,f.assignment,f.confidence,f.ignored,f.retained,
                     f.captured_at,CASE WHEN f.retained=0 AND f.quality>=0.5 THEN e.vec END,
-                    coalesce(f.retained=0 AND f.quality>=0.5,0)
+                    coalesce(f.retained=0 AND f.quality>=0.5,0),b.person_id
              FROM faces f LEFT JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=?1
+             LEFT JOIN face_burst b ON b.face_id=f.id AND b.embedder_id=?1
              WHERE f.photo_id IN ({marks}) ORDER BY f.photo_id,f.id"
         ))?;
         let mut rows = statement.query(rusqlite::params_from_iter(values.iter()))?;
@@ -56,6 +77,7 @@ impl MatchBatch {
                     .and_then(|v| v.parse().ok()),
                 wanted: row.get(9)?,
                 vector: bytes.as_deref().map(decode).transpose()?,
+                burst: row.get(10)?,
             });
         }
         drop(rows);
@@ -86,25 +108,34 @@ pub(super) fn load_births(collection: &Collection) -> Result<BTreeMap<i64, i32>>
 }
 
 /// Entscheidet die Gesichter eines Fotos (alle, auch historische, nach ID) und hängt
-/// abweichende maschinelle Zuordnungen an `writes`. `rank` liefert die Rangfolge eines
-/// Gesichts ohne die übergebenen Ausschlüsse (mindestens die ersten zwei Einträge), `None`
-/// ohne vergleichbaren Vektor.
+/// abweichende maschinelle Zuordnungen und Serienmarken an `writes`. `rank` liefert die
+/// Rangfolge eines Gesichts ohne die übergebenen Ausschlüsse (mindestens die ersten zwei
+/// Einträge) und den Personenscore der übergebenen Serienperson, `None` ohne vergleichbaren
+/// Vektor. `series` ist die Serienperson je Gesicht ([`burst::Series::proposals`]).
 fn photo_writes(
     faces: &[MatchFace],
     rejections: &BTreeMap<i64, BTreeSet<i64>>,
     births: &BTreeMap<i64, i32>,
     limits: &Limits,
-    mut rank: impl FnMut(&MatchFace, &dyn Fn(i64) -> bool) -> Option<Vec<(i64, f32)>>,
-    writes: &mut Vec<(i64, Option<Proposal>)>,
+    series: &HashMap<i64, i64>,
+    mut rank: impl FnMut(&MatchFace, &dyn Fn(i64) -> bool, Option<i64>) -> Option<Ranked>,
+    writes: &mut Vec<Change>,
 ) -> Result<()> {
     // Wie `faces::photo_faces`: nur nicht historische Gesichter, nach ID.
     let candidates: Vec<&MatchFace> = faces
         .iter()
         .filter(|f| !f.retained && !f.ignored && f.assignment.as_deref() != Some("user"))
         .collect();
+    let kind = |score: f32| {
+        if score >= limits.sure {
+            "auto"
+        } else {
+            "suggested"
+        }
+    };
     // Je Gesicht höchstens ein Kandidat: die beste zulässige Person, wenn sie die Schwelle
-    // erreicht und klar vor der zweitbesten liegt.
-    let mut proposals: Vec<Option<(i64, f32)>> = Vec::with_capacity(candidates.len());
+    // erreicht und klar vor der zweitbesten liegt, oder die Serienperson.
+    let mut proposals: Vec<Option<Pick>> = Vec::with_capacity(candidates.len());
     // Im Foto bestätigte Personen (auch historischer Gesichter). Kandidaten sind nie
     // bestätigt, ihr eigenes Gesicht ist also nie darunter.
     let occupied: Vec<i64> = faces
@@ -126,18 +157,46 @@ fn photo_writes(
                     .zip(births.get(&person))
                     .is_some_and(|(y, b)| y < *b)
         };
-        let Some(ranking) = rank(face, &excluded) else {
+        // Die Serienperson unterliegt denselben Ausschlüssen.
+        let burst = series.get(&face.id).copied().filter(|p| !excluded(*p));
+        let Some((ranking, burst_score)) = rank(face, &excluded, burst) else {
             proposals.push(None);
             continue;
         };
-        proposals.push(limits.accept(&ranking));
+        let model = limits.accept(&ranking);
+        proposals.push(match (burst, model) {
+            (None, model) => model.map(|(person, score)| Pick {
+                person,
+                score,
+                kind: kind(score),
+                burst: false,
+            }),
+            // Modell und Serie einig: der Vorschlag des Modells, als Serie gekennzeichnet.
+            (Some(x), Some((person, score))) if person == x => Some(Pick {
+                person,
+                score,
+                kind: kind(score),
+                burst: true,
+            }),
+            // Widerspruch: Weder Serie noch Modell setzen sich durch; das Gesicht bleibt offen
+            // (unter „Benennen“), der Nutzer entscheidet.
+            (Some(_), Some(_)) => None,
+            // Nur die Serie: immer `suggested`, nie `auto`; Wert ist der Personenscore.
+            (Some(person), None) => Some(Pick {
+                person,
+                score: burst_score.unwrap_or(0.0),
+                kind: "suggested",
+                burst: true,
+            }),
+        });
     }
     // Gemeinsame Entscheidung je Foto: Dieselbe Person kommt höchstens einmal vor; das
-    // Gesicht mit dem höheren Wert erhält sie, das andere bleibt unbenannt.
+    // Gesicht mit dem höheren Wert erhält sie, ein Serienvorschlag vor jedem Modellvorschlag;
+    // das andere bleibt unbenannt.
     let people: Vec<i64> = proposals
         .iter()
         .flatten()
-        .map(|p| p.0)
+        .map(|p| p.person)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -146,59 +205,107 @@ fn photo_writes(
     for (row, proposal) in proposals.iter().enumerate() {
         for (col, person) in people.iter().enumerate() {
             matrix[row][col] = match proposal {
-                Some((id, score)) if id == person => *score,
+                Some(pick) if pick.person == *person && pick.burst => 2.0 + pick.score.max(-1.0),
+                Some(pick) if pick.person == *person => pick.score,
                 _ => -2.0,
             };
         }
     }
     let decisions = matching::assignment(&matrix)?;
-    let mut wanted: BTreeMap<i64, Proposal> = BTreeMap::new();
+    let mut wanted: BTreeMap<i64, Pick> = BTreeMap::new();
     for (row, col) in decisions.into_iter().enumerate() {
-        if col < people.len() && matrix[row][col] >= limits.review {
-            let score = matrix[row][col];
-            let kind = if score >= limits.sure {
-                "auto"
-            } else {
-                "suggested"
-            };
-            wanted.insert(candidates[row].id, (people[col], kind, score));
+        if col < people.len()
+            && matrix[row][col] >= limits.review
+            && let Some(pick) = proposals[row]
+        {
+            wanted.insert(candidates[row].id, pick);
         }
     }
     // Nur Abweichungen schreiben: Bisher wurden alle maschinellen Zuordnungen des Fotos
     // gelöscht und neu gesetzt, was je Gesicht Trigger der Gruppen auslöste.
     for face in faces {
         let machine = matches!(face.assignment.as_deref(), Some("auto" | "suggested"));
-        match wanted.get(&face.id) {
-            Some(&(person, kind, score)) => {
-                let same = face.person == Some(person)
-                    && face.assignment.as_deref() == Some(kind)
-                    && face.confidence == Some(f64::from(score));
+        let pick = wanted.get(&face.id);
+        match pick {
+            Some(pick) => {
+                let same = face.person == Some(pick.person)
+                    && face.assignment.as_deref() == Some(pick.kind)
+                    && face.confidence == Some(f64::from(pick.score));
                 if !same {
-                    writes.push((face.id, Some((person, kind, score))));
+                    writes.push(Change::Assign(
+                        face.id,
+                        Some((pick.person, pick.kind, pick.score)),
+                    ));
                 }
             }
-            None if machine => writes.push((face.id, None)),
+            None if machine => writes.push(Change::Assign(face.id, None)),
             None => {}
+        }
+        let mark = pick.filter(|p| p.burst).map(|p| p.person);
+        if mark != face.burst {
+            writes.push(Change::Burst(face.id, mark));
         }
     }
     Ok(())
 }
 
-fn write_proposals(
-    tx: &rusqlite::Transaction<'_>,
-    writes: &[(i64, Option<Proposal>)],
-) -> Result<()> {
-    for (id, value) in writes {
-        match value {
-            Some((person, kind, score)) => {
+fn write_proposals(tx: &rusqlite::Transaction<'_>, key: &str, writes: &[Change]) -> Result<()> {
+    let mut marks = false;
+    for change in writes {
+        match change {
+            Change::Assign(id, Some((person, kind, score))) => {
                 tx.execute("UPDATE faces SET person_id=?,assignment=?,confidence=?,assigned_at=datetime('now') WHERE id=? AND assignment IS NOT 'user'",params![person,kind,score,id])?;
             }
-            None => {
+            Change::Assign(id, None) => {
                 tx.execute("UPDATE faces SET person_id=NULL,assignment=NULL,confidence=NULL WHERE id=? AND assignment IN ('auto','suggested')",[id])?;
+            }
+            Change::Burst(id, Some(person)) => {
+                marks = true;
+                tx.execute(
+                    "INSERT OR REPLACE INTO face_burst VALUES(?,?,?)",
+                    params![id, key, person],
+                )?;
+            }
+            Change::Burst(id, None) => {
+                marks = true;
+                tx.execute("DELETE FROM face_burst WHERE face_id=?", [id])?;
             }
         }
     }
+    // Eine Marke allein ändert keine Zuordnung und löst keinen Trigger aus; die Seiten sollen
+    // trotzdem neu lesen.
+    if marks {
+        tx.execute(
+            "UPDATE data_revision SET revision=revision+1 WHERE domain='faces'",
+            [],
+        )?;
+    }
     Ok(())
+}
+
+/// Serienperson je Gesicht für den vollständigen Lauf: Serien lesen und nur die Vektoren der
+/// Gesichter laden, die in einer Kette mit bestätigtem Gesicht liegen.
+fn full_series(collection: &Collection, key: &str) -> Result<HashMap<i64, i64>> {
+    if !burst::burst_enabled(collection)? {
+        return Ok(HashMap::new());
+    }
+    let series = burst::Series::load(collection)?;
+    let mut vectors: HashMap<i64, Vec<f32>> = HashMap::new();
+    let mut statement = collection
+        .db
+        .prepare_cached("SELECT vec FROM face_embeddings WHERE face_id=? AND embedder_id=?")?;
+    for id in series.needed() {
+        let bytes: Option<Option<Vec<u8>>> = statement
+            .query_row(params![id, key], |r| r.get(0))
+            .optional()?;
+        if let Some(Some(bytes)) = bytes {
+            vectors.insert(id, decode(&bytes)?);
+        }
+    }
+    Ok(series.proposals(
+        |id| vectors.get(&id).map(Vec::as_slice),
+        crate::config::model_scale(key).group_join,
+    ))
 }
 
 /// Schließt einen Abgleich ab, wenn sich seit seinem Beginn nichts geändert hat.
@@ -287,7 +394,19 @@ pub fn rematch_with(
     }
     let references = cache.sync(collection, key, &mut state, control)?;
     control.checkpoint()?;
-    let mut writes: Vec<(i64, Option<Proposal>)> = Vec::new();
+    let series = state.series.take().map_or_else(HashMap::new, |series| {
+        series.proposals(
+            |id| cache.faces.get(&id).and_then(|f| f.vector.as_deref()),
+            crate::config::model_scale(key).group_join,
+        )
+    });
+    let slots: HashMap<i64, usize> = references
+        .people
+        .iter()
+        .enumerate()
+        .map(|(slot, person)| (person.0, slot))
+        .collect();
+    let mut writes: Vec<Change> = Vec::new();
     for photo in state.faces.chunk_by(|a, b| a.photo == b.photo) {
         // Wie der vollständige Lauf: nur Fotos mit mindestens einem aktuellen Gesicht.
         if photo.iter().all(|f| f.retained) {
@@ -298,10 +417,15 @@ pub fn rematch_with(
             &state.rejections,
             &births,
             &limits,
-            |face, excluded| {
+            &series,
+            |face, excluded, burst| {
                 let cached = cache.faces.get(&face.id)?;
                 cached.vector.as_ref()?;
-                Some(references.best_two(&cached.scores, excluded))
+                let score = burst
+                    .and_then(|p| slots.get(&p))
+                    .map(|slot| cached.scores[*slot])
+                    .filter(|s| !s.is_nan());
+                Some((references.best_two(&cached.scores, excluded), score))
             },
             &mut writes,
         )?;
@@ -320,7 +444,7 @@ pub fn rematch_with(
             // Neuer Auftrag: Die übrigen Zuordnungen beruhen auf einem veralteten Stand.
             return Ok(());
         }
-        write_proposals(&tx, chunk)?;
+        write_proposals(&tx, key, chunk)?;
         tx.commit()?;
     }
     control.checkpoint()?;
@@ -338,6 +462,7 @@ pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -
     let limits = Limits::load(collection)?;
     let births = load_births(collection)?;
     let references = References::load(collection, key)?;
+    let series = full_series(collection, key)?;
     // Höchstens so lange bleibt ein Fortschritt ohne Änderungen ungespeichert; Schritte mit
     // Änderungen werden sofort geschrieben.
     let mut saved = std::time::Instant::now();
@@ -351,7 +476,7 @@ pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -
         // erst danach schreiben: Die Schreibtransaktion bleibt kurz und wartet nie auf
         // `checkpoint`, während eine Nutzeraktion schreiben will.
         let batch = MatchBatch::load(collection, key, &photos)?;
-        let mut writes: Vec<(i64, Option<Proposal>)> = Vec::new();
+        let mut writes: Vec<Change> = Vec::new();
         for photo in &photos {
             control.checkpoint()?;
             let faces = batch.faces.get(photo).map_or(&[][..], Vec::as_slice);
@@ -360,10 +485,15 @@ pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -
                 &batch.rejections,
                 &births,
                 &limits,
-                |face, excluded| {
-                    face.vector
-                        .as_deref()
-                        .map(|query| references.rank(query, face.id, excluded))
+                &series,
+                |face, excluded, burst| {
+                    face.vector.as_deref().map(|query| {
+                        let ranking = references.rank(query, face.id, excluded);
+                        let score = burst
+                            .and_then(|p| ranking.iter().find(|r| r.0 == p))
+                            .map(|r| r.1);
+                        (ranking, score)
+                    })
                 },
                 &mut writes,
             )?;
@@ -373,7 +503,7 @@ pub fn rematch_full(collection: &mut Collection, key: &str, control: &Control) -
             continue;
         }
         let tx = collection.db.transaction()?;
-        write_proposals(&tx, &writes)?;
+        write_proposals(&tx, key, &writes)?;
         tx.execute(
             "UPDATE face_maintenance SET after_photo=? WHERE embedder_id=? AND generation IS ?",
             params![last, key, generation],

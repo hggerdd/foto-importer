@@ -440,6 +440,8 @@ pub struct PhotoApp {
     index_failed: BTreeSet<String>,
     /// Am Regler gewählte Vorschlagsschwelle samt Sammlung, für die sie gilt.
     review_draft: Option<(String, f32)>,
+    /// Gewählte Sammlungsoption „Serienbilder“ samt Sammlung, bis die Seite sie neu liest.
+    burst_draft: Option<(String, bool)>,
     /// Pfadfelder der Einstellungen, deren Text noch nicht übernommen ist (oder ungültig war).
     path_drafts: BTreeMap<settings_view::PathSetting, settings_view::PathDraft>,
     /// „Gesichtserkennung einrichten“ hat die Laufzeit geladen; danach folgen die Modelle.
@@ -582,6 +584,7 @@ impl PhotoApp {
             index_paused: false,
             index_failed: BTreeSet::new(),
             review_draft: None,
+            burst_draft: None,
             path_drafts: BTreeMap::new(),
             setup_chain: false,
             recognition_tools_open: false,

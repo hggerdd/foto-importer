@@ -149,6 +149,34 @@ buffalo_l `w600k_r50.onnx`, 512-d; nur nicht kommerziell lizenziert)
   `config::MATCH_CACHE_MAX_BYTES` überschreiten, läuft stattdessen der vollständige Lauf.
   Rechnen verteilt sich auf bis zu `config::MATCH_THREADS` Threads des Wartungs-Workers;
   geschrieben werden nur geänderte Zuordnungen in kurzen Transaktionen.
+- **Serienbilder** (`recognition::burst`, Sammlungsoption `face_settings.burst_suggestions`,
+  Voreinstellung an, `config::BURST_DEFAULT`; Schalter in den Einstellungen): Aktive Gesichter
+  ab Qualität 0,5, deren Analysequelle eine EXIF-Aufnahmezeit hat (`meta.dt_original` und
+  `subsec`), gehören zu einer Serie aus Ordner und Kamera (Hersteller, Modell, Seriennummer).
+  Zwei Gesichter verschiedener Fotos einer Serie sind verbunden, wenn die Zeiten höchstens
+  `config::BURST_GAP_SECONDS` (3 s) auseinanderliegen, die normierten Rahmen sich mindestens
+  `config::BURST_IOU_MIN` (0,3) überdecken und der Kosinus die Gruppengrenze des aktiven Modells
+  erreicht (`ModelScale::group_join`, damit ein Kameraschwenk keine andere Person überträgt).
+  Verbindungen bilden Ketten. Enthält eine Kette bestätigte Gesichter genau einer Person X,
+  ist X die Serienperson ihrer übrigen Gesichter; mehrere Personen in einer Kette schlagen
+  nichts vor. Für die Serienperson gelten dieselben Ausschlüsse wie im Abgleich (Ablehnung,
+  im Foto bestätigt, Geburtsjahr). Entscheidung je Gesicht: Modell und Serie einig → der
+  Modellvorschlag (Art nach seinem Wert), gekennzeichnet; nur die Serie → `suggested` mit dem
+  Personenscore von X als Wert, **nie `auto`**; Modell schlägt eine andere Person vor →
+  **kein Vorschlag** (Widerspruch, das Gesicht steht unter „Benennen“). Je Foto hat ein
+  Serienvorschlag Vorrang vor einem Modellvorschlag derselben Person. Die Kennzeichnung liegt
+  in der abgeleiteten Zusatztabelle `face_burst` (Gesicht, Modell, Person; beim Öffnen mit
+  Schreibrecht angelegt, `migrations::ADDITIVE_TABLES`, lesend fehlt sie in älteren
+  Sammlungen); der Abgleich schreibt nur Abweichungen und erhöht dann die Datenrevision
+  `faces`. Weil die Serienperson nur von Bestätigungen abhängt, entfernt der nächste Abgleich
+  nach einer Rücknahme oder beim Ausschalten (`set_burst_enabled` merkt ihn vor) die
+  Vorschläge. Serienvorschläge sind keine Referenzen und lernen nie. Inkrementeller und
+  vollständiger Lauf nutzen dieselbe Kettenbildung (Vektoren aus dem Zwischenspeicher bzw. nur
+  die der Ketten mit Bestätigung) und bleiben bitgleich. **Messung 2026-11-23** (`E:\Bilder`,
+  SFace, 43.603 Gesichter mit Zeit, siehe Validierung): Person-auslassen auf Bestätigten
+  99,5 % richtig (falsche fast nur Geschwister bei Kosinus um 0,85), 198 offene Gesichter
+  erhalten einen Serienvorschlag, rund 110 davon nur durch die Serie, 5 widersprechen dem
+  Modell. Darum Voreinstellung an und keine `auto`-Stufe aus der Serie.
 - **Vollständiger Lauf** (`recognition::rematch_full`, Rückfall und Maßstab): fortsetzbar
   über den Foto-Cursor, 32 Fotos je Schritt, Gesichter, Vektoren und Ablehnungen mit zwei
   Abfragen je Schritt, Schreiben nur geänderter Zuordnungen je Schritt.
@@ -284,6 +312,10 @@ ist an einer Sammlung und 15 Personen gemessen; das schwächste Anhängepaar (0,
 Grenzen für „Wahrscheinlich X“, „Möglicherweise dieselbe Person“ und die Statistikachse sind
 abgeleitet, nicht gemessen. Rund 5 % der Stichprobe (RAW-Fotos) fehlten in der Messung, weil der
 Lauf unterbrochen wurde. Ein echter Lauf in der App über die ganze Sammlung ist nicht gemessen.
+Serienbilder sind nur mit SFace gemessen (ArcFace nutzt seine Gruppengrenze 0,40 ungeprüft);
+Fotos ohne EXIF-Zeit oder mit falsch gestellter Kamerauhr bilden keine Serien. Die
+Serienabfrage liest in jedem Abgleich alle Gesichter mit EXIF (warm rund 0,3 s über Python, in
+der App nicht gemessen).
 
 ## Beim Ändern beachten
 
@@ -303,6 +335,8 @@ das abgefragte Gesicht als eigene Referenz zählen. Schwellen nur mit Messung ä
 vollständigen Lauf (`incremental_rematch_equals_the_full_rematch`,
 `face_save_bench inkrementell … ohne-statistik`) und mit
 `face_save_bench steps … ohne-statistik` messen. Was den Score einer Person von anderen
-Personen abhängig machte, bräche den inkrementellen Abgleich.
+Personen abhängig machte, bräche den inkrementellen Abgleich. Die Serienperson hängt nur von
+Bestätigungen, Zeiten, Rahmen und Vektoren ab, nie von Vorschlägen; Serienvorschläge werden nie
+`auto` und nie `user` (`tests/burst.rs`).
 „Biometrie entfernen“ muss alle Gesichtstabellen, bekannte Sicherungen, den Export und den
 Kachelordner erfassen.
