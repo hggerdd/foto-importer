@@ -200,9 +200,17 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   bei fehlender Laufzeit oder fehlenden Modellen, „N von M Fotos analysiert“ mit „Fotos
   analysieren“ oder „Weiter analysieren“, „Fortsetzen“ bei angehaltenem Vorschlagen, sonst
   „Alles auf dem Stand“ ohne Knopf. Daneben der Einstieg in den Dialog „Automatik &
-  Werkzeuge“: dort die drei Schritte (Fotoanalyse mit Portion und Ordnerbezug, aus Namen
-  lernen, Namen vorschlagen) mit Stand und Aktionen, darunter Einrichtung, Zeitplan, Export
-  und „Biometrie entfernen“.
+  Werkzeuge“: dort die Schritte Fotoanalyse (mit Portion und Ordnerbezug), aus Namen
+  lernen, Namen vorschlagen und „Genauer vergleichen (ArcFace)“ mit Stand und Aktionen,
+  darunter Einrichtung, Zeitplan, Export und „Biometrie entfernen“. Der vierte Schritt nennt
+  das aktive Vergleichsmodell, bietet ohne Gewichte „Genaueres Modell einrichten …“ mit
+  Lizenzhinweis (nur nicht kommerziell), sonst den Stand „N von M Gesichtern genauer
+  berechnet“ mit geschätzter Dauer (`config::STRONG_SECONDS_PER_PHOTO`), „Gesichter genauer
+  berechnen (über Nacht)“, „Auf ArcFace umschalten“ (erst ab 98 % Abdeckung) bzw. „Zurück zu
+  SFace“ (siehe [Gesichtserkennung](gesichtserkennung.md)). Den Stand liest ein Worker nur,
+  solange der Dialog offen ist, höchstens alle zehn Sekunden. Regler „Strenge der
+  Namensvorschläge“, Statistikachse und die Untergrenze von „Wahrscheinlich X“ folgen der Skala
+  des aktiven Modells.
 - **Laufender Gesichtsauftrag nur einmal:** Fortschritt und Abbruch zeigt die Fußleiste;
   die Statuszeile nennt den Auftrag nur in Worten. Zeigt die Fußleiste einen anderen
   Auftrag, steht der Fortschritt mit Abbruch in der Statuszeile.

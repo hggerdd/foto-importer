@@ -142,7 +142,7 @@ impl Detection {
             score: self.score,
         }
     }
-    pub(super) fn embedding_quality(&self) -> f32 {
+    pub fn embedding_quality(&self) -> f32 {
         if self.score < 0.8
             || !self
                 .landmarks
@@ -163,47 +163,111 @@ pub(super) fn presence_detector_key(model_key: &str) -> String {
         .map_or(model_key, |(base, _)| base);
     format!("{base}:presence-v2")
 }
+fn init_runtime(dll: &Path) -> Result<()> {
+    if !dll.is_file() {
+        bail!(
+            "ONNX Runtime fehlt: {}. Unter Einstellungen „ONNX Runtime herunterladen“ wählen.",
+            dll.display()
+        );
+    }
+    ort::init_from(dll.to_string_lossy()).commit()?;
+    Ok(())
+}
+
+fn find_manifest(folder: &Path, id: &str, kind: &str) -> Result<Manifest> {
+    manifests(folder)?
+        .into_iter()
+        .find(|m| m.id == id && m.kind == kind)
+        .with_context(|| match kind {
+            "detector" => "Detektor fehlt im Modellordner".to_string(),
+            _ => format!("Vergleichsmodell {id} fehlt im Modellordner"),
+        })
+}
+
+fn session(path: PathBuf, threads: usize) -> Result<Session> {
+    Ok(Session::builder()?
+        .with_log_level(ort::logging::LogLevel::Error)?
+        .with_intra_threads(threads)?
+        .with_intra_op_spinning(false)?
+        .commit_from_file(path)?)
+}
+
+/// Eingabetensor (1×3×H×W) eines ausgerichteten Gesichts für den Embedder `manifest`.
+/// SFace (OpenCV) erhält RGB 0..255 (`feature()` tauscht BGR nach RGB); andere Modelle die
+/// Kanalfolge des Manifests, normiert mit `(x − mean) / std` (ArcFace: RGB, 127,5 / 127,5 wie
+/// `cv2.dnn.blobFromImages(..., swapRB=True)` in InsightFace).
+pub fn embedding_input(aligned: &RgbImage, manifest: &Manifest) -> Array4<f32> {
+    let (width, height) = aligned.dimensions();
+    let mut input = Array4::zeros((1, 3, height as usize, width as usize));
+    let sface = manifest.runtime == "opencv_sface";
+    for (x, y, p) in aligned.enumerate_pixels() {
+        for c in 0..3 {
+            let channel = if !sface && manifest.input.color == "BGR" {
+                2 - c
+            } else {
+                c
+            };
+            input[[0, c, y as usize, x as usize]] = if sface {
+                p[channel] as f32
+            } else {
+                (p[channel] as f32 - manifest.input.mean) / manifest.input.std
+            };
+        }
+    }
+    input
+}
+
+/// Ein Vergleichsmodell allein (ohne Detektor), etwa für die genauere Berechnung aus
+/// gespeicherten Landmarks.
+pub struct Embedder {
+    pub manifest: Manifest,
+    session: Session,
+}
+impl Embedder {
+    pub fn load(folder: &Path, dll: &Path, id: &str, threads: usize) -> Result<Self> {
+        init_runtime(dll)?;
+        let manifest = find_manifest(folder, id, "embedder")?;
+        let session = session(manifest.verify(folder)?, threads)?;
+        Ok(Self { manifest, session })
+    }
+    pub fn embed(&mut self, image: &RgbImage, landmarks: [[f32; 2]; 5]) -> Result<Vec<f32>> {
+        let aligned = align(image, landmarks)?;
+        self.embed_aligned(&aligned)
+    }
+    pub fn embed_aligned(&mut self, aligned: &RgbImage) -> Result<Vec<f32>> {
+        let input = embedding_input(aligned, &self.manifest);
+        let output = self
+            .session
+            .run(ort::inputs![TensorRef::from_array_view(&input)?])?;
+        let data = output[0].try_extract_tensor::<f32>()?.1;
+        if data.len() != self.manifest.dim || data.iter().any(|v| !v.is_finite()) {
+            bail!("Ungültiges Embedding");
+        }
+        normalize(data)
+    }
+}
+
 pub struct Models {
     pub detector: Manifest,
     pub embedder: Manifest,
     det: Session,
-    emb: Session,
+    emb: Embedder,
+    /// Zusätzliches Vergleichsmodell, das die Analyse für neue Gesichter mitrechnet (aktives
+    /// genaueres Modell, siehe `core::strong`).
+    pub extra: Option<Embedder>,
 }
 impl Models {
     pub fn load(folder: &Path, dll: &Path, detector: &str, embedder: &str) -> Result<Self> {
-        if !dll.is_file() {
-            bail!(
-                "ONNX Runtime fehlt: {}. Unter Einstellungen „ONNX Runtime herunterladen“ wählen.",
-                dll.display()
-            );
-        }
-        ort::init_from(dll.to_string_lossy()).commit()?;
-        let list = manifests(folder)?;
-        let detector = list
-            .iter()
-            .find(|m| m.id == detector && m.kind == "detector")
-            .context("Detektor fehlt im Modellordner")?
-            .clone();
-        let embedder = list
-            .iter()
-            .find(|m| m.id == embedder && m.kind == "embedder")
-            .context("Embedder fehlt im Modellordner")?
-            .clone();
-        let det = Session::builder()?
-            .with_log_level(ort::logging::LogLevel::Error)?
-            .with_intra_threads(2)?
-            .with_intra_op_spinning(false)?
-            .commit_from_file(detector.verify(folder)?)?;
-        let emb = Session::builder()?
-            .with_log_level(ort::logging::LogLevel::Error)?
-            .with_intra_threads(2)?
-            .with_intra_op_spinning(false)?
-            .commit_from_file(embedder.verify(folder)?)?;
+        init_runtime(dll)?;
+        let detector = find_manifest(folder, detector, "detector")?;
+        let det = session(detector.verify(folder)?, 2)?;
+        let emb = Embedder::load(folder, dll, embedder, 2)?;
         Ok(Self {
             detector,
-            embedder,
+            embedder: emb.manifest.clone(),
             det,
             emb,
+            extra: None,
         })
     }
     pub fn detect(&mut self, image: &DynamicImage) -> Result<Vec<Detection>> {
@@ -404,32 +468,20 @@ impl Models {
         Ok(suppress_overlaps(candidates))
     }
     pub fn embed(&mut self, image: &DynamicImage, detection: &Detection) -> Result<Vec<f32>> {
-        let aligned = align(&image.to_rgb8(), detection.landmarks)?;
-        let mut input = Array4::zeros((1, 3, 112, 112));
-        // OpenCV SFace's feature() swaps BGR to RGB; the graph receives RGB 0..255.
-        let sface = self.embedder.runtime == "opencv_sface";
-        for (x, y, p) in aligned.enumerate_pixels() {
-            for c in 0..3 {
-                let channel = if !sface && self.embedder.input.color == "BGR" {
-                    2 - c
-                } else {
-                    c
-                };
-                input[[0, c, y as usize, x as usize]] = if sface {
-                    p[channel] as f32
-                } else {
-                    (p[channel] as f32 - self.embedder.input.mean) / self.embedder.input.std
-                };
-            }
-        }
-        let output = self
-            .emb
-            .run(ort::inputs![TensorRef::from_array_view(&input)?])?;
-        let data = output[0].try_extract_tensor::<f32>()?.1;
-        if data.len() != self.embedder.dim || data.iter().any(|v| !v.is_finite()) {
-            bail!("Ungültiges Embedding");
-        }
-        normalize(data)
+        self.emb.embed(&image.to_rgb8(), detection.landmarks)
+    }
+    /// Vektor des zusätzlichen Modells (`extra`), falls geladen.
+    pub fn embed_extra(
+        &mut self,
+        image: &DynamicImage,
+        detection: &Detection,
+    ) -> Option<Result<(String, Vec<f32>)>> {
+        let extra = self.extra.as_mut()?;
+        Some(
+            extra
+                .embed(&image.to_rgb8(), detection.landmarks)
+                .map(|v| (extra.manifest.key(), v)),
+        )
     }
 }
 
@@ -570,6 +622,76 @@ mod presence_tests {
         assert_eq!(detections.len(), 2);
         assert!(detections[0].embedding_quality() >= 0.5);
         assert!(detections[1].embedding_quality() < 0.5);
+    }
+}
+
+#[cfg(test)]
+mod preprocessing_tests {
+    use super::*;
+
+    const TEMPLATE: [[f32; 2]; 5] = [
+        [38.2946, 51.6963],
+        [73.5318, 51.5014],
+        [56.0252, 71.7366],
+        [41.5493, 92.3655],
+        [70.7299, 92.2041],
+    ];
+
+    fn manifest(json: &str) -> Manifest {
+        serde_json::from_str(json).expect("Manifest")
+    }
+
+    /// Landmarks auf der ArcFace-Vorlage ergeben genau das Bild; ein um den Faktor 2 skaliertes,
+    /// verschobenes Bild ergibt mit den entsprechend umgerechneten Punkten (fast) dasselbe.
+    #[test]
+    fn alignment_maps_landmarks_onto_the_arcface_template() {
+        let face = RgbImage::from_fn(112, 112, |x, y| {
+            image::Rgb([(x * 2) as u8, (y * 2) as u8, (x + y) as u8])
+        });
+        assert_eq!(align(&face, TEMPLATE).expect("Ausrichtung"), face);
+        let large = image::imageops::resize(&face, 224, 224, image::imageops::FilterType::Triangle);
+        let mut canvas = RgbImage::new(400, 300);
+        image::imageops::overlay(&mut canvas, &large, 100, 40);
+        let moved = TEMPLATE.map(|[x, y]| [x * 2.0 + 100.0 + 0.5, y * 2.0 + 40.0 + 0.5]);
+        let back = align(&canvas, moved).expect("Ausrichtung");
+        let error: f32 = back
+            .pixels()
+            .zip(face.pixels())
+            .flat_map(|(a, b)| (0..3).map(move |c| (a[c] as f32 - b[c] as f32).abs()))
+            .sum::<f32>()
+            / (112.0 * 112.0 * 3.0);
+        assert!(error < 4.0, "mittlere Abweichung {error}");
+        assert!(
+            align(&face, [[10.0, 10.0]; 5]).is_err(),
+            "degenerierte Punkte"
+        );
+    }
+
+    /// ArcFace erhält RGB als (x − 127,5) / 127,5, SFace RGB 0..255 (wie InsightFace bzw.
+    /// OpenCV `FaceRecognizerSF`).
+    #[test]
+    fn embedding_input_follows_the_manifest() {
+        let pixel = image::Rgb([255u8, 0, 51]);
+        let crop = RgbImage::from_pixel(112, 112, pixel);
+        let arc = embedding_input(
+            &crop,
+            &manifest(include_str!("../../models/arcface_buffalo_l.json")),
+        );
+        assert_eq!(arc.shape(), &[1, 3, 112, 112]);
+        let at = |t: &Array4<f32>, c: usize| t[[0, c, 5, 7]];
+        assert_eq!((at(&arc, 0), at(&arc, 1)), (1.0, -1.0));
+        assert!((at(&arc, 2) - (51.0 - 127.5) / 127.5).abs() < 1e-6);
+        let sface = embedding_input(&crop, &manifest(include_str!("../../models/sface.json")));
+        assert_eq!(
+            (at(&sface, 0), at(&sface, 1), at(&sface, 2)),
+            (255.0, 0.0, 51.0)
+        );
+        // Ein BGR-Modell erhält die Kanäle getauscht.
+        let mut bgr = manifest(include_str!("../../models/arcface_buffalo_l.json"));
+        bgr.input.color = "BGR".into();
+        let swapped = embedding_input(&crop, &bgr);
+        assert!((at(&swapped, 0) - (51.0 - 127.5) / 127.5).abs() < 1e-6);
+        assert_eq!(at(&swapped, 2), 1.0);
     }
 }
 

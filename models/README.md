@@ -16,7 +16,14 @@ lädt sie von OpenCV Zoo (zusammen rund 39 MB). Nach der SHA-256-Prüfung speich
 sie die Gewichte und Manifeste unter `%APPDATA%\FotoImporter\models` und wählt
 den neuen Ordner. Der Pfad bleibt bei einem Release-Wechsel gültig.
 
-SCRFD und ArcFace können über **Modellordner wählen** manuell eingerichtet
+Das genauere Vergleichsmodell ArcFace (`arcface_buffalo_l`, InsightFace buffalo_l,
+`w600k_r50.onnx`) richtet **Gesichter → Automatik & Werkzeuge → Genauer vergleichen →
+Genaueres Modell einrichten** ein: Die App übernimmt vorhandene Gewichte oder streamt das
+GitHub-Archiv `buffalo_l.zip` (rund 280 MB), speichert nur `w600k_r50.onnx` (174 MB) nach
+SHA-256-Prüfung und legt mit YuNet und SFace einen neuen Modellordner an. Die Gewichte sind
+nur für nicht kommerzielle Nutzung lizenziert.
+
+SCRFD kann über **Modellordner wählen** manuell eingerichtet
 werden. Die Manifeste nennen Bezugsquelle, Datei, Prüfsumme und Lizenz. Das
 jeweilige ONNX-Gewicht am angegebenen Pfad in `weights/` ablegen. Bei
 Archiven genügt die angegebene Datei. Die InsightFace-Gewichte sind laut

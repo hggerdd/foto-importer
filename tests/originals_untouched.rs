@@ -156,6 +156,30 @@ fn processing_never_changes_or_removes_originals() -> anyhow::Result<()> {
     }
     assert_eq!(originals(&root)?, before, "nach der Gesichtsanalyse");
 
+    // Genauer berechnen: liest die Analysequellen erneut (Ersatz-Embedder ohne Modelldatei).
+    let source: String = c.db.query_row(
+        "SELECT relpath FROM files WHERE ext='jpg' LIMIT 1",
+        [],
+        |r| r.get(0),
+    )?;
+    c.db.execute(
+        "INSERT INTO faces(photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality)
+         SELECT photo_id,relpath,'det',0.2,0.2,0.6,0.7,'[[100,90],[135,90],[118,110],[103,131],[132,131]]',0.95,0.9 FROM files WHERE relpath=?",
+        [&source],
+    )?;
+    let computed = foto_importer::core::strong::compute_with(
+        &mut c,
+        &exiftool,
+        &control,
+        |_| Ok(vec![1.0, 0.0]),
+        "arcface_buffalo_l@test",
+    )?;
+    assert!(
+        computed.contains("1 Gesichter genauer berechnet"),
+        "{computed}"
+    );
+    assert_eq!(originals(&root)?, before, "nach der genaueren Berechnung");
+
     // Vorschauen: lokaler Vorschau-Cache (Fehlschlag, dann Treffer) und Gesichtskacheln.
     let cache = temp.path().join("cache");
     thumb_cache::configure(Some(cache.clone()));

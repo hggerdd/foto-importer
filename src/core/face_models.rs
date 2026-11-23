@@ -12,6 +12,11 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("yunet.json", include_str!("../../models/yunet.json")),
     ("sface.json", include_str!("../../models/sface.json")),
 ];
+/// Genaueres Vergleichsmodell (`config::STRONG_EMBEDDER`), auf Wunsch zusätzlich.
+const STRONG: (&str, &str) = (
+    "arcface_buffalo_l.json",
+    include_str!("../../models/arcface_buffalo_l.json"),
+);
 
 #[derive(Deserialize)]
 struct Download {
@@ -19,23 +24,66 @@ struct Download {
     model: Manifest,
     size: usize,
     download_url: String,
+    /// Datei im ZIP-Archiv, falls `download_url` ein Archiv ist.
+    #[serde(default)]
+    archive_member: Option<String>,
 }
 
+/// Modellschlüssel des mitgelieferten Manifests des genaueren Modells (ohne Modellordner).
+pub fn strong_key() -> Result<String> {
+    Ok(serde_json::from_str::<Manifest>(STRONG.1)?.key())
+}
+
+/// Installiert YuNet und SFace in einen neuen Ordner unter `destination`.
 pub fn install(
     destination: &Path,
     candidates: &[PathBuf],
     control: &Control,
 ) -> Result<(PathBuf, Vec<Manifest>)> {
+    install_models(destination, candidates, control, false)
+}
+
+/// Wie [`install`], mit dem genaueren Modell (ArcFace aus InsightFace buffalo_l, nur nicht
+/// kommerziell). Fehlt das Gewicht lokal, wird das Archiv (rund 280 MB) gestreamt und nur
+/// `w600k_r50.onnx` (174 MB) gespeichert.
+pub fn install_models(
+    destination: &Path,
+    candidates: &[PathBuf],
+    control: &Control,
+    strong: bool,
+) -> Result<(PathBuf, Vec<Manifest>)> {
     let mut client = None;
-    install_with(destination, candidates, control, |url| {
+    let mut specs = DEFAULTS.to_vec();
+    if strong {
+        specs.push(STRONG);
+    }
+    install_with(destination, candidates, control, &specs, |url| {
         let client = match &mut client {
             Some(client) => client,
             slot @ None => slot.insert(
                 reqwest::blocking::Client::builder()
                     .connect_timeout(Duration::from_secs(10))
-                    .timeout(Duration::from_secs(180))
+                    .timeout(Duration::from_secs(1800))
                     .https_only(true)
-                    .redirect(reqwest::redirect::Policy::none())
+                    // GitHub-Releases leiten auf ihren Speicher weiter; nur diese Ziele.
+                    .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                        let allowed = matches!(
+                            attempt.url().host_str(),
+                            Some(
+                                "github.com"
+                                    | "release-assets.githubusercontent.com"
+                                    | "objects.githubusercontent.com"
+                            )
+                        );
+                        if attempt.previous().len() < 5
+                            && attempt.url().scheme() == "https"
+                            && allowed
+                        {
+                            attempt.follow()
+                        } else {
+                            attempt.error("Unerwartete Weiterleitung beim Modelldownload")
+                        }
+                    }))
                     .build()?,
             ),
         };
@@ -43,13 +91,48 @@ pub fn install(
     })
 }
 
+/// Ein Datenstrom, der beim Abbruch des Auftrags mit einem Fehler endet.
+struct Cancellable {
+    inner: Box<dyn Read>,
+    control: Control,
+}
+impl Read for Cancellable {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self
+            .control
+            .cancel
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(std::io::Error::other("Auftrag abgebrochen"));
+        }
+        self.inner.read(buffer)
+    }
+}
+
+/// Liest aus einem ZIP-Strom nur die Datei `member` (ohne das Archiv zu speichern).
+fn archive_member(mut stream: Box<dyn Read>, member: &str) -> Result<Box<dyn Read>> {
+    loop {
+        let Some(mut file) = zip::read::read_zipfile_from_stream(&mut stream)? else {
+            anyhow::bail!("{member} fehlt im Archiv");
+        };
+        if file.name() == member {
+            // Die Datei wird vollständig gelesen; die Prüfsumme folgt danach.
+            let mut bytes = Vec::with_capacity(file.size() as usize);
+            file.read_to_end(&mut bytes)?;
+            return Ok(Box::new(std::io::Cursor::new(bytes)));
+        }
+        std::io::copy(&mut file, &mut std::io::sink())?;
+    }
+}
+
 fn install_with(
     destination: &Path,
     candidates: &[PathBuf],
     control: &Control,
+    models: &[(&str, &str)],
     mut download: impl FnMut(&str) -> Result<Box<dyn Read>>,
 ) -> Result<(PathBuf, Vec<Manifest>)> {
-    let specs = DEFAULTS
+    let specs = models
         .iter()
         .map(|(name, json)| Ok((*name, *json, serde_json::from_str::<Download>(json)?)))
         .collect::<Result<Vec<_>>>()?;
@@ -75,8 +158,21 @@ fn install_with(
         control.checkpoint()?;
         let mut source: Box<dyn Read> = match local {
             Some(file) => Box::new(file),
-            None => download(&spec.download_url)
-                .with_context(|| format!("{} konnte nicht geladen werden", spec.model.name))?,
+            None => {
+                let stream = download(&spec.download_url)
+                    .with_context(|| format!("{} konnte nicht geladen werden", spec.model.name))?;
+                match &spec.archive_member {
+                    Some(member) => archive_member(
+                        Box::new(Cancellable {
+                            inner: stream,
+                            control: control.clone(),
+                        }),
+                        member,
+                    )
+                    .with_context(|| format!("{} konnte nicht entpackt werden", spec.model.name))?,
+                    None => stream,
+                }
+            }
         };
         let mut file = File::create(stage.path().join(&spec.model.file))?;
         let mut bytes = 0;
@@ -128,12 +224,51 @@ mod tests {
         let destination = tempfile::tempdir()?;
         let previous = destination.path().join("previous");
         fs::create_dir(&previous)?;
-        let result = install_with(destination.path(), &[], &Control::default(), |_| {
-            Ok(Box::new(&b"incomplete"[..]))
-        });
+        let result = install_with(
+            destination.path(),
+            &[],
+            &Control::default(),
+            DEFAULTS,
+            |_| Ok(Box::new(&b"incomplete"[..])),
+        );
         assert!(format!("{:#}", result.expect_err("truncated download")).contains("unvollständig"));
         assert_eq!(fs::read_dir(destination.path())?.count(), 1);
         assert!(previous.is_dir());
+        Ok(())
+    }
+
+    /// Aus einem ZIP-Strom kommt nur die genannte Datei; eine fehlende meldet sich.
+    #[test]
+    fn archive_member_is_read_from_a_stream() -> Result<()> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("det_10g.onnx", options)?;
+            zip.write_all(b"detector")?;
+            zip.start_file("w600k_r50.onnx", options)?;
+            zip.write_all(b"embedder")?;
+            zip.finish()?;
+        }
+        let bytes = buffer.into_inner();
+        let mut member = archive_member(
+            Box::new(std::io::Cursor::new(bytes.clone())),
+            "w600k_r50.onnx",
+        )?;
+        let mut text = String::new();
+        member.read_to_string(&mut text)?;
+        assert_eq!(text, "embedder");
+        assert!(archive_member(Box::new(std::io::Cursor::new(bytes)), "fehlt.onnx").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn strong_manifest_matches_the_configured_model() -> Result<()> {
+        let manifest: Manifest = serde_json::from_str(STRONG.1)?;
+        assert_eq!(manifest.id, crate::config::STRONG_EMBEDDER);
+        assert_eq!((manifest.dim, manifest.input.color.as_str()), (512, "RGB"));
+        assert_eq!((manifest.input.mean, manifest.input.std), (127.5, 127.5));
+        assert!(strong_key()?.starts_with("arcface_buffalo_l@"));
         Ok(())
     }
 }

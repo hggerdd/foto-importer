@@ -29,7 +29,10 @@ impl PhotoApp {
                 person.name
             )
         } else if self.person_face_mode == "probable" {
-            let minimum = crate::core::progress::decimal(config::PERSON_CANDIDATE_MIN, 2);
+            let minimum = crate::core::progress::decimal(
+                config::model_scale(&self.face_page.status.embedder).candidate_min,
+                2,
+            );
             format!(
                 "Unbestätigte Gesichter, nach Ähnlichkeit zu {0} geordnet, wahrscheinlichste zuerst \
                  (ab {minimum}); darunter die, die einer anderen Person noch ähnlicher sind als \

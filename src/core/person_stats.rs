@@ -85,6 +85,18 @@ pub struct Stats {
     /// Schwellen der Sammlung: Vorschlag und „sicher“ (`recognition::Limits`).
     pub review: f32,
     pub sure: f32,
+    /// Werteachse und Untergrenze der Werte des Modells (`config::ModelScale::stats_axis`,
+    /// `candidate_min`); ältere Cache-Einträge ohne sie gelten als SFace.
+    #[serde(default = "sface_axis")]
+    pub axis: (f32, f32),
+    #[serde(default = "sface_minimum")]
+    pub minimum: f32,
+}
+fn sface_axis() -> (f32, f32) {
+    config::SFACE_SCALE.stats_axis
+}
+fn sface_minimum() -> f32 {
+    config::SFACE_SCALE.candidate_min
 }
 
 impl Stats {
@@ -106,7 +118,10 @@ impl Stats {
 
 /// Stützstellen der Achse (`config::PERSON_STATS_AXIS`, `PERSON_STATS_GRID` Punkte).
 pub fn grid() -> Vec<f32> {
-    let (low, high) = config::PERSON_STATS_AXIS;
+    grid_on(config::PERSON_STATS_AXIS)
+}
+/// Stützstellen der Achse `(low, high)` des Modells.
+pub fn grid_on((low, high): (f32, f32)) -> Vec<f32> {
     let steps = config::PERSON_STATS_GRID.max(2) - 1;
     (0..=steps)
         .map(|i| low + (high - low) * i as f32 / steps as f32)
@@ -173,9 +188,13 @@ pub fn kde(values: &[f32], bandwidth: f32, at: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// Verteilung der Werte: Kennzahlen, relative Dichte (auf die Spanne der Werte beschnitten)
-/// oder bei wenigen Werten die Punkte.
+/// Verteilung der Werte auf der SFace-Achse.
 pub fn distribution(values: &[f32]) -> Distribution {
+    distribution_on(values, config::PERSON_STATS_AXIS)
+}
+/// Verteilung der Werte: Kennzahlen, relative Dichte an den Stützstellen der Achse `axis` (auf
+/// die Spanne der Werte beschnitten) oder bei wenigen Werten die Punkte.
+pub fn distribution_on(values: &[f32], axis: (f32, f32)) -> Distribution {
     let mut sorted: Vec<f32> = values.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(f32::total_cmp);
     let n = sorted.len();
@@ -197,7 +216,7 @@ pub fn distribution(values: &[f32]) -> Distribution {
             points: sorted,
         };
     }
-    let at = grid();
+    let at = grid_on(axis);
     let mut density = kde(&sorted, silverman(&sorted), &at);
     for (value, x) in density.iter_mut().zip(&at) {
         if *x < summary.min || *x > summary.max {
@@ -231,16 +250,21 @@ pub fn threshold(confirmed: &[f32], rejected: &[f32], rated: &[f32]) -> Option<T
     })
 }
 
-/// Statistik aus den Personenscores.
+/// Statistik aus den Personenscores (SFace-Achse).
 pub fn build(scores: Vec<PersonScores>, limits: Limits) -> Stats {
+    build_for(scores, limits, &config::SFACE_SCALE)
+}
+/// Statistik aus den Personenscores auf der Achse des Modells `scale`.
+pub fn build_for(scores: Vec<PersonScores>, limits: Limits, scale: &config::ModelScale) -> Stats {
+    let axis = scale.stats_axis;
     let mut people: Vec<PersonStat> = scores
         .into_iter()
         .map(|s| PersonStat {
             person: s.person,
             threshold: threshold(&s.confirmed, &s.rejected, &s.rated),
-            rated: distribution(&s.rated),
-            confirmed: distribution(&s.confirmed),
-            rejected: distribution(&s.rejected),
+            rated: distribution_on(&s.rated, axis),
+            confirmed: distribution_on(&s.confirmed, axis),
+            rejected: distribution_on(&s.rejected, axis),
             name: s.name,
         })
         .filter(|p| p.rated.n + p.confirmed.n + p.rejected.n > 0)
@@ -250,6 +274,8 @@ pub fn build(scores: Vec<PersonScores>, limits: Limits) -> Stats {
         people,
         review: limits.review,
         sure: limits.sure,
+        axis,
+        minimum: scale.candidate_min,
     }
 }
 
@@ -257,15 +283,11 @@ pub fn build(scores: Vec<PersonScores>, limits: Limits) -> Stats {
 pub fn compute(collection: &Collection, control: &Control) -> Result<Stats> {
     let limits = Limits::load(collection)?;
     let Some(key) = faces::setting(collection, faces::EMBEDDER_KEY)? else {
-        return Ok(Stats {
-            review: limits.review,
-            sure: limits.sure,
-            ..Default::default()
-        });
+        return Ok(build(Vec::new(), limits));
     };
-    let scores =
-        recognition::person_scores(collection, &key, config::PERSON_CANDIDATE_MIN, control)?;
-    Ok(build(scores, limits))
+    let scale = config::model_scale(&key);
+    let scores = recognition::person_scores(collection, &key, scale.candidate_min, control)?;
+    Ok(build_for(scores, limits, scale))
 }
 
 /// Bereiche, aus denen die Statistik entsteht: Zuordnungen, Ablehnungen, Referenzen und
@@ -280,17 +302,14 @@ pub fn signature(collection: &Collection) -> Result<String> {
         return Ok(format!("ohne-revision-{}", uuid::Uuid::new_v4()));
     };
     let model = faces::setting(collection, faces::EMBEDDER_KEY)?.unwrap_or_default();
+    let minimum = config::model_scale(&model).candidate_min;
     let (vectors, faces): (Option<i64>, Option<i64>) = collection.db.query_row(
         "SELECT (SELECT max(rowid) FROM face_embeddings),(SELECT max(id) FROM faces)",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     Ok(serde_json::to_string(&(
-        key,
-        model,
-        vectors,
-        faces,
-        config::PERSON_CANDIDATE_MIN,
+        key, model, vectors, faces, minimum,
     ))?)
 }
 
@@ -302,7 +321,7 @@ pub struct Cached {
 }
 
 /// Art und Format im lokalen Cache (`core::local_cache`).
-const CACHE: (&str, u32) = ("person-stats", 1);
+const CACHE: (&str, u32) = ("person-stats", 2);
 
 /// Zuletzt berechnete Statistik der Sammlung aus dem lokalen Cache.
 pub fn cached(dir: &std::path::Path, collection: &str) -> Option<Cached> {

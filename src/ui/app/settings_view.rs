@@ -294,9 +294,19 @@ impl PhotoApp {
     }
 
     fn start_model_install(&mut self) {
+        self.start_model_install_with(false);
+    }
+
+    /// Installiert die Standardmodelle und auf Wunsch das genauere Vergleichsmodell in einen
+    /// neuen Modellordner (vorhandene Gewichte werden übernommen).
+    pub(super) fn start_model_install_with(&mut self, strong: bool) {
         let candidates = config::model_sources(&self.settings.model_dir);
         self.launch(
-            "Modellgewichte installieren",
+            if strong {
+                "Genaueres Modell installieren"
+            } else {
+                "Modellgewichte installieren"
+            },
             false,
             JobKind::ModelInstall,
             move |control| {
@@ -305,8 +315,12 @@ impl PhotoApp {
                     .parent()
                     .ok_or_else(|| anyhow::anyhow!("Einstellungspfad ungültig"))?
                     .join("models");
-                let (path, models) =
-                    crate::core::face_models::install(&destination, &candidates, &control)?;
+                let (path, models) = crate::core::face_models::install_models(
+                    &destination,
+                    &candidates,
+                    &control,
+                    strong,
+                )?;
                 Ok(Outcome::ModelsInstalled(path, models))
             },
         );
@@ -390,21 +404,22 @@ impl PhotoApp {
 
     /// Regler für die Vorschlagsschwelle der aktiven Sammlung; gespeichert wird beim Loslassen.
     fn review_threshold_slider(&mut self, ui: &mut egui::Ui) {
-        use crate::core::recognition::REVIEW_RANGE;
         let ready =
             !self.settings.collection.is_empty() && !self.face_page.status.embedder.is_empty();
         let stored = self.face_page.status.review_threshold;
+        // Bereich des aktiven Vergleichsmodells (Skalen verschiedener Modelle unterscheiden sich).
+        let (low, high) = config::model_scale(&self.face_page.status.embedder).review_range;
         let mut value = self
             .review_draft
             .as_ref()
             .filter(|(root, _)| *root == self.settings.collection)
             .map_or(stored, |(_, value)| *value)
-            .clamp(REVIEW_RANGE.0, REVIEW_RANGE.1);
+            .clamp(low, high);
         ui.add_space(8.0);
         ui.label("Strenge der Namensvorschläge");
         let response = ui.add_enabled(
             ready && !self.busy(),
-            egui::Slider::new(&mut value, REVIEW_RANGE.0..=REVIEW_RANGE.1)
+            egui::Slider::new(&mut value, low..=high)
                 .step_by(0.01)
                 .fixed_decimals(2),
         );

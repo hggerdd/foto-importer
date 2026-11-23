@@ -36,6 +36,7 @@ pub mod relationship_graph;
 pub mod revision;
 pub mod scope;
 pub mod start_view;
+pub mod strong;
 pub mod thumb_cache;
 pub mod timeline;
 pub mod timeline_export;

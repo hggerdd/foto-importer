@@ -37,8 +37,16 @@ pub fn analyze_scoped(
     collection.writable()?;
     control.set_face_phase(crate::core::jobs::FacePhase::Analysis);
     let mut models = Models::load(model_dir, dll, detector, embedder)?;
+    // Ist das genauere Modell aktiv, erhalten neue Gesichter seinen Vektor gleich mit.
+    models.extra = crate::core::strong::analysis_extra(collection, model_dir, dll)?;
     let detector_key = inference::presence_detector_key(&models.detector.key());
+    // Analyse-Embedder (Fingerabdruck, Nachberechnung) und aktives Vergleichsmodell (Gruppen)
+    // sind verschieden, solange das genauere Modell aktiv ist.
     let embedder_key = models.embedder.key();
+    let active_key = match setting(collection, EMBEDDER_KEY)? {
+        Some(active) if crate::core::strong::is_strong(&active) && active != embedder_key => active,
+        _ => embedder_key.clone(),
+    };
     // Ein Detektorwechsel verändert alle späteren Erkennungen: vorher sichern, sonst unterbleibt
     // die Analyse.
     if setting(collection, "rust.detector_key")?.is_some_and(|key| key != detector_key) {
@@ -54,7 +62,8 @@ pub fn analyze_scoped(
         ],
     )?;
     save_setting(&collection.db, "rust.detector_key", &detector_key)?;
-    save_setting(&collection.db, EMBEDDER_KEY, &embedder_key)?;
+    save_setting(&collection.db, EMBEDDER_KEY, &active_key)?;
+    save_setting(&collection.db, crate::core::strong::BASE_KEY, &embedder_key)?;
     save_setting(&collection.db, "active_detector", detector)?;
     save_setting(&collection.db, "active_embedder", embedder)?;
     let order = crate::core::scope::analysis_order(collection, scope)?;
@@ -93,6 +102,8 @@ pub fn analyze_scoped(
                     )?;
                     let detections = models.detect_with_control(&image, control)?;
                     let mut embedded = Vec::with_capacity(detections.len());
+                    // Vektoren des aktiven genaueren Modells je Erkennung (falls geladen).
+                    let mut extras: BTreeMap<usize, (String, Vec<f32>)> = BTreeMap::new();
                     let mut embedding_errors = 0;
                     for detection in &detections {
                         control.checkpoint()?;
@@ -102,7 +113,12 @@ pub fn analyze_scoped(
                             continue;
                         }
                         match models.embed(&image, detection) {
-                            Ok(vector) => embedded.push((quality, Some(vector))),
+                            Ok(vector) => {
+                                if let Some(Ok(extra)) = models.embed_extra(&image, detection) {
+                                    extras.insert(embedded.len(), extra);
+                                }
+                                embedded.push((quality, Some(vector)))
+                            }
                             Err(_) => {
                                 embedding_errors += 1;
                                 embedded.push((0.0, None));
@@ -133,6 +149,11 @@ pub fn analyze_scoped(
                                     embed_hires(&mut models, &hi, &detections[i], factor)
                                 {
                                     embedded[i] = (found.0, Some(found.1));
+                                    if let Some(Ok(extra)) =
+                                        models.embed_extra(&hi, &detections[i].scaled(factor))
+                                    {
+                                        extras.insert(i, extra);
+                                    }
                                 }
                             }
                         }
@@ -140,7 +161,9 @@ pub fn analyze_scoped(
                     let old=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.photo_id=? ORDER BY f.assignment='user' DESC,f.retained,f.id"))?.query_map([photo],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
                     let tx = collection.db.transaction()?;
                     let mut used = BTreeSet::new();
-                    for (detection, (quality, vector)) in detections.iter().zip(&embedded) {
+                    for (index, (detection, (quality, vector))) in
+                        detections.iter().zip(&embedded).enumerate()
+                    {
                         let bbox = [
                             detection.bbox[0] / image.width() as f32,
                             detection.bbox[1] / image.height() as f32,
@@ -158,6 +181,12 @@ pub fn analyze_scoped(
                         let id = if let Some(previous) = previous {
                             used.insert(previous.id);
                             tx.execute("UPDATE faces SET detector_id=?,bbox_x1=?,bbox_y1=?,bbox_x2=?,bbox_y2=?,landmarks=?,det_score=?,quality=?,retained=0,source_fingerprint=? WHERE id=?",params![detector_key,bbox[0],bbox[1],bbox[2],bbox[3],landmarks,detection.score,quality,fingerprint,previous.id])?;
+                            // Neue Landmarks: Vektoren anderer Modelle (genaueres Modell) gelten
+                            // nicht mehr; der nächste Lauf rechnet sie neu.
+                            tx.execute(
+                                "DELETE FROM face_embeddings WHERE face_id=? AND embedder_id<>?",
+                                params![previous.id, embedder_key],
+                            )?;
                             previous.id
                         } else {
                             tx.execute("INSERT INTO faces(photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,landmarks,det_score,quality,captured_at,source_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",params![photo,file,relative,detector_key,bbox[0],bbox[1],bbox[2],bbox[3],landmarks,detection.score,quality,date,fingerprint])?;
@@ -168,6 +197,12 @@ pub fn analyze_scoped(
                                 "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
                                 params![id, embedder_key, vector.len() as i64, encode(vector)],
                             )?;
+                            if let Some((key, extra)) = extras.get(&index) {
+                                tx.execute(
+                                    "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
+                                    params![id, key, extra.len() as i64, encode(extra)],
+                                )?;
+                            }
                         } else {
                             // A weaker detection may retain an explicit label or pin, never an old suggestion.
                             tx.execute(
@@ -247,9 +282,9 @@ pub fn analyze_scoped(
             done += 1;
             control.progress(if scope.limit.is_some() { worked } else { done }, total);
         }
-        prepare_groups(collection, &embedder_key, control)?;
+        prepare_groups(collection, &active_key, control)?;
     }
-    crate::core::grouping::rebuild_groups(collection, &embedder_key, control)?;
+    crate::core::grouping::rebuild_groups(collection, &active_key, control)?;
     if let Some(example) = missing_example {
         log::warn!(target: "gesichter", "dateien_fehlen anzahl={missing} beispiel={example:?}");
     }
@@ -378,12 +413,19 @@ fn upgrade_small_faces(
                 score,
             };
             if let Some((quality, vector)) = embed_hires(models, &hi, &detection, 1.0) {
-                upgraded.push((id, quality, vector));
+                let extra = models.embed_extra(&hi, &detection).and_then(Result::ok);
+                upgraded.push((id, quality, vector, extra));
             }
         }
     }
     let tx = collection.db.transaction()?;
-    for (id, quality, vector) in &upgraded {
+    for (id, quality, vector, extra) in &upgraded {
+        if let Some((key, extra)) = extra {
+            tx.execute(
+                "INSERT OR REPLACE INTO face_embeddings VALUES(?,?,?,?)",
+                params![id, key, extra.len() as i64, encode(extra)],
+            )?;
+        }
         tx.execute(
             "UPDATE faces SET quality=? WHERE id=?",
             params![quality, id],
@@ -425,6 +467,7 @@ fn signature(vector: &[f32]) -> i64 {
 
 pub fn prepare_groups(collection: &mut Collection, key: &str, control: &Control) -> Result<usize> {
     collection.writable()?;
+    let join = crate::config::model_scale(key).group_join;
     let rows=collection.db.prepare("SELECT f.id,f.photo_id,e.vec FROM face_group_dirty d JOIN faces f ON f.id=d.face_id JOIN face_embeddings e ON e.face_id=f.id AND e.embedder_id=d.embedder_id WHERE d.embedder_id=? ORDER BY f.id LIMIT 128")?.query_map([key],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,Vec<u8>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let tx = collection.db.transaction()?;
     for (id, photo, bytes) in &rows {
@@ -443,7 +486,7 @@ pub fn prepare_groups(collection: &mut Collection, key: &str, control: &Control)
                         && decode(v)
                             .ok()
                             .and_then(|v| inference::cosine(&vector, &v))
-                            .is_some_and(|s| s >= crate::config::GROUP_JOIN_MIN)
+                            .is_some_and(|s| s >= join)
                 }) {
                     matched = Some(group);
                     break;

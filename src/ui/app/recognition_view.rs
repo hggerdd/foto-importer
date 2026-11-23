@@ -1,5 +1,8 @@
 use super::*;
 
+/// Name des Leseauftrags für die Abdeckung des genaueren Modells.
+const STRONG_COVERAGE_LABEL: &str = "Abdeckung des genaueren Modells lesen";
+
 impl PhotoApp {
     pub(super) fn analysing_current_collection(&self) -> bool {
         self.tasks.iter().any(|task| {
@@ -233,6 +236,157 @@ impl PhotoApp {
             {
                 self.collection_action("knowledge");
             }
+        });
+        self.strong_step(ui, &status, analysing);
+    }
+
+    /// Liest die Abdeckung des genaueren Modells auf einem Worker, solange der Dialog offen ist
+    /// (höchstens alle zehn Sekunden; rund 0,15 s bei 66.000 Gesichtern).
+    fn request_strong_coverage(&mut self) {
+        let root = self.settings.collection.clone();
+        let fresh = self
+            .strong_coverage
+            .as_ref()
+            .is_some_and(|(collection, at, _)| {
+                *collection == root && at.elapsed() < std::time::Duration::from_secs(10)
+            });
+        let reading = self
+            .tasks
+            .iter()
+            .any(|task| task.task.label == STRONG_COVERAGE_LABEL);
+        if fresh || reading || root.is_empty() {
+            return;
+        }
+        self.launch(STRONG_COVERAGE_LABEL, false, JobKind::Report, move |_| {
+            let c = crate::core::collection::Collection::open(Path::new(&root), false)?;
+            let key = crate::core::face_models::strong_key()?;
+            Ok(Outcome::StrongCoverage(
+                root,
+                crate::core::strong::coverage(&c, &key)?,
+            ))
+        });
+    }
+
+    /// Vierter Schritt: genaueres Vergleichsmodell einrichten, ausdrücklich berechnen und
+    /// umschalten (ADR Gesichtserkennung).
+    fn strong_step(&mut self, ui: &mut egui::Ui, status: &faces::Status, analysing: bool) {
+        use crate::core::{progress::group, strong};
+        self.request_strong_coverage();
+        let installed = strong::weights_present(Path::new(&self.settings.model_dir));
+        let active = strong::is_strong(&status.embedder);
+        let coverage = self
+            .strong_coverage
+            .as_ref()
+            .filter(|(collection, ..)| *collection == self.settings.collection)
+            .map(|(.., coverage)| *coverage);
+        let running = self.tasks.iter().any(|task| {
+            task.collection == self.settings.collection
+                && task.task.control.face_phase() == Some(FacePhase::Precise)
+        });
+        Self::recognition_step(ui, "Genauer vergleichen (ArcFace)", |ui| {
+            ui.label(if active {
+                "Aktiv: ArcFace (genauer, besonders bei Profil, Kindern und Unschärfe)"
+            } else {
+                "Aktiv: SFace (schnell)"
+            });
+            if !installed {
+                ui.label(RichText::new(
+                    "ArcFace (InsightFace buffalo_l) vergleicht Gesichter genauer. Die Gewichte sind nur für nicht kommerzielle Nutzung lizenziert. Download rund 280 MB, gespeichert 174 MB.",
+                ).small());
+                if ui
+                    .add_enabled(
+                        !self.models_installing() && self.runtime_ready(),
+                        egui::Button::new("Genaueres Modell einrichten …"),
+                    )
+                    .on_hover_text("Lädt das InsightFace-Paket buffalo_l von GitHub und speichert nur das Vergleichsmodell w600k_r50 (nur nicht kommerzielle Nutzung).")
+                    .clicked()
+                {
+                    self.start_model_install_with(true);
+                }
+                return;
+            }
+            match coverage {
+                Some(c) => {
+                    ui.label(format!(
+                        "{} von {} Gesichtern genauer berechnet ({} %)",
+                        group(c.embedded),
+                        group(c.eligible),
+                        (c.share() * 100.0).floor()
+                    ));
+                    if c.open_faces > 0 && !running {
+                        let hours =
+                            c.open_photos as f32 * config::STRONG_SECONDS_PER_PHOTO / 3600.0;
+                        ui.label(
+                            RichText::new(format!(
+                                "Offen: {} Gesichter in {} Fotos, geschätzt {} Stunden",
+                                group(c.open_faces),
+                                group(c.open_photos),
+                                crate::core::progress::decimal(hours.max(0.1), 1)
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Stand wird gelesen …");
+                    });
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                let open = coverage.is_none_or(|c| c.open_faces > 0);
+                if ui
+                    .add_enabled(
+                        open && !self.busy() && !analysing,
+                        egui::Button::new("Gesichter genauer berechnen (über Nacht)"),
+                    )
+                    .on_hover_text("Liest die Fotos erneut und berechnet für jedes Gesicht ArcFace-Merkmale. Erkennung, Gesichter und deine Entscheidungen bleiben unverändert. Abbrechbar in der Fußleiste; ein neuer Lauf setzt fort. Der Rechner bleibt währenddessen wach.")
+                    .clicked()
+                {
+                    self.collection_action("strong");
+                }
+                if active {
+                    if ui
+                        .add_enabled(!self.busy(), egui::Button::new("Zurück zu SFace"))
+                        .on_hover_text("Vorschläge wieder mit SFace. Bestätigungen, Ablehnungen und Ignorieren bleiben.")
+                        .clicked()
+                    {
+                        self.collection_action("strong_off");
+                    }
+                } else {
+                    let ready = coverage.is_some_and(|c| c.ready());
+                    let response = ui
+                        .add_enabled(
+                            ready && !self.busy(),
+                            egui::Button::new("Auf ArcFace umschalten"),
+                        )
+                        .on_hover_text("Sichert die Sammlung, wählt die Referenzen mit ArcFace neu und berechnet alle Vorschläge neu. Bestätigungen, Ablehnungen, Ignorieren, Pins und Ausschlüsse bleiben. Zurückschalten ist jederzeit möglich.");
+                    if !ready {
+                        response.on_disabled_hover_text(format!(
+                            "Erst möglich, wenn mindestens {} % der Gesichter genauer berechnet sind",
+                            (config::STRONG_SWITCH_COVERAGE * 100.0).round()
+                        ));
+                    } else if response.clicked() {
+                        self.collection_action("strong_on");
+                    }
+                }
+            });
+            if active {
+                ui.label(
+                    RichText::new(
+                        "Neu analysierte Fotos erhalten die ArcFace-Merkmale gleich mit.",
+                    )
+                    .small()
+                    .weak(),
+                );
+            }
+            ui.label(
+                RichText::new("InsightFace-Gewichte: nur für nicht kommerzielle Nutzung.")
+                    .small()
+                    .weak(),
+            );
         });
     }
 
@@ -501,7 +655,9 @@ impl MainAction {
 fn run_text(run: FaceRun) -> &'static str {
     match (run.stopping, run.matching, run.phase) {
         (true, true, _) => "Das Vorschlagen von Namen wird angehalten …",
+        (true, false, Some(FacePhase::Precise)) => "Die genauere Berechnung wird abgebrochen …",
         (true, false, _) => "Die Analyse wird abgebrochen …",
+        (_, _, Some(FacePhase::Precise)) => "Gesichter werden genauer berechnet …",
         (_, _, Some(FacePhase::Analysis)) => "Fotos werden analysiert …",
         (_, _, Some(FacePhase::References)) => "Beispiele für die Vorschläge werden ausgewählt …",
         (_, _, Some(FacePhase::Matching)) => "Namen werden vorgeschlagen …",
@@ -604,6 +760,22 @@ mod status_tests {
             ("Namen werden vorgeschlagen …".to_string(), None)
         );
         assert_eq!(status_line(&run(false, None)).1, None);
+        assert_eq!(
+            status_line(&run(false, Some(FacePhase::Precise))),
+            ("Gesichter werden genauer berechnet …".to_string(), None)
+        );
+        let stopping = FaceStand {
+            running: Some(FaceRun {
+                stopping: true,
+                matching: false,
+                phase: Some(FacePhase::Precise),
+            }),
+            ..stand(1240, 3000)
+        };
+        assert_eq!(
+            status_line(&stopping).0,
+            "Die genauere Berechnung wird abgebrochen …"
+        );
     }
     #[test]
     fn everything_done_needs_no_action() {

@@ -492,6 +492,7 @@ fn run(template: &Path, work: &Path, maintenance_seconds: u64) -> anyhow::Result
             Some(foto_importer::core::jobs::FacePhase::References) => "Referenzen",
             Some(foto_importer::core::jobs::FacePhase::Matching) => "Abgleich",
             Some(foto_importer::core::jobs::FacePhase::Groups) => "Gruppen",
+            Some(foto_importer::core::jobs::FacePhase::Precise) => "Genauer",
         };
         if phase != last {
             println!("  +{:.1} s Phase {phase}", started.elapsed().as_secs_f64());

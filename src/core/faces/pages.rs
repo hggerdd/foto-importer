@@ -223,7 +223,7 @@ fn probable_page(
         collection,
         embedder,
         person,
-        crate::config::PERSON_CANDIDATE_MIN,
+        crate::config::model_scale(embedder).candidate_min,
         control,
     )?;
     // Ordnerfilter: Werte und Abschnitte bleiben sammlungsweit, gezeigt wird nur der Ordner.

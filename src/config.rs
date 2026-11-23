@@ -94,6 +94,86 @@ pub const GROUP_SUGGESTION_FACES: usize = 5;
 pub const FACE_REVIEW_MIN: f32 = 0.60;
 pub const FACE_REVIEW_MARGIN: f32 = 0.05;
 pub const FACE_SURE_MIN: f32 = 0.70;
+/// Kosinusgrenzen eines Vergleichsmodells. Modelle haben verschiedene Skalen: Dieselbe Person
+/// erreicht bei SFace typisch 0,6 bis 0,8, bei ArcFace 0,4 bis 0,7; verschiedene Personen
+/// liegen bei ArcFace nahe 0. Jede Stelle, die Kosinuswerte mit einer festen Zahl vergleicht,
+/// nimmt sie aus [`model_scale`] des Modells.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelScale {
+    /// Vorschlag ab (`recognition::Limits::review`).
+    pub review: f32,
+    /// Mindestabstand zur zweitbesten Person.
+    pub margin: f32,
+    /// Ab hier `auto` (sicher).
+    pub sure: f32,
+    /// Bereich des Reglers „Strenge der Namensvorschläge“.
+    pub review_range: (f32, f32),
+    /// Gruppenbildung: Complete-Link-Grenze (`faces::prepare_groups`).
+    pub group_join: f32,
+    /// Anhängen kleiner Gruppen: mittlere Ähnlichkeit und schwächstes Paar (`grouping`).
+    pub group_merge_mean: f32,
+    pub group_merge_min_pair: f32,
+    /// Duplikatfilter der Referenzauswahl (`matching::select_references`).
+    pub duplicate: f32,
+    /// Untergrenze der Liste „Wahrscheinlich X“ und der Personenstatistik.
+    pub candidate_min: f32,
+    /// Werteachse der Personenstatistik.
+    pub stats_axis: (f32, f32),
+    /// Rückfrage „Möglicherweise dieselbe Person“ (`duplicates`).
+    pub duplicate_person: f32,
+}
+/// SFace: die gemessenen Grenzen der Konstanten oben und unten.
+pub const SFACE_SCALE: ModelScale = ModelScale {
+    review: FACE_REVIEW_MIN,
+    margin: FACE_REVIEW_MARGIN,
+    sure: FACE_SURE_MIN,
+    review_range: (0.5, 0.75),
+    group_join: GROUP_JOIN_MIN,
+    group_merge_mean: GROUP_MERGE_MEAN,
+    group_merge_min_pair: GROUP_MERGE_MIN_PAIR,
+    duplicate: 0.92,
+    candidate_min: PERSON_CANDIDATE_MIN,
+    stats_axis: PERSON_STATS_AXIS,
+    duplicate_person: DUPLICATE_PERSON_MIN,
+};
+/// ArcFace (buffalo_l, `STRONG_EMBEDDER`). Gemessen am 2026-11-23 mit
+/// `examples/strong_model_eval.rs` (siehe ADR Gesichtserkennung und docs/validierung.md).
+pub const ARCFACE_SCALE: ModelScale = ModelScale {
+    review: 0.40,
+    margin: 0.05,
+    sure: 0.50,
+    review_range: (0.30, 0.60),
+    group_join: 0.40,
+    group_merge_mean: 0.30,
+    group_merge_min_pair: 0.10,
+    duplicate: 0.85,
+    candidate_min: 0.20,
+    stats_axis: (0.0, 1.0),
+    duplicate_person: 0.35,
+};
+/// Grenzen des Modells mit dem Schlüssel `key` (`Manifest::key`); unbekannte Modelle wie SFace.
+pub fn model_scale(key: &str) -> &'static ModelScale {
+    if key.starts_with(STRONG_EMBEDDER) && key[STRONG_EMBEDDER.len()..].starts_with('@') {
+        &ARCFACE_SCALE
+    } else {
+        &SFACE_SCALE
+    }
+}
+/// Genaueres Vergleichsmodell (`core::strong`): Manifest-ID. InsightFace-Gewichte sind nur für
+/// nicht kommerzielle Nutzung lizenziert.
+pub const STRONG_EMBEDDER: &str = "arcface_buffalo_l";
+/// Umschalten auf das genauere Modell erst, wenn so viele aktive Gesichter seinen Vektor haben.
+/// Der Rest (nicht lesbare Fotos) steht danach unter „Ungeeignet“.
+pub const STRONG_SWITCH_COVERAGE: f32 = 0.98;
+/// Threads, die Fotos für den Lauf laden und dekodieren (USB-Platte, JPEG-Dekodierung).
+pub const STRONG_LOAD_THREADS: usize = 3;
+/// Inferenzthreads der ONNX-Sitzung des genaueren Modells im ausdrücklichen Lauf.
+pub const STRONG_THREADS: usize = 4;
+/// Geschätzte Laufzeit je Foto für die Anzeige der Restdauer vor dem Start (gemessen, siehe
+/// ADR Gesichtserkennung); während des Laufs schätzt die Fußleiste aus dem Fortschritt.
+pub const STRONG_SECONDS_PER_PHOTO: f32 = 0.25;
+/// Fotos je Schreibtransaktion des Laufs (höchstens alle fünf Sekunden geschrieben).
+pub const STRONG_WRITE_PHOTOS: usize = 32;
 /// Referenzauswahl (`recognition`, `matching::select_references`): Je Person werden
 /// `reference_limit(n)` der `n` bestätigten Gesichter ausgewählt, eine sättigende Funktion ohne
 /// Untergrenze: `ceil(S·(1−exp(−n/S)))`, höchstens `n`, mit `S = REFERENCE_SATURATION`. Für

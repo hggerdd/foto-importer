@@ -12,7 +12,50 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Hash wird beim Laden geprüft. Standard ist YuNet + SFace, wählbar SCRFD + ArcFace
   (Gewichte nur für nicht kommerzielle Forschung lizenziert).
 - Modellschlüssel enthalten ID, Version, Hash und `:rust-ort-v1`. Vektoren verschiedener
-  Schlüssel werden nie gemischt oder umgedeutet.
+  Schlüssel werden nie gemischt oder umgedeutet. `rust.embedder_key` ist das **aktive
+  Vergleichsmodell** (Referenzen, Abgleich, Gruppen, Statistik), `rust.base_embedder_key` das
+  Analysemodell (SFace, schreibt die Analyse).
+- **Skalen je Modell** (`config::model_scale`, `SFACE_SCALE`, `ARCFACE_SCALE`): Jede feste
+  Kosinusgrenze (Vorschlag, Abstand, sicher, Reglerbereich, Gruppenbildung und -anhängen,
+  Duplikatfilter, Untergrenze „Wahrscheinlich X“ und Statistik, Statistikachse, „Möglicherweise
+  dieselbe Person“) kommt aus der Skala des aktiven Modells; `rust.thresholds.<Modell>.*`
+  überschreibt je Sammlung.
+
+**Genaueres Vergleichsmodell** (`core::strong`, ArcFace `arcface_buffalo_l`, InsightFace
+buffalo_l `w600k_r50.onnx`, 512-d; nur nicht kommerziell lizenziert)
+
+- Läuft **nie im Hintergrund**, nur per Knopf „Gesichter genauer berechnen (über Nacht)“ unter
+  „Automatik & Werkzeuge“ (Auftrag der Art Fotoanalyse, Fortschritt und Abbruch in der
+  Fußleiste, Phase `FacePhase::Precise`). Einrichten lädt das Archiv als Strom und speichert nur
+  das Gewicht (`face_models::install_models`); die Oberfläche nennt die Lizenz.
+- Erkennung und Gesichter bleiben unverändert. Je Gesicht mit Qualität ab 0,5 und Landmarks
+  (außer „Kein Gesicht“, auch historische und ignorierte) entsteht aus den **gespeicherten
+  Landmarks** und derselben Analysequelle (`previews::load` 1600 Pixel; für Gesichter, die erst
+  aus der 3200-Pixel-Fassung Merkmale bekamen, diese) ein zusätzlicher Vektor. Ausrichtung:
+  Ähnlichkeitstransformation auf die ArcFace-Vorlage 112×112 (`inference::align`), Eingabe RGB
+  `(x − 127,5) / 127,5`, L2-normiert; gegen die InsightFace-Vorverarbeitung geprüft
+  (Kosinus ≥ 0,9998, siehe Validierung).
+- **Fortsetzbar:** Stand ist der Vektor selbst; ein neuer Lauf rechnet nur Gesichter ohne ihn.
+  Geschrieben wird je 32 Fotos bzw. alle 5 s, bei Abbruch das schon Gerechnete; ein Vektor wird
+  nur gespeichert, wenn das Gesicht noch dieselben Landmarks hat. Je Foto ein `face_jobs`-Eintrag
+  (`embed`, Modellschlüssel, `done`/`error`). Ein nicht lesbares Foto bricht den Lauf nicht ab
+  (Fehler gezählt und geloggt, nicht als fehlend markiert; der nächste Lauf versucht es erneut).
+  Fotos laden `config::STRONG_LOAD_THREADS` Threads, gerechnet wird auf einer Sitzung mit
+  `config::STRONG_THREADS` Threads (CPU, siehe Messung). Während des Laufs hält
+  `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` Windows wach, danach nicht mehr.
+- **Umschalten** nur durch den Nutzer: „Auf ArcFace umschalten“ erst ab
+  `config::STRONG_SWITCH_COVERAGE` (98 %) der aktiven Gesichter mit Vektor; „Zurück zu SFace“
+  jederzeit. Vor dem Umschalten auf ArcFace entsteht eine Sicherung (wie beim Detektorwechsel);
+  dann werden alle Personen mit Bestätigungen für das Modell als geändert markiert und
+  Referenzen, Abgleich und Gruppen neu gebildet (`apply_knowledge`). Bestätigungen,
+  Ablehnungen, Ignorieren, „Kein Gesicht“ hängen am Gesicht und gelten unverändert; Pins und
+  Ausschlüsse sind je Modell gespeichert und werden beim Umschalten in das Zielmodell
+  übernommen (die des bisherigen Modells bleiben). Gesichter ohne
+  ArcFace-Vektor stehen unter ArcFace bei „Ungeeignet“.
+- **Neue Gesichter:** Ist ArcFace aktiv, rechnet die normale Analyse den ArcFace-Vektor gleich
+  mit (auch bei der Nachberechnung kleiner Gesichter); ist es nicht aktiv, erst der nächste
+  ausdrückliche Lauf. Findet eine Neuanalyse ein Gesicht mit neuen Landmarks wieder, werden
+  Vektoren anderer Modelle gelöscht und später neu gerechnet.
 
 **Analyse** (`faces::analyze_scoped`)
 

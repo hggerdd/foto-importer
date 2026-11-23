@@ -320,6 +320,7 @@ impl PhotoApp {
                     self.auto_metadata_pending = true;
                 }
                 if running.write && running.collection == self.settings.collection {
+                    self.strong_coverage = None;
                     self.relationship_graph.stale = true;
                     self.requery_collection();
                     self.refresh_faces();
@@ -333,6 +334,11 @@ impl PhotoApp {
                 }
             }
             Outcome::Report(text) => self.report = Some(text),
+            Outcome::StrongCoverage(collection, coverage) => {
+                if collection == self.settings.collection {
+                    self.strong_coverage = Some((collection, std::time::Instant::now(), coverage));
+                }
+            }
             other => return Some(other),
         }
         None
