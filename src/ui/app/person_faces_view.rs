@@ -101,7 +101,16 @@ impl PhotoApp {
             (
                 "person-confirmed",
                 "Bestätigt".to_string(),
-                count("person-confirmed", Some(person.count)),
+                count(
+                    "person-confirmed",
+                    // Mit Ordnerfilter die bestätigten Gesichter der Person im Ordner.
+                    Some(
+                        self.face_page
+                            .folder
+                            .as_ref()
+                            .map_or(person.count, |folder| folder.person_confirmed),
+                    ),
+                ),
             ),
             (
                 "person-rejected",
@@ -134,7 +143,14 @@ impl PhotoApp {
     }
 
     fn empty_person_faces(&self, ui: &mut egui::Ui, name: &str) {
-        if self.person_face_mode == "person-rejected" {
+        if let Some(folder) = &self.face_folder {
+            self.empty(
+                ui,
+                &format!("Im Ordner „{folder}“ zeigt diese Seite keine Gesichter."),
+                "Wähle eine andere Seite, einen anderen Ordner oder „Alle Ordner“ (✕ neben dem \
+                 Ordner).",
+            );
+        } else if self.person_face_mode == "person-rejected" {
             self.empty(
                 ui,
                 &format!("Kein Gesicht ist als „nicht {name}“ abgelehnt."),

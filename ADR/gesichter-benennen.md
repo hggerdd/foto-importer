@@ -35,6 +35,28 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   zusammengelegt, weil zwei gespeicherte Gruppen einander nicht ähnlich genug sein müssen
   (Complete-Link) und eine gemischte Karte falsche Bestätigungen nahelegte. Große Gruppen
   lohnen sich daher vor allem in „Vorschläge prüfen“ und „Wahrscheinlich X“.
+- **Ordnerfilter:** Über der Werkzeugzeile aller Gesichterseiten (`face_folder_bar`, auch auf
+  der Gesichterseite einer Person) wählt ein Feld mit Tippfilter (`select::FilterSelect`,
+  Einträge aus dem Ordnerbaum der Sammlung samt Fotozahl) „Alle Ordner“ oder einen Ordner;
+  der Ordnerbaum der Sammlung bietet dazu im Rechtsklickmenü „Gesichter dieses Ordners
+  zuordnen“ (öffnet „Gesichter“ im zuletzt gewählten Reiter mit diesem Filter). Ein Gesicht
+  gehört zum Ordner, wenn seine Analysequelle (`faces.source_relpath`) im Ordner oder darunter
+  liegt (`faces::FaceFolder`; Bereich `ordner/` ≤ Pfad < `ordner0`, also „Party/jpg“ ja,
+  „Party2“ nie). Ein Parameter `folder` von `faces::page_with` filtert alle Seiten mit
+  Gruppen: „Vorschläge prüfen“ (samt Zahlen des Personenfilters), „Bestätigt“, „Ignoriert“,
+  „Ungeeignet“, „Benennen“ und „Wahrscheinlich X“ (beide Abschnitte), „Bestätigt“ und „Nicht
+  X“ einer Person. Vorschläge, Referenzen, Werte, Abschnitte und Ordnung bleiben
+  sammlungsweit; der Filter schränkt nur die gezeigten Gesichter ein. In „Benennen“ zeigt jede
+  gespeicherte Ähnlichkeitsgruppe nur ihre Gesichter aus dem Ordner (größte im Ordner zuerst),
+  leere entfallen, Gruppen werden nie gemischt. Die Reiter und Umschalter nennen die Zahlen
+  des Ordners (`FacePage::folder`, `faces::FolderCounts`), die Statuszeile bleibt
+  sammlungsweit. Hat der Ordner nicht analysierte Fotos (Analysequelle vorhanden, keine
+  fertige Erkennung des aktiven Detektors), steht darunter „N Fotos dieses Ordners noch nicht
+  analysiert“ mit „Diesen Ordner analysieren“: dieselbe Fotoanalyse wie „Fotos analysieren“
+  mit Ordnerbezug auf genau diesen Ordner, ohne Portion. Der Filter gilt nur für die Sitzung
+  und endet mit dem Wechsel der Sammlung (nicht gespeichert, damit beim nächsten Start nicht
+  unbemerkt gefiltert ist); solange er gilt, steht „Nur Ordner:“ hervorgehoben mit dem Ordner
+  und ✕ (alle Ordner) in der Leiste. Ein Wechsel liest ab Seite 1 neu.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
   Vorschläge mit Porträt (ein Klick wählt und speichert), „Bestätigen“, „Nicht interessiert“.
   Der Vorschlag ist das Mittel über bis zu fünf Gesichter der Gruppe
@@ -205,4 +227,13 @@ eine Hauptaktion. Jede Stelle, die Gesichter
 entscheidet, nutzt `queue_hiding`. Namensentwürfe gelten für genau diese Gesichter und Person
 und überleben Fortschrittsereignisse. Gruppenaktionen erzeugen keine zusätzlichen Personen
 und löschen keine Vorkommen. Seitenabfragen müssen zu den Teilindizes passen
-(`tests/face_save_performance.rs`).
+(`tests/face_save_performance.rs`). Eine neue Seite mit Gesichtsgruppen beachtet den
+Ordnerfilter (`FaceFolder::predicate` in SQL oder die Gesichts-IDs des Ordners für
+sammlungsweit berechnete Listen) und braucht einen Fall in
+`tests/face_pages.rs::folder_filter_limits_every_face_page_to_the_folder_and_its_subfolders`.
+Die Bedingung geht über `files.relpath` (Index) und `ix_faces_photo`; kein `LIKE` auf Pfaden
+der Gesichter. Die Gruppenabfrage von „Benennen“ im Ordner hat eine feste Join-Reihenfolge
+(`faces::unknown_plan`, Test): Messung 2026-11-23 an `E:\Bilder` nur lesend (66 462
+Gesichter, 74 696 Fotos; dieselben Abfragen über Python-sqlite3, nicht die App), Ordner mit
+6 284 Gesichtern: Ordnerzahlen kalt 1,2 s, Gruppen ohne feste Reihenfolge kalt 3,4 s, mit ihr
+0,03 s warm; Ordner mit 237 Gesichtern alle Abfragen zusammen unter 0,4 s kalt.

@@ -65,7 +65,10 @@
   Inspektor die Werte neu. Er ist gesperrt, solange ein Auftrag die Sammlung belegt.
 - **Ordnerbaum:** Einklappbares Seitenfeld, wird in einem Workerauftrag vollständig gelesen
   und im Speicher gehalten; Auf- und Zuklappen greift nicht auf die Datenbank zu. Ein Klick
-  setzt den Ordnerfilter. Zählung und Sortierung folgen denselben Varianten- und Präfixregeln
+  setzt den Ordnerfilter; das Rechtsklickmenü „Gesichter dieses Ordners zuordnen“ öffnet
+  „Gesichter“ mit dem Ordnerfilter der Gesichterseiten (siehe
+  [Gesichter benennen](gesichter-benennen.md)), dessen Auswahlfeld dieselbe Ordnerliste nutzt.
+  Zählung und Sortierung folgen denselben Varianten- und Präfixregeln
   wie die Suche (Test vergleicht beide). Ändert sich der Bestand (Fotos, Dateien) während
   eines Lesens, wird es **nicht abgebrochen**: das Ergebnis wird gezeigt und danach genau
   einmal nachgelesen. Nur Antworten für eine andere Sammlung werden verworfen. Dauert ein

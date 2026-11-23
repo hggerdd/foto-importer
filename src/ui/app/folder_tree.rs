@@ -11,6 +11,8 @@ const INDENT: f32 = 14.0;
 enum Action {
     Select(Option<String>),
     Toggle(String),
+    /// Kontextmenü „Gesichter dieses Ordners zuordnen“.
+    Faces(String),
     Retry,
 }
 
@@ -162,6 +164,13 @@ impl PhotoApp {
                                             action = Some(Action::Toggle(path.clone()));
                                         }
                                     }
+                                    response.context_menu(|ui| {
+                                        if ui.button("Gesichter dieses Ordners zuordnen").clicked()
+                                        {
+                                            action = Some(Action::Faces(path.clone()));
+                                            ui.close();
+                                        }
+                                    });
                                     if response.clicked() {
                                         action = Some(if arrow && *has_children {
                                             Action::Toggle(path.clone())
@@ -196,11 +205,21 @@ impl PhotoApp {
                 match action {
                     Some(Action::Select(folder)) => self.navigate_collection(0, folder),
                     Some(Action::Toggle(path)) => self.folder_tree.toggle(&path),
+                    Some(Action::Faces(path)) => self.open_faces_in_folder(path),
                     Some(Action::Retry) => self.folder_tree.retry_failed(),
                     None => {}
                 }
             },
         );
+    }
+
+    /// Öffnet die Ansicht „Gesichter“ (zuletzt gewählter Reiter) mit dem Ordnerfilter `folder`.
+    pub(super) fn open_faces_in_folder(&mut self, folder: String) {
+        self.face_folder =
+            crate::core::faces::FaceFolder::new(&folder).map(|folder| folder.path().to_string());
+        self.clear_face_groups();
+        self.face_page.folder = None;
+        self.open_view(View::Faces);
     }
 
     /// Ziehbare Kante zwischen Baum und Galerie; die Breite wird begrenzt und gespeichert.

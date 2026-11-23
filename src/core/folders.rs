@@ -304,6 +304,22 @@ impl FolderTree {
         self.nodes.as_deref().map_or(0, count)
     }
 
+    /// Alle Ordner (Pfad, Fotos samt Unterordnern) in Baumreihenfolge, unabhängig vom
+    /// Aufklappzustand; leer, solange nichts gelesen ist. Für Auswahlfelder außerhalb des Baums.
+    pub fn folders(&self) -> Vec<(String, usize)> {
+        fn collect(nodes: &[Node], out: &mut Vec<(String, usize)>) {
+            for node in nodes {
+                out.push((node.path.clone(), node.photos));
+                collect(&node.children, out);
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(nodes) = &self.nodes {
+            collect(nodes, &mut out);
+        }
+        out
+    }
+
     /// Sichtbare Zeilen unter der Wurzel, Tiefe zuerst. Nur aufgeklappte Ordner zeigen ihre
     /// Unterordner.
     pub fn rows(&self) -> Vec<Row> {

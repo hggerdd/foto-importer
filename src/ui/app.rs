@@ -358,6 +358,9 @@ pub struct PhotoApp {
     face_index: usize,
     /// Personenfilter im Reiter „Vorschläge prüfen“.
     review_person: Option<i64>,
+    /// Ordnerfilter aller Gesichterseiten (relativer Ordner der Sammlung samt Unterordnern);
+    /// gilt nur für die Sitzung und endet mit dem Wechsel der Sammlung.
+    face_folder: Option<String>,
     /// Die letzte Gruppenentscheidung kam von einer Taste: die nächste Gruppe erhält dann
     /// keinen Fokus im Namensfeld, damit die Tasten weiter gelten.
     face_keys: bool,
@@ -516,6 +519,7 @@ impl PhotoApp {
             person_face_mode: "probable",
             face_index: 0,
             review_person: None,
+            face_folder: None,
             face_keys: false,
             face_row_tops: Vec::new(),
             face_advance: None,
@@ -1235,6 +1239,7 @@ impl PhotoApp {
         self.people_list.reset();
         self.face_index = 0;
         self.review_person = None;
+        self.face_folder = None;
         self.face_advance = None;
         self.face_row_tops.clear();
         self.undo.clear();
@@ -1282,6 +1287,7 @@ impl PhotoApp {
         let page = self.face_index;
         let person = self.page_person();
         let size = self.settings.face_group_size;
+        let folder = self.face_folder.clone();
         self.launch(
             "Personen und Gesichter lesen",
             false,
@@ -1290,7 +1296,9 @@ impl PhotoApp {
                 let c = Collection::open(&root, false)?;
                 c.cancel_with(&control);
                 c.db.execute_batch("BEGIN")?;
-                let read = |index| faces::page_with(&c, &mode, index, person, size, &control);
+                let read = |index| {
+                    faces::page_with(&c, &mode, index, person, size, folder.as_deref(), &control)
+                };
                 let mut index = page;
                 let mut snapshot = read(index)?;
                 if groups && index > 0 && snapshot.groups.is_empty() {
@@ -1367,6 +1375,18 @@ impl PhotoApp {
         );
     }
     fn collection_action(&mut self, action: &str) {
+        self.collection_action_in(action, self.work_scope());
+    }
+    /// „Diesen Ordner analysieren“ (Ordnerfilter der Gesichterseiten): dieselbe Fotoanalyse
+    /// wie „Fotos analysieren“, beschränkt auf `folder` und ohne Portion, damit der Ordner
+    /// in einem Lauf fertig wird.
+    fn analyze_folder(&mut self, folder: String) {
+        self.collection_action_in(
+            "analyze",
+            crate::core::scope::Scope::new(None, Some(folder)),
+        );
+    }
+    fn collection_action_in(&mut self, action: &str, scope: crate::core::scope::Scope) {
         if self.busy() || self.settings.collection.is_empty() {
             return;
         }
@@ -1381,7 +1401,6 @@ impl PhotoApp {
         }
         let settings = self.settings.clone();
         let wipe_central = self.central_ui.wipe_references;
-        let scope = self.work_scope();
         let action = action.to_string();
         let detector = self.detector.clone();
         let embedder = self.embedder.clone();

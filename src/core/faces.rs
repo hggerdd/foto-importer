@@ -16,6 +16,8 @@ use std::{
 
 mod portraits;
 pub use portraits::{person_portrait, person_portraits};
+mod folder;
+pub use folder::{FaceFolder, FolderCounts, unknown_plan};
 mod pages;
 pub use pages::{
     REVIEW_ROWS, active_detector_key, page, page_filtered, page_with, photo_analysis_done,
@@ -135,6 +137,9 @@ pub struct FacePage {
     /// Anzeigegröße, mit der die Seite geschnitten wurde (`config::group_size`); bestimmt mit
     /// `config::face_groups_per_page` die Seitenzahl. 0 nur vor dem ersten Lesen.
     pub group_size: usize,
+    /// Mit Ordnerfilter: die Zahlen der Reiter im Ordner und seine noch nicht analysierten
+    /// Fotos; die Gruppen der Seite sind dann schon gefiltert. `None` ohne Filter.
+    pub folder: Option<FolderCounts>,
     /// Datenstand, zu dem die Seite gelesen wurde (`core::revision`; `None` ohne Revision).
     /// Caches der Oberfläche, die aus denselben Daten entstehen, prüfen sich daran.
     pub revisions: Option<super::revision::Revisions>,
