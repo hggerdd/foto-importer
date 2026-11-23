@@ -24,6 +24,29 @@ fn changing_the_strictness_starts_one_write_task() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn switching_burst_suggestions_starts_one_write_task() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(Collection::open(root.path(), true)?);
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.save_burst(false);
+    assert_eq!(
+        app.tasks
+            .iter()
+            .filter(|t| t.kind == JobKind::Mutation)
+            .count(),
+        1
+    );
+    assert_eq!(
+        app.burst_draft,
+        Some((app.settings.collection.clone(), false))
+    );
+    Ok(())
+}
+
 fn settings_frame(app: &mut PhotoApp, context: &egui::Context) {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(

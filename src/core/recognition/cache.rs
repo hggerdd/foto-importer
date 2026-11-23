@@ -87,6 +87,8 @@ pub(super) struct MatchState {
     /// `rowid` der Merkmalszeile je Gesicht des Modells.
     pub(super) embeddings: std::collections::HashMap<i64, i64>,
     pub(super) rejections: BTreeMap<i64, BTreeSet<i64>>,
+    /// Serien desselben Lesestands; `None`, wenn Serienvorschläge aus sind.
+    pub(super) series: Option<super::burst::Series>,
 }
 impl MatchState {
     pub(super) fn load(collection: &Collection, key: &str) -> Result<Self> {
@@ -122,11 +124,25 @@ impl MatchState {
                     .and_then(|v| v.parse().ok()),
                 wanted: row.get(8)?,
                 vector: None,
+                burst: None,
             });
         }
         drop(rows);
         drop(statement);
         faces.sort_unstable_by_key(|f| (f.photo, f.id));
+        let marks: std::collections::HashMap<i64, i64> = collection
+            .db
+            .prepare("SELECT face_id,person_id FROM face_burst WHERE embedder_id=?")?
+            .query_map([key], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for face in &mut faces {
+            face.burst = marks.get(&face.id).copied();
+        }
+        let series = if super::burst::burst_enabled(collection)? {
+            Some(super::burst::Series::load(collection)?)
+        } else {
+            None
+        };
         let embeddings = collection
             .db
             .prepare("SELECT face_id,rowid FROM face_embeddings WHERE embedder_id=?")?
@@ -153,6 +169,7 @@ impl MatchState {
             faces,
             embeddings,
             rejections,
+            series,
         })
     }
 }

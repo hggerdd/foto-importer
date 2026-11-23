@@ -17,6 +17,8 @@ mod name_suggestions;
 pub use name_suggestions::{
     SuggestionCache, Suggestions, group_suggestions, group_suggestions_cached, suggestions,
 };
+mod burst;
+pub use burst::{BURST_KEY, burst_enabled, set_burst_enabled};
 mod rematching;
 use rematching::{MatchFace, load_births};
 pub use rematching::{rematch, rematch_full, rematch_with};

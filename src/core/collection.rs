@@ -118,6 +118,7 @@ impl Collection {
             }
             if write {
                 db.execute_batch("PRAGMA journal_mode=WAL;")?;
+                super::migrations::ensure_tables(&db)?;
                 super::migrations::ensure_indexes(&db)?;
                 super::migrations::ensure_folder_counts(&db)?;
                 // Neue Beziehungstypen sind nur Zeilen; ältere Sammlungen erhalten sie beim

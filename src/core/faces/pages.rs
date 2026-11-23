@@ -2,7 +2,7 @@
 //! und die Gesichter eines Fotos.
 use super::folder::FaceFolder;
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
     Ok(collection
@@ -49,6 +49,23 @@ fn page_rejections(
     }
     Ok(found)
 }
+/// Serienvorschläge des Modells (Gesichts-ID → Person, `face_burst`), nur für Gesichter, die
+/// diese Person noch maschinell tragen. Leer, wenn die Tabelle fehlt (ältere Sammlung, nur
+/// lesend geöffnet).
+pub fn burst_marks(collection: &Collection, embedder: &str) -> Result<HashMap<i64, i64>> {
+    if embedder.is_empty() || !crate::core::migrations::table_exists(&collection.db, "face_burst")?
+    {
+        return Ok(HashMap::new());
+    }
+    Ok(collection
+        .db
+        .prepare_cached(
+            "SELECT b.face_id,b.person_id FROM face_burst b JOIN faces f ON f.id=b.face_id AND f.person_id=b.person_id
+             WHERE b.embedder_id=? AND f.assignment IN ('suggested','auto') AND f.retained=0 AND f.ignored=0",
+        )?
+        .query_map([embedder], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?)
+}
 /// Gesichts-IDs je Teilgruppe und offene Vorschläge je Person.
 type ReviewParts = (Vec<Vec<i64>>, BTreeMap<i64, usize>);
 /// Teilgruppen des Reiters „Vorschläge prüfen“ als Gesichts-IDs, sicherste zuerst, dazu
@@ -56,7 +73,8 @@ type ReviewParts = (Vec<Vec<i64>>, BTreeMap<i64, usize>);
 ///
 /// Je Person werden die Vorschläge nach Ähnlichkeit absteigend in Teile zu höchstens
 /// `size` (Anzeigegröße) geschnitten; die Teile aller Personen sind nach ihrer **mittleren
-/// Ähnlichkeit** absteigend geordnet (bei Gleichstand Person, dann Teil). Das Mittel statt
+/// Ähnlichkeit** absteigend geordnet (bei Gleichstand Person, dann Teil). Serienvorschläge
+/// (`marks`) bilden je Person eigene Teile, die vor allen anderen stehen. Das Mittel statt
 /// des besten Werts verhindert, dass ein einzelner hoher Treffer eine schwache Gruppe nach
 /// vorn zieht. Eine Abfrage über den Teilindex `ix_faces_review`, keine Fensterfunktion.
 ///
@@ -67,6 +85,7 @@ fn review_parts(
     only: Option<i64>,
     size: usize,
     within: Option<&HashSet<i64>>,
+    marks: &HashMap<i64, i64>,
 ) -> Result<ReviewParts> {
     let mut by_person: BTreeMap<Option<i64>, Vec<(f32, i64)>> = BTreeMap::new();
     let mut statement = collection.db.prepare_cached(REVIEW_ROWS)?;
@@ -85,19 +104,39 @@ fn review_parts(
         .iter()
         .filter_map(|(person, faces)| Some(((*person)?, faces.len())))
         .collect();
-    let mut parts: Vec<(f32, Option<i64>, usize, Vec<i64>)> = Vec::new();
+    // Serie zuerst, mittlere Ähnlichkeit, Person, Teil, Gesichter.
+    type Part = (bool, f32, Option<i64>, usize, Vec<i64>);
+    let mut parts: Vec<Part> = Vec::new();
     for (person, mut faces) in by_person {
         if only.is_some() && person != only {
             continue;
         }
         faces.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-        for (part, chunk) in faces.chunks(size).enumerate() {
-            let mean = chunk.iter().map(|face| face.0).sum::<f32>() / chunk.len() as f32;
-            parts.push((mean, person, part, chunk.iter().map(|f| f.1).collect()));
+        let (series, rest): (Vec<_>, Vec<_>) = faces
+            .into_iter()
+            .partition(|face| person.is_some() && marks.get(&face.1) == person.as_ref());
+        let mut part = 0;
+        for (burst, faces) in [(true, series), (false, rest)] {
+            for chunk in faces.chunks(size) {
+                let mean = chunk.iter().map(|face| face.0).sum::<f32>() / chunk.len() as f32;
+                parts.push((
+                    burst,
+                    mean,
+                    person,
+                    part,
+                    chunk.iter().map(|f| f.1).collect(),
+                ));
+                part += 1;
+            }
         }
     }
-    parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    Ok((parts.into_iter().map(|part| part.3).collect(), people))
+    parts.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.1.total_cmp(&a.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    Ok((parts.into_iter().map(|part| part.4).collect(), people))
 }
 /// Alle offenen Vorschläge mit Person und Ähnlichkeit (Reiter „Vorschläge prüfen“).
 pub const REVIEW_ROWS: &str = "SELECT f.person_id,f.confidence,f.id FROM faces f WHERE f.retained=0 AND f.assignment IN ('suggested','auto') AND f.ignored=0 ORDER BY f.person_id,f.id";
@@ -199,6 +238,8 @@ struct ProbablePage {
     faces_total: usize,
     others: usize,
     better: BTreeMap<i64, (i64, f32)>,
+    /// Serienvorschläge des Modells (`burst_marks`).
+    marks: HashMap<i64, i64>,
 }
 /// Seite des Reiters „probable“: unbestätigte Gesichter, die wahrscheinlich `person` zeigen
 /// (`recognition::person_candidates`). Zuerst die Gesichter, deren beste Person `person` ist,
@@ -206,7 +247,7 @@ struct ProbablePage {
 /// nach Personenscore absteigend für sich in Gruppen zu `size` geschnitten, sodass keine
 /// Gruppe beide Abschnitte mischt. Jedes Gesicht trägt für die Seite `person` als Vorschlag
 /// und seinen Personenscore als `score`, damit die Karte wie in „Vorschläge prüfen“ bestätigt
-/// und ablehnt.
+/// und ablehnt. Gesichter mit Serienvorschlag für `person` stehen als eigener Abschnitt vorn.
 fn probable_page(
     collection: &Collection,
     embedder: &str,
@@ -219,6 +260,7 @@ fn probable_page(
     let Some(person) = person.filter(|_| !embedder.is_empty()) else {
         return Ok(ProbablePage::default());
     };
+    let marks = burst_marks(collection, embedder)?;
     let mut candidates = crate::core::recognition::person_candidates(
         collection,
         embedder,
@@ -230,13 +272,21 @@ fn probable_page(
     if let Some(within) = within {
         candidates.retain(|c| within.contains(&c.face));
     }
+    // Serienvorschläge für diese Person stehen als eigener Abschnitt vorn (Reihenfolge
+    // innerhalb wie sonst).
+    let (series, candidates): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|c| marks.get(&c.face) == Some(&person));
     let split = candidates.partition_point(|c| c.better.is_none());
     let (first, second) = candidates.split_at(split);
-    let parts: Vec<&[crate::core::recognition::PersonCandidate]> =
-        first.chunks(size).chain(second.chunks(size)).collect();
+    let parts: Vec<&[crate::core::recognition::PersonCandidate]> = series
+        .chunks(size)
+        .chain(first.chunks(size))
+        .chain(second.chunks(size))
+        .collect();
     let mut result = ProbablePage {
         total_groups: parts.len(),
-        faces_total: candidates.len(),
+        faces_total: series.len() + candidates.len(),
         others: second.len(),
         ..ProbablePage::default()
     };
@@ -256,6 +306,7 @@ fn probable_page(
             result.groups.push(rows);
         }
     }
+    result.marks = marks;
     Ok(result)
 }
 /// Gesichter mit Ablehnung „nicht `person`“, die die Seite „person-rejected“ zeigt: aktiv
@@ -416,6 +467,11 @@ pub fn page_with(
     let mut probable_others = 0;
     let mut better = BTreeMap::new();
     let mut confirmed_as = BTreeMap::new();
+    let mut marks = if mode == "review" {
+        burst_marks(collection, &status.embedder)?
+    } else {
+        HashMap::new()
+    };
     if matches!(mode, "persons" | "tree" | "graph") {
         // Diese Reiter zeigen keine Gesichtsgruppen: die teure Gruppenabfrage entfällt.
         let (relations, family, questions) = tree_state(collection)?;
@@ -440,6 +496,7 @@ pub fn page_with(
             better: BTreeMap::new(),
             rejected_total: 0,
             confirmed_as: BTreeMap::new(),
+            burst: BTreeMap::new(),
             group_size: size,
             folder: None,
             revisions: None,
@@ -465,6 +522,7 @@ pub fn page_with(
             better: BTreeMap::new(),
             rejected_total: 0,
             confirmed_as: BTreeMap::new(),
+            burst: BTreeMap::new(),
             group_size: size,
             folder: folder_counts,
             revisions: None,
@@ -483,6 +541,7 @@ pub fn page_with(
             control,
             within.as_ref(),
         )?;
+        marks = probable.marks;
         (groups, total_groups, faces_total) =
             (probable.groups, probable.total_groups, probable.faces_total);
         (probable_others, better) = (probable.others, probable.better);
@@ -501,7 +560,7 @@ pub fn page_with(
             None => unknown_page(collection, &status.embedder, page, size)?,
         };
     } else if mode == "review" {
-        let (parts, people) = review_parts(collection, person, size, within.as_ref())?;
+        let (parts, people) = review_parts(collection, person, size, within.as_ref(), &marks)?;
         review_people = people;
         total_groups = parts.len();
         for ids in parts.iter().skip(page * per_page).take(per_page) {
@@ -567,6 +626,11 @@ pub fn page_with(
         }
     }
     let rejections = page_rejections(collection, &groups)?;
+    let burst = groups
+        .iter()
+        .flatten()
+        .filter_map(|face| Some((face.id, *marks.get(&face.id)?)))
+        .collect();
     let (relations, family, questions) = tree_state(collection)?;
     let people = people(collection)?;
     let (rows, mut portraits) =
@@ -610,6 +674,7 @@ pub fn page_with(
         better,
         rejected_total,
         confirmed_as,
+        burst,
         group_size: size,
         folder: folder_counts,
         revisions: None,

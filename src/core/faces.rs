@@ -77,6 +77,8 @@ pub struct Status {
     pub review_threshold: f32,
     /// Geltender Mindestabstand zur zweitbesten Person (`recognition::Limits::margin`).
     pub review_margin: f32,
+    /// Sammlungsoption „Serienbilder“ (`recognition::burst_enabled`).
+    pub burst: bool,
 }
 impl Status {
     /// Offene Gesichter ohne Gruppe unter „Benennen“: ohne Namensmerkmale (zu klein oder
@@ -137,6 +139,10 @@ pub struct FacePage {
     /// Anzeigegröße, mit der die Seite geschnitten wurde (`config::group_size`); bestimmt mit
     /// `config::face_groups_per_page` die Seitenzahl. 0 nur vor dem ersten Lesen.
     pub group_size: usize,
+    /// Reiter „review“ und „probable“: Gesichter der Seite mit Serienvorschlag (Gesichts-ID →
+    /// vorgeschlagene Person; `face_burst`), nur solange das Gesicht diese Person maschinell
+    /// trägt. Die Oberfläche kennzeichnet sie, wenn die Person die der Gruppe ist.
+    pub burst: BTreeMap<i64, i64>,
     /// Mit Ordnerfilter: die Zahlen der Reiter im Ordner und seine noch nicht analysierten
     /// Fotos; die Gruppen der Seite sind dann schon gefiltert. `None` ohne Filter.
     pub folder: Option<FolderCounts>,
@@ -315,6 +321,7 @@ pub fn status(collection: &Collection) -> Result<Status> {
     let limits = super::recognition::Limits::load(collection)?;
     status.review_threshold = limits.review;
     status.review_margin = limits.margin;
+    status.burst = super::recognition::burst_enabled(collection)?;
     status.detector_id = setting(collection, "active_detector")?.unwrap_or_else(|| "yunet".into());
     status.embedder_id = setting(collection, "active_embedder")?.unwrap_or_else(|| "sface".into());
     for (key, target) in [

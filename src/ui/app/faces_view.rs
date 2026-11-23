@@ -646,6 +646,8 @@ impl PhotoApp {
         let target = tile_target(&mode, &self.face_page, group);
         let show_icons = self.settings.tile_icons;
         let tile_hint = tile_hint(show_icons, target.as_ref(), can_ignore(&mode));
+        // Serienkennzeichnung nur für die Person der Karte.
+        let target_person = proposed.as_ref().map(|p| p.id);
         theme::card(ui).show(ui, |ui| {
             // Auch kleine Gruppen belegen die volle Breite statt auf ihren Inhalt zu schrumpfen.
             ui.set_min_width(ui.available_width());
@@ -708,6 +710,16 @@ impl PhotoApp {
                                 detail = format!("{detail} · {others}");
                             }
                             ui.label(RichText::new(detail).small().weak());
+                            if let Some(series) =
+                                burst_summary(group, &self.face_page.burst, person.id)
+                            {
+                                ui.label(
+                                    RichText::new(series)
+                                        .small()
+                                        .color(ui.visuals().hyperlink_color),
+                                )
+                                .on_hover_text(BURST_HINT);
+                            }
                         });
                         ui.add_space(12.0);
                         if kind == CardKind::Assigned {
@@ -969,6 +981,17 @@ impl PhotoApp {
                                     }
                                     Some(TileIcon::Name) => name_one = Some(face.id),
                                     None => {}
+                                }
+                                if is_burst(&self.face_page.burst, face.id, target_person) {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(BURST_TILE)
+                                                .small()
+                                                .color(ui.visuals().hyperlink_color),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(BURST_HINT);
                                 }
                                 if let Some(note) = person_faces_view::better_note(
                                     self.face_page.better.get(&face.id),
@@ -1899,6 +1922,30 @@ fn rejection_note(rejected: Option<&Vec<i64>>, people: &[faces::Person]) -> Opti
     (!names.is_empty()).then(|| format!("nicht {}", names.join(", ")))
 }
 
+/// Kennzeichnung unter einer Kachel mit Serienvorschlag und ihr Hinweistext.
+const BURST_TILE: &str = "↻ Serie";
+const BURST_HINT: &str = "Aus Serie mit bestätigtem Foto: Ein Foto wenige Sekunden davor oder \
+     danach (gleiche Kamera, gleicher Ordner) zeigt an derselben Stelle die bestätigte Person. \
+     Nur ein Vorschlag, nichts ist bestätigt.";
+
+/// Trägt das Gesicht einen Serienvorschlag für die Person der Karte?
+fn is_burst(burst: &BTreeMap<i64, i64>, face: i64, person: Option<i64>) -> bool {
+    person.is_some() && burst.get(&face).copied() == person
+}
+
+/// Zeile der Karte: wie viele Gesichter der Gruppe aus einer Serie mit bestätigtem Foto stammen.
+fn burst_summary(group: &[Face], burst: &BTreeMap<i64, i64>, person: i64) -> Option<String> {
+    let count = group
+        .iter()
+        .filter(|f| is_burst(burst, f.id, Some(person)))
+        .count();
+    match count {
+        0 => None,
+        n if n == group.len() => Some("↻ Aus Serie mit bestätigtem Foto".to_string()),
+        n => Some(format!("↻ {n} aus Serie mit bestätigtem Foto")),
+    }
+}
+
 /// „bestätigt: Ben“ unter einem Gesicht der Seite „Nicht X“, das einer anderen Person bestätigt
 /// gehört (der Haken würde es X zuordnen).
 fn confirmed_note(person: Option<&i64>, people: &[faces::Person]) -> Option<String> {
@@ -1934,6 +1981,34 @@ mod tile_note_tests {
             gender: String::new(),
             note: String::new(),
         }
+    }
+    #[test]
+    fn burst_marks_only_for_the_person_of_the_card() {
+        let face = |id| Face {
+            id,
+            photo: id,
+            source: String::new(),
+            bbox: [0.0; 4],
+            person: Some(7),
+            assignment: Some("suggested".into()),
+            ignored: false,
+            score: 0.5,
+        };
+        let burst: BTreeMap<i64, i64> = [(1, 7), (2, 8)].into();
+        assert!(is_burst(&burst, 1, Some(7)));
+        assert!(!is_burst(&burst, 1, Some(8)), "andere Person");
+        assert!(!is_burst(&burst, 1, None), "ohne Person der Karte");
+        assert!(!is_burst(&burst, 3, Some(7)));
+        let group = [face(1), face(2), face(3)];
+        assert_eq!(
+            burst_summary(&group, &burst, 7).as_deref(),
+            Some("↻ 1 aus Serie mit bestätigtem Foto")
+        );
+        assert_eq!(
+            burst_summary(&group[..1], &burst, 7).as_deref(),
+            Some("↻ Aus Serie mit bestätigtem Foto")
+        );
+        assert_eq!(burst_summary(&group, &burst, 9), None);
     }
     #[test]
     fn rejection_note_lists_known_people_only() {
