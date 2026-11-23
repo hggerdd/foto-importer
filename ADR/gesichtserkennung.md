@@ -136,6 +136,12 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   Aufnahmetag nicht (`References::scores_without`, derselbe Rechenweg wie `scores`, das nur
   das eigene Gesicht auslässt). Zwischenspeicher und Durchgang über die Vektoren sind
   bitgleich (`cached_and_streamed_scores_are_identical`).
+- **Abgelehnte Gesichter einer Person** (`recognition::person_face_scores`, Personenseite
+  „Nicht X“): derselbe Wert wie die abgelehnten der Statistik, nur die Spalte dieser Person,
+  Vektoren nur der gezeigten Gesichter. Wird eine Ablehnung aufgehoben
+  (`faces::lift_rejection`), ändert sich keine Zuordnung und kein Trigger greift; der Abgleich
+  wird deshalb dort (und bei der Rücknahme geänderter Ablehnungen) für das Modell des Gesichts
+  vorgemerkt.
 - Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte
   Unterabfragen auf `training_set`, bestätigte Gesichter außen per `CROSS JOIN`).
 

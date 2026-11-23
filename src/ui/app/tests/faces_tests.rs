@@ -916,7 +916,7 @@ fn renaming_reaches_the_people_list_and_its_cache_and_older_pages_do_not_win() -
     app.face_revision += 1;
     let revision = app.face_revision;
     app.launch("Späte Seite", false, JobKind::Faces, move |_| {
-        Ok(Outcome::Faces(revision, 0, older_page))
+        Ok(Outcome::Faces(revision, 0, Box::new(older_page)))
     });
     settle_tasks(&mut app, &context);
     assert_eq!(people_names(&app), ["Anna Neu"]);
@@ -1384,5 +1384,143 @@ fn group_size_slider_regroups_every_page_from_the_first_and_is_saved() -> anyhow
     drawn_texts(&context, &mut app, Vec::new());
     press_face_key(&context, &mut app, egui::Key::J, false);
     assert_eq!(naming_tasks(&app), 1);
+    Ok(())
+}
+
+/// Personenseite „Nicht Anna“ mit drei Gesichtern, die als „nicht Anna“ abgelehnt sind.
+fn rejected_app(root: &Path) -> anyhow::Result<(egui::Context, PhotoApp)> {
+    let c = Collection::open(root, true)?;
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+    )?;
+    for id in 1..=3_i64 {
+        c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+        c.db.execute(
+            "INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality) VALUES(?,?,?,'det',0,0,1,1,1)",
+            rusqlite::params![id, id, format!("{id}.jpg")],
+        )?;
+        c.db.execute("INSERT INTO face_rejections VALUES(?,1)", [id])?;
+    }
+    drop(c);
+    let (context, mut app) = review_app(root);
+    app.relation_from = Some(1);
+    app.set_person_mode(PersonMode::Faces);
+    app.set_person_face_mode("person-rejected");
+    assert_eq!(
+        (app.page_mode(), app.page_person()),
+        ("person-rejected", Some(1))
+    );
+    // Keine Leseaufträge: die Seite ist die von Hand gesetzte (wie sie der Leser liefert).
+    app.tasks.clear();
+    app.face_page.groups = vec![
+        (1..=3)
+            .map(|id| Face {
+                source: format!("{id}.jpg"),
+                assignment: None,
+                ..review_face(id, 0.5)
+            })
+            .collect(),
+    ];
+    app.face_page.total_groups = 1;
+    app.face_page.faces_total = 3;
+    app.face_page.rejected_total = 3;
+    Ok((context, app))
+}
+
+/// „Nicht X“: Umschalter mit Zahl; Kreuz hebt nur die Ablehnung auf, Haken hebt sie auf und
+/// ordnet zu, die Gruppenknöpfe ebenso für die Auswahl; Strg+Z stellt alles exakt wieder her.
+#[test]
+fn rejected_view_lifts_or_confirms_and_undo_restores_the_rejection() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = rejected_app(root.path())?;
+    let lift = "Doppelklick: Ablehnung „nicht Anna“ aufheben";
+    let is = "Doppelklick: das ist doch Anna";
+    let widgets = frame_with(&context, &mut app, Vec::new());
+    let has = |label: &str| widgets.iter().filter(|(text, _)| text == label).count();
+    assert_eq!(has("Nicht Anna · 3"), 1, "Umschalter mit Zahl");
+    assert_eq!((has(lift), has(is), has(IGNORE_LABEL)), (3, 3, 3));
+    assert_eq!(has("Für alle 3 Ablehnung aufheben"), 1);
+    assert_eq!(has("Alle 3 sind Anna"), 1);
+    // Kreuz auf 2: nur die Ablehnung entfällt, das Gesicht verschwindet.
+    let pos = tile_icon_pos(&context, &mut app, "2.jpg", lift);
+    click_at(&context, &mut app, pos, 2);
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 1);
+    assert_eq!(page_ids(&app), vec![vec![1, 3]], "die Gruppe bleibt stehen");
+    // Haken auf 3: doch Anna.
+    let pos = tile_icon_pos(&context, &mut app, "3.jpg", is);
+    click_at(&context, &mut app, pos, 2);
+    assert_eq!(naming_tasks(&app) + app.undo.len(), 2);
+    assert_eq!(page_ids(&app), vec![vec![1]]);
+    wait_for_tasks(&mut app);
+    assert_eq!(
+        face_rows(root.path())?,
+        vec![
+            (1, None, String::new()),
+            (2, None, String::new()),
+            (3, Some(1), "user".into()),
+        ]
+    );
+    assert_eq!(rejections(root.path())?, vec![(1, 1)]);
+    assert_eq!(app.undo.len(), 2);
+    // Strg+Z: zuerst die Zuordnung samt Ablehnung, dann die aufgehobene Ablehnung.
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(face_rows(root.path())?[2], (3, None, String::new()));
+    assert_eq!(rejections(root.path())?, vec![(1, 1), (3, 1)]);
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(rejections(root.path())?, vec![(1, 1), (2, 1), (3, 1)]);
+    // Gruppenknöpfe: 3 abgewählt; „2 sind Anna“ betrifft nur 1 und 2, 3 bleibt abgelehnt.
+    app.tasks.clear();
+    app.face_page.groups = vec![
+        (1..=3)
+            .map(|id| Face {
+                source: format!("{id}.jpg"),
+                assignment: None,
+                ..review_face(id, 0.5)
+            })
+            .collect(),
+    ];
+    frame_with(&context, &mut app, Vec::new());
+    app.drafts
+        .get_mut("p1:1,2,3")
+        .expect("Karte gezeichnet")
+        .excluded = BTreeSet::from([3]);
+    click_labelled(
+        &context,
+        &mut app,
+        "2 sind Anna",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(page_ids(&app), vec![vec![3]]);
+    wait_for_tasks(&mut app);
+    assert_eq!(
+        face_rows(root.path())?,
+        vec![
+            (1, Some(1), "user".into()),
+            (2, Some(1), "user".into()),
+            (3, None, String::new()),
+        ]
+    );
+    assert_eq!(rejections(root.path())?, vec![(3, 1)]);
+    // „Ablehnung aufheben“ für die verbliebene Karte (wie der Leser sie liefert).
+    app.face_page.groups = vec![vec![Face {
+        source: "3.jpg".into(),
+        assignment: None,
+        ..review_face(3, 0.5)
+    }]];
+    click_labelled(
+        &context,
+        &mut app,
+        "Ablehnung aufheben",
+        egui::PointerButton::Primary,
+    );
+    wait_for_tasks(&mut app);
+    assert!(rejections(root.path())?.is_empty());
+    assert_eq!(face_rows(root.path())?[2], (3, None, String::new()));
+    app.undo_last_face_decision();
+    wait_for_tasks(&mut app);
+    assert_eq!(rejections(root.path())?, vec![(3, 1)]);
     Ok(())
 }

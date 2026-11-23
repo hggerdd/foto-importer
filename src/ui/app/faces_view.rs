@@ -358,7 +358,12 @@ impl PhotoApp {
         if !self.shows_face_groups()
             || !matches!(
                 self.page_mode(),
-                "unknown" | "review" | "unsuitable" | "probable" | "person-confirmed"
+                "unknown"
+                    | "review"
+                    | "unsuitable"
+                    | "probable"
+                    | "person-confirmed"
+                    | "person-rejected"
             )
         {
             return;
@@ -475,10 +480,13 @@ impl PhotoApp {
         let kind = card_kind(&mode);
         let naming = self.page_mode() == "unknown";
         // In „Vorschläge prüfen“ und auf der Gesichterseite einer Person steht die Person fest.
-        let proposed = matches!(kind, CardKind::Review | CardKind::Assigned)
-            .then(|| group.first().and_then(|f| f.person))
-            .flatten()
-            .and_then(|id| self.face_page.people.iter().find(|p| p.id == id).cloned());
+        let proposed = matches!(
+            kind,
+            CardKind::Review | CardKind::Assigned | CardKind::Rejected
+        )
+        .then(|| group.first().and_then(|f| f.person))
+        .flatten()
+        .and_then(|id| self.face_page.people.iter().find(|p| p.id == id).cloned());
         // Vorgemerkte Benennungen blockieren weitere Entscheidungen nicht (ADR 0068).
         let busy = self.naming_blocked();
         let hover_enabled = self.settings.hover_preview;
@@ -588,6 +596,16 @@ impl PhotoApp {
                                 ui,
                                 busy,
                                 group.len() - selected,
+                                group.len(),
+                                &person.name,
+                            ));
+                            return;
+                        }
+                        if kind == CardKind::Rejected {
+                            decision = decision.or(rejected_buttons(
+                                ui,
+                                busy,
+                                selected,
                                 group.len(),
                                 &person.name,
                             ));
@@ -824,6 +842,9 @@ impl PhotoApp {
                                         decision = Some(Decision::OneIgnore(face.id))
                                     }
                                     Some(TileIcon::Is) => decision = Some(Decision::OneIs(face.id)),
+                                    Some(TileIcon::IsNot) if kind == CardKind::Rejected => {
+                                        decision = Some(Decision::OneLift(face.id))
+                                    }
                                     Some(TileIcon::IsNot) => {
                                         decision = Some(Decision::OneIsNot(face.id))
                                     }
@@ -832,6 +853,15 @@ impl PhotoApp {
                                 }
                                 if let Some(note) = person_faces_view::better_note(
                                     self.face_page.better.get(&face.id),
+                                    &self.face_page.people,
+                                ) {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(note).small().weak())
+                                            .truncate(),
+                                    );
+                                }
+                                if let Some(note) = confirmed_note(
+                                    self.face_page.confirmed_as.get(&face.id),
                                     &self.face_page.people,
                                 ) {
                                     ui.add(
@@ -889,6 +919,20 @@ impl PhotoApp {
         let work = self
             .on_collection(move |mut c, _| Ok(Outcome::Named(faces::mark_not_face(&mut c, &ids)?)));
         self.queue_hiding("Als „Kein Gesicht“ speichern", hide, work);
+        true
+    }
+
+    /// Hebt „nicht `person`“ für diese Gesichter auf (Seite „Nicht X“): sofort ausgeblendet,
+    /// gespeichert im Hintergrund, mit Strg+Z zurückzunehmen.
+    fn lift_rejection(&mut self, ids: Vec<i64>, person: i64) -> bool {
+        if ids.is_empty() {
+            return false;
+        }
+        let hide = ids.clone();
+        let work = self.on_collection(move |mut c, _| {
+            Ok(Outcome::Named(faces::lift_rejection(&mut c, &ids, person)?))
+        });
+        self.queue_hiding("Ablehnung aufheben", hide, work);
         true
     }
 
@@ -1015,6 +1059,23 @@ impl PhotoApp {
                 (removed, BTreeSet::new(), Some(person), String::new(), false)
             }
             Decision::NotFace => return self.mark_not_face(kept.into_iter().collect()),
+            Decision::Lift | Decision::OneLift(_) => {
+                // Nur auf der Seite „Nicht X“; X ist die Person der Seite.
+                let Some(target) = tile_target(self.page_mode(), &self.face_page, group)
+                    .filter(|target| target.lift)
+                else {
+                    return false;
+                };
+                let lifted: Vec<i64> = match decision {
+                    Decision::OneLift(id) if ids.contains(&id) => {
+                        self.carry_draft(group, id);
+                        vec![id]
+                    }
+                    Decision::OneLift(_) => return false,
+                    _ => kept.into_iter().collect(),
+                };
+                return self.lift_rejection(lifted, target.person);
+            }
             Decision::OneIgnore(id) => {
                 // Wie „Nicht interessiert“, nur für dieses Gesicht; bestätigte Identität bleibt.
                 if !can_ignore(self.page_mode()) || !ids.contains(&id) {
@@ -1130,6 +1191,10 @@ pub(super) enum Decision {
     OneIsNot(i64),
     /// Kachelsymbol „nicht interessiert“: nur dieses Gesicht ignorieren.
     OneIgnore(i64),
+    /// Seite „Nicht X“: die Ablehnung der ausgewählten Gesichter aufheben (ohne Zuordnung).
+    Lift,
+    /// Seite „Nicht X“, Kachelsymbol Kreuz: nur die Ablehnung dieses Gesichts aufheben.
+    OneLift(i64),
 }
 
 /// Lässt sich ein Gesicht dieser Seite einzeln ignorieren? Überall außer in „Ignoriert“.
@@ -1144,6 +1209,9 @@ pub(super) struct TileTarget {
     pub(super) name: String,
     /// Haken anbieten? Nur für noch nicht bestätigte Gesichter.
     pub(super) confirm: bool,
+    /// Seite „Nicht X“: Die Gesichter tragen schon die Ablehnung; das Kreuz hebt sie auf,
+    /// statt abzulehnen, und der Haken hebt sie auf und ordnet X zu.
+    pub(super) lift: bool,
 }
 
 /// Zielperson der Gruppe für Haken und Kreuz: in „Vorschläge prüfen“ und „Wahrscheinlich X“
@@ -1156,23 +1224,26 @@ pub(super) fn tile_target(
     group: &[Face],
 ) -> Option<TileTarget> {
     let first = group.first()?;
-    let named = |person: i64, confirm: bool| {
+    let named = |person: i64, confirm: bool, lift: bool| {
         let name = page.people.iter().find(|p| p.id == person)?.name.clone();
         Some(TileTarget {
             person,
             name,
             confirm,
+            lift,
         })
     };
     match mode {
-        "review" | "probable" => named(first.person?, true),
-        "confirmed" | "person-confirmed" => named(first.person?, false),
+        "review" | "probable" => named(first.person?, true, false),
+        "confirmed" | "person-confirmed" => named(first.person?, false, false),
+        "person-rejected" => named(first.person?, true, true),
         "unknown" if first.person.is_none() => {
             let (person, name, _) = sure_for_group(page, group)?;
             Some(TileTarget {
                 person,
                 name,
                 confirm: true,
+                lift: false,
             })
         }
         _ => None,
@@ -1190,12 +1261,16 @@ pub(super) enum CardKind {
     Assigned,
     /// Ungeeignete Gesichter: einzelne auswählen, benennen oder „Kein Gesicht“.
     Unsuitable,
+    /// Gesichter mit Ablehnung „nicht X“ (Personenseite „Nicht X“): doch X oder nur die
+    /// Ablehnung aufheben.
+    Rejected,
 }
 
 pub(super) fn card_kind(mode: &str) -> CardKind {
     match mode {
         "review" | "probable" => CardKind::Review,
         "person-confirmed" => CardKind::Assigned,
+        "person-rejected" => CardKind::Rejected,
         "unsuitable" => CardKind::Unsuitable,
         _ => CardKind::Name,
     }
@@ -1226,6 +1301,53 @@ fn assigned_buttons(
         decision = Some(Decision::Reject);
     }
     decision
+}
+
+/// Knöpfe der Karte „Nicht X“: die ausgewählten sind doch X (Ablehnung aufheben und
+/// zuordnen) oder nur ihre Ablehnung aufheben. Abgewählte bleiben unberührt abgelehnt.
+fn rejected_buttons(
+    ui: &mut egui::Ui,
+    busy: bool,
+    selected: usize,
+    total: usize,
+    name: &str,
+) -> Option<Decision> {
+    let mut decision = None;
+    if ui
+        .add_enabled(
+            !busy && selected > 0,
+            egui::Button::new(confirm_label(selected, total, name)),
+        )
+        .on_hover_text(format!(
+            "Hebt „nicht {name}“ für die ausgewählten Gesichter auf und bestätigt sie als {name}."
+        ))
+        .clicked()
+    {
+        decision = Some(Decision::NameSelected);
+    }
+    if ui
+        .add_enabled(
+            !busy && selected > 0,
+            egui::Button::new(lift_label(selected, total)),
+        )
+        .on_hover_text(
+            "Hebt nur die Ablehnung auf: Die Gesichter sind wieder offen und können erneut \
+             vorgeschlagen werden.",
+        )
+        .clicked()
+    {
+        decision = Some(Decision::Lift);
+    }
+    decision
+}
+
+/// „Ablehnung aufheben“ für eine Auswahl: „Für alle 5 Ablehnung aufheben“, „Für 3 …“.
+fn lift_label(selected: usize, total: usize) -> String {
+    match (selected, total) {
+        (1, 1) => "Ablehnung aufheben".into(),
+        (s, t) if s == t => format!("Für alle {t} Ablehnung aufheben"),
+        (s, _) => format!("Für {s} Ablehnung aufheben"),
+    }
 }
 
 /// „2 abgewählte sind nicht Anna“; ohne Abwahl ein Hinweis, was zu tun ist.
@@ -1324,7 +1446,10 @@ fn tile_hint(icons: bool, target: Option<&TileTarget>, ignore: bool) -> String {
     let mut lines = Vec::new();
     if icons {
         if let Some(target) = target {
-            lines.push(if target.confirm {
+            lines.push(if target.lift {
+                "Doppelklick auf den Haken: doch die Person; auf das Kreuz: nur die Ablehnung \
+                 aufheben"
+            } else if target.confirm {
                 "Doppelklick auf Haken oder Kreuz oben rechts: nur dieses Gesicht ist bzw. ist \
                  nicht die Person"
             } else {
@@ -1355,11 +1480,15 @@ enum TileIcon {
 }
 
 /// Hinweistext (und Beschriftung für Bedienhilfen) eines Kachelsymbols.
-fn tile_icon_hint(icon: TileIcon, name: &str) -> String {
+fn tile_icon_hint(icon: TileIcon, target: Option<&TileTarget>) -> String {
+    let name = target.map(|t| t.name.as_str()).unwrap_or_default();
+    let lift = target.is_some_and(|t| t.lift);
     match icon {
         TileIcon::Ignore => {
             "Doppelklick: ein Gesicht, aber nicht interessant (nur dieses ignorieren)".into()
         }
+        TileIcon::IsNot if lift => format!("Doppelklick: Ablehnung „nicht {name}“ aufheben"),
+        TileIcon::Is if lift => format!("Doppelklick: das ist doch {name}"),
         TileIcon::IsNot => format!("Doppelklick: das ist nicht {name}"),
         TileIcon::Is => format!("Doppelklick: das ist {name}"),
         TileIcon::Name => "Namen wählen …".into(),
@@ -1392,7 +1521,6 @@ fn tile_icons(
         }
     }
     icons.push(TileIcon::Name);
-    let name = target.map(|t| t.name.as_str()).unwrap_or_default();
     // Vier Symbole passen auch auf die kleinste Kachel (60 Punkte).
     let edge = (tile.width() / 6.0).clamp(12.0, 20.0);
     let (margin, gap) = (3.0, 2.0);
@@ -1406,7 +1534,7 @@ fn tile_icons(
         // Das Fragezeichen öffnet nur den Dialog und bleibt deshalb auch während eines
         // Schreibauftrags bedienbar.
         let active = enabled || *icon == TileIcon::Name;
-        let hint = tile_icon_hint(*icon, name);
+        let hint = tile_icon_hint(*icon, target);
         let response = ui.interact(rect, id.with(*icon as u8), egui::Sense::click());
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, active, hint.clone())
@@ -1650,6 +1778,14 @@ fn rejection_note(rejected: Option<&Vec<i64>>, people: &[faces::Person]) -> Opti
         .map(|p| p.name.as_str())
         .collect();
     (!names.is_empty()).then(|| format!("nicht {}", names.join(", ")))
+}
+
+/// „bestätigt: Ben“ unter einem Gesicht der Seite „Nicht X“, das einer anderen Person bestätigt
+/// gehört (der Haken würde es X zuordnen).
+fn confirmed_note(person: Option<&i64>, people: &[faces::Person]) -> Option<String> {
+    let id = *person?;
+    let person = people.iter().find(|p| p.id == id)?;
+    Some(format!("bestätigt: {}", person.name))
 }
 
 /// Hinweis auf Gesichter, die zu schlecht für Namensvorschläge sind (`Status::unsuitable`);

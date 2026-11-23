@@ -457,3 +457,156 @@ fn faces_that_look_more_like_someone_else_come_in_a_second_section() -> anyhow::
     assert_eq!(small.total_groups, 7 + 7);
     Ok(())
 }
+
+/// Anna (1) mit Referenzen bei Winkel 0, Ben (2) bei 0,6. Abgelehnt „nicht Anna“: 400 (0,4),
+/// 401 (0,1), 402 (0,2, Ben bestätigt), 403 ohne Merkmale; nicht gezeigt: 404 ignoriert,
+/// 405 „Kein Gesicht“, 406 nur „nicht Ben“.
+fn rejected_collection(temp: &tempfile::TempDir) -> anyhow::Result<Collection> {
+    let c = open(temp)?;
+    for id in 1..=3 {
+        face(&c, id, id, 1.0, at(0.0));
+    }
+    for id in 11..=13 {
+        face(&c, id, id, 1.0, at(0.6));
+    }
+    face(&c, 400, 400, 1.0, at(0.4));
+    face(&c, 401, 401, 1.0, at(0.1));
+    face(&c, 402, 402, 1.0, at(0.2));
+    face(&c, 403, 403, 0.3, None);
+    face(&c, 404, 404, 1.0, at(0.05));
+    face(&c, 405, 405, 1.0, at(0.0));
+    face(&c, 406, 406, 1.0, at(0.0));
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1),(2);
+         INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');
+         UPDATE faces SET person_id=1,assignment='user',confidence=1 WHERE id IN (1,2,3);
+         UPDATE faces SET person_id=2,assignment='user',confidence=1 WHERE id IN (11,12,13,402);
+         INSERT INTO face_rejections VALUES(400,1),(401,1),(402,1),(403,1),(404,1),(405,1),(406,2);
+         UPDATE faces SET ignored=1 WHERE id=404;
+         UPDATE faces SET ignored=2 WHERE id=405;",
+    )?;
+    Ok(c)
+}
+
+fn rejected_ids(c: &Collection) -> anyhow::Result<Vec<i64>> {
+    Ok(ids(&faces::page_filtered(c, "person-rejected", 0, Some(1))?).concat())
+}
+
+/// Zustand eines Gesichts: Person, Zuordnungsart, abgelehnte Personen.
+fn face_state(c: &Collection, id: i64) -> anyhow::Result<(Option<i64>, Option<String>, Vec<i64>)> {
+    let (person, assignment) = c.db.query_row(
+        "SELECT person_id,assignment FROM faces WHERE id=?",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let rejected =
+        c.db.prepare("SELECT person_id FROM face_rejections WHERE face_id=? ORDER BY person_id")?
+            .query_map([id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+    Ok((person, assignment, rejected))
+}
+
+/// „Nicht X“: genau die aktiven Gesichter mit Ablehnung „nicht Anna“, ähnlichste zuerst, mit
+/// dem Wert der Personenstatistik; ohne Wert zuletzt. Die Zahl steht auf allen Personenseiten.
+#[test]
+fn rejected_page_lists_rejections_of_the_person_most_similar_first() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = rejected_collection(&temp)?;
+    let page = faces::page_filtered(&c, "person-rejected", 0, Some(1))?;
+    assert_eq!(ids(&page), vec![vec![401, 402, 400, 403]]);
+    assert_eq!((page.faces_total, page.total_groups), (4, 1));
+    assert_eq!(page.rejected_total, 4);
+    assert!(page.groups[0].iter().all(|f| f.person == Some(1)));
+    assert_eq!(page.confirmed_as, [(402, 2)].into_iter().collect());
+    assert!(page.groups[0][3].score.is_nan(), "ohne Merkmale kein Wert");
+    // Dieselben Werte wie die rote Hälfte der Personenstatistik.
+    let stats = recognition::person_scores(&c, KEY, 0.40, &Control::default())?;
+    let anna = stats.iter().find(|s| s.person == 1).expect("Anna");
+    let mut expected = anna.rejected.clone();
+    expected.sort_by(|a, b| b.total_cmp(a));
+    let shown: Vec<u32> = page.groups[0][..3]
+        .iter()
+        .map(|f| f.score.to_bits())
+        .collect();
+    assert_eq!(
+        shown,
+        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
+    for mode in ["probable", "person-confirmed"] {
+        let other = faces::page_filtered(&c, mode, 0, Some(1))?;
+        assert_eq!(other.rejected_total, 4, "{mode}");
+    }
+    assert!(
+        faces::page_filtered(&c, "person-rejected", 0, None)?
+            .groups
+            .is_empty()
+    );
+    // Ben: nur 406.
+    assert_eq!(
+        ids(&faces::page_filtered(&c, "person-rejected", 0, Some(2))?),
+        vec![vec![406]]
+    );
+    // Gruppengröße wie überall.
+    let small = faces::page_with(&c, "person-rejected", 0, Some(1), 5, &Control::default())?;
+    assert_eq!(ids(&small), vec![vec![401, 402, 400, 403]]);
+    Ok(())
+}
+
+/// Ablehnung aufheben: nur die Ablehnung entfällt, der Abgleich ist vorgemerkt, der Datenstand
+/// ändert sich; Strg+Z stellt sie exakt wieder her, auch nach einem Vorschlag des Abgleichs.
+/// „Doch X“ hebt auf und ordnet zu; die Rücknahme stellt auch die vorherige Zuordnung her.
+#[test]
+fn lifting_and_confirming_rejections_undo_exactly() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = rejected_collection(&temp)?;
+    let pending = |c: &Collection| -> anyhow::Result<Option<i64>> {
+        Ok(c.db
+            .query_row(
+                "SELECT generation FROM face_maintenance WHERE embedder_id=?",
+                [KEY],
+                |r| r.get(0),
+            )
+            .ok())
+    };
+    c.db.execute("DELETE FROM face_maintenance", [])?;
+    let revision = foto_importer::core::revision::read(&c.db)?.expect("Revision");
+    // Kreuz: nur die Ablehnung von 401.
+    let undo = faces::lift_rejection(&mut c, &[401], 1)?;
+    assert_eq!(undo.summary().lifted, 1);
+    assert_eq!(undo.summary().confirmed, 0);
+    assert_eq!(face_state(&c, 401)?, (None, None, vec![]));
+    assert!(pending(&c)?.is_some(), "Abgleich vorgemerkt");
+    let after = foto_importer::core::revision::read(&c.db)?.expect("Revision");
+    assert!(
+        after.faces > revision.faces,
+        "Datenstand Gesichter geändert"
+    );
+    assert_eq!(rejected_ids(&c)?, vec![402, 400, 403]);
+    // Inzwischen schlägt der Abgleich Anna vor; die Rücknahme gelingt trotzdem.
+    c.db.execute(
+        "UPDATE faces SET person_id=1,assignment='suggested',confidence=0.7 WHERE id=401",
+        [],
+    )?;
+    faces::undo(&mut c, &undo)?;
+    assert_eq!(face_state(&c, 401)?, (None, None, vec![1]));
+    assert_eq!(rejected_ids(&c)?, vec![401, 402, 400, 403]);
+    // Eine spätere Nutzerentscheidung verhindert die Rücknahme weiterhin.
+    let undo = faces::lift_rejection(&mut c, &[400], 1)?;
+    faces::name_group(&mut c, &[400], &BTreeSet::from([400]), Some(2), "", false)?;
+    assert!(faces::undo(&mut c, &undo).is_err());
+    // Haken: 402 (Ben bestätigt) ist doch Anna.
+    let undo = faces::name_group(&mut c, &[402], &BTreeSet::from([402]), Some(1), "", false)?;
+    assert_eq!(undo.summary().confirmed, 1);
+    assert_eq!(face_state(&c, 402)?, (Some(1), Some("user".into()), vec![]));
+    assert_eq!(rejected_ids(&c)?, vec![401, 403]);
+    faces::undo(&mut c, &undo)?;
+    assert_eq!(
+        face_state(&c, 402)?,
+        (Some(2), Some("user".into()), vec![1])
+    );
+    // Ein Gesicht ohne diese Ablehnung bleibt unverändert.
+    let undo = faces::lift_rejection(&mut c, &[406], 1)?;
+    assert_eq!(undo.summary().lifted, 0);
+    assert_eq!(face_state(&c, 406)?, (None, None, vec![2]));
+    Ok(())
+}

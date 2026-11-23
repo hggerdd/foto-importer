@@ -1,6 +1,7 @@
 //! Gesichter einer Person unter „Personen“: die unbestätigten, die sie wahrscheinlich zeigen
-//! (Seite `probable`), und ihre bestätigten (Seite `person-confirmed`). Beide nutzen die
-//! Gruppenkarten, Tasten, Rücknahme und das sofortige Ausblenden der Ansicht „Gesichter“.
+//! (Seite `probable`), ihre bestätigten (Seite `person-confirmed`) und die als „nicht X“
+//! abgelehnten (Seite `person-rejected`). Alle nutzen die Gruppenkarten, Rücknahme und das
+//! sofortige Ausblenden der Ansicht „Gesichter“.
 use super::*;
 
 impl PhotoApp {
@@ -20,7 +21,14 @@ impl PhotoApp {
         self.person_faces_tabs(ui, &person);
         self.hover_preview_footer(ui);
         self.face_toolbar(ui);
-        let hint = if self.person_face_mode == "probable" {
+        let hint = if self.person_face_mode == "person-rejected" {
+            format!(
+                "Gesichter, die als „nicht {0}“ abgelehnt sind, die {0} ähnlichsten zuerst – dort \
+                 stehen versehentliche Ablehnungen. Haken: doch {0}; Kreuz: nur die Ablehnung \
+                 aufheben, das Gesicht wird wieder vorgeschlagen.",
+                person.name
+            )
+        } else if self.person_face_mode == "probable" {
             let minimum = crate::core::progress::decimal(config::PERSON_CANDIDATE_MIN, 2);
             format!(
                 "Unbestätigte Gesichter, nach Ähnlichkeit zu {0} geordnet, wahrscheinlichste zuerst \
@@ -68,7 +76,7 @@ impl PhotoApp {
         }
     }
 
-    /// Umschalter „Wahrscheinlich X | Bestätigt“ mit der Zahl der Gesichter.
+    /// Umschalter „Wahrscheinlich X | Bestätigt | Nicht X“ mit der Zahl der Gesichter.
     fn person_faces_tabs(&mut self, ui: &mut egui::Ui, person: &faces::Person) {
         let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
         let total = (!loading).then_some(self.face_page.faces_total);
@@ -95,6 +103,14 @@ impl PhotoApp {
                 "Bestätigt".to_string(),
                 count("person-confirmed", Some(person.count)),
             ),
+            (
+                "person-rejected",
+                format!("Nicht {}", person.name),
+                count(
+                    "person-rejected",
+                    (!loading).then_some(self.face_page.rejected_total),
+                ),
+            ),
         ];
         ui.horizontal(|ui| {
             for (mode, label, number) in tabs {
@@ -118,7 +134,14 @@ impl PhotoApp {
     }
 
     fn empty_person_faces(&self, ui: &mut egui::Ui, name: &str) {
-        if self.person_face_mode == "probable" {
+        if self.person_face_mode == "person-rejected" {
+            self.empty(
+                ui,
+                &format!("Kein Gesicht ist als „nicht {name}“ abgelehnt."),
+                "Hier erscheinen Gesichter, die bei „Keines ist …“, mit dem Kreuz oder beim \
+                 Abwählen als nicht diese Person markiert wurden.",
+            );
+        } else if self.person_face_mode == "probable" {
             self.empty(
                 ui,
                 &format!("Keine wahrscheinlichen Gesichter für {name}."),
@@ -143,6 +166,8 @@ impl PhotoApp {
         self.face_page.faces_total = 0;
         self.face_page.probable_others = 0;
         self.face_page.better.clear();
+        self.face_page.rejected_total = 0;
+        self.face_page.confirmed_as.clear();
         self.reset_face_page();
     }
 

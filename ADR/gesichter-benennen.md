@@ -18,8 +18,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   `GROUP_SIZE_DEFAULT` = 28; Grenzen nicht gemessen). Gespeichert als
   `Settings::face_group_size`, ein fehlender Eintrag heißt 28, Werte außerhalb werden geklemmt
   (`config::group_size`). Ein Parameter von `faces::page_with` schneidet damit alle Reiter mit
-  Gruppen: „Vorschläge prüfen“, „Benennen“, „Bestätigt“, „Ignoriert“, „Ungeeignet“ und beide
-  Seiten der Personengesichter. Eine Seite hält höchstens 224 Gesichter
+  Gruppen: „Vorschläge prüfen“, „Benennen“, „Bestätigt“, „Ignoriert“, „Ungeeignet“ und alle
+  drei Seiten der Personengesichter. Eine Seite hält höchstens 224 Gesichter
   (`config::FACE_PAGE_FACES` = acht Gruppen zu 28) und höchstens acht Gruppen
   (`config::face_groups_per_page`: 5 und 28 → 8, 50 → 4, 100 → 2), damit große Gruppen
   Ladezeit, Kacheln und Ablehnungsabfrage der Seite nicht vervielfachen. Erst beim Loslassen
@@ -78,7 +78,10 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   Zielperson X hat (`tile_target`): in „Vorschläge prüfen“ und „Wahrscheinlich X“ die
   vorgeschlagene Person, in „Benennen“ der sichere Vorschlag von „Ist das X?“. Auf Seiten
   bestätigter Gesichter („Bestätigt“ und „Bestätigt“ einer Person) ist X die Person der
-  Gruppe, dort gibt es nur das Kreuz. „Ungeeignet“, „Ignoriert“ und Gruppen ohne Zielperson
+  Gruppe, dort gibt es nur das Kreuz. Auf „Nicht X“ einer Person (`TileTarget::lift`) tragen
+  die Gesichter die Ablehnung schon: Der Haken heißt „das ist doch X“ (Ablehnung entfällt, `user`
+  wie oben), das Kreuz „Ablehnung aufheben“ (`Decision::OneLift`, nur die Ablehnung, siehe
+  [Personen](personen.md)). „Ungeeignet“, „Ignoriert“ und Gruppen ohne Zielperson
   haben weder Haken noch Kreuz. **Doppelklick** auf den Haken bestätigt genau dieses Gesicht
   als X (`user`), Doppelklick auf das Kreuz lehnt X für genau dieses Gesicht ab (gespeicherte
   Ablehnung; trug es X, wird es unbenannt) – derselbe Weg wie „Bestätigen“ bzw. „Keines ist
@@ -131,7 +134,9 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   sind getrennte Entscheidungen.
 - **Rücknahme:** bis zu 20 Entscheidungen der laufenden Sitzung, einschließlich Ablehnungen
   und Pins. Eine Rücknahme scheitert, wenn eine spätere Nutzeränderung dieselben Gesichter
-  betrifft. Eine dabei angelegte, noch ungenutzte Person wird wieder entfernt. Knopf und
+  betrifft. Ein späterer Vorschlag des Abgleichs (`suggested`/`auto` statt vorher keiner oder
+  ein anderer) ist keine Nutzeränderung und hindert sie nicht; die Rücknahme stellt den Stand
+  davor her und merkt den Abgleich vor, wenn sich Ablehnungen ändern. Eine dabei angelegte, noch ungenutzte Person wird wieder entfernt. Knopf und
   Strg+Z lösen dieselbe Rücknahme aus; Strg+Z nur ohne Textfeldfokus und wenn der Knopf
   aktiv wäre.
 - **Sofortiges Speichern:** Entschiedene Gesichter verschwinden sofort aus der Seite
