@@ -37,7 +37,8 @@ pub(super) enum JobKind {
     RelationshipGraph,
     PersonStats,
     Timeline,
-    TimelinePeople,
+    /// Personenliste der Auswahlfelder prüfen und lesen (`people_list`).
+    People,
     TimelineExport,
 }
 
@@ -75,7 +76,7 @@ impl JobKind {
             Self::RelationshipGraph => "relationship-graph",
             Self::PersonStats => "person-stats",
             Self::Timeline => "timeline",
-            Self::TimelinePeople => "timeline-people",
+            Self::People => "people-list",
             Self::TimelineExport => "timeline-export",
         }
     }
@@ -130,7 +131,7 @@ mod tests {
             JobKind::RelationshipGraph,
             JobKind::PersonStats,
             JobKind::Timeline,
-            JobKind::TimelinePeople,
+            JobKind::People,
             JobKind::TimelineExport,
         ];
         let names: std::collections::BTreeSet<_> = all.iter().map(|k| k.as_str()).collect();

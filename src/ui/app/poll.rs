@@ -16,6 +16,12 @@ impl PhotoApp {
         for (index, result) in completed.into_iter().rev() {
             let running = self.tasks.remove(index);
             self.log_job_end(&running, &result);
+            // Jeder Schreibauftrag kann Personen angelegt, umbenannt oder zusammengeführt
+            // haben (auch ein fehlgeschlagener nach Teilschritten): die gemeinsame
+            // Personenliste prüft ihren Stand (`people_list`).
+            if running.write && running.collection == self.settings.collection {
+                self.people_list.invalidate();
+            }
             self.notice_origin = Some(running.view);
             // Die Einrichtung geht nur nach einer erfolgreich geladenen Laufzeit weiter.
             let chained =
@@ -104,7 +110,7 @@ impl PhotoApp {
             // Abgelöste (abgebrochene) Lesevorgänge sind normal, alles andere wird geloggt.
             e if matches!(
                 running.kind,
-                JobKind::PersonInsights | JobKind::PersonDuplicates | JobKind::TimelinePeople
+                JobKind::PersonInsights | JobKind::PersonDuplicates | JobKind::People
             ) =>
             {
                 if !running.task.control.cancel.load(Ordering::Relaxed) {
@@ -346,7 +352,14 @@ impl PhotoApp {
             {
                 self.people_ui.accept_insights(revision, insights);
             }
-            Outcome::Faces(revision, index, page) if revision == self.face_revision => {
+            Outcome::People(revision, revisions, people)
+                if self.people_list.current(revision)
+                    && running.collection == self.settings.collection =>
+            {
+                self.accept_people_list(revisions, people);
+            }
+            Outcome::Faces(revision, index, mut page) if revision == self.face_revision => {
+                self.merge_page_people(&mut page);
                 if self.view != View::Settings
                     || page.status.detector_id != self.face_page.status.detector_id
                     || page.status.embedder_id != self.face_page.status.embedder_id
@@ -383,7 +396,6 @@ impl PhotoApp {
                     self.select_person(id);
                     self.people_ui.scroll_to_person(id);
                     self.relationship_graph.stale = true;
-                    self.time_ui.need_people = true;
                     self.refresh_faces();
                 }
             }
@@ -665,6 +677,7 @@ impl PhotoApp {
         {
             self.refresh_faces();
         }
+        self.sync_people_list();
         self.start_metadata_background();
         self.start_daily_backup();
         let now = chrono::Local::now();

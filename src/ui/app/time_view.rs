@@ -65,8 +65,6 @@ pub(super) struct Loaded {
 }
 
 pub(super) enum TimeOutcome {
-    /// Personenliste der Auswahl (klein, eigener Auftrag, nie mit Gesichtern zusammen).
-    People(u64, Vec<Person>),
     Loaded(Box<Loaded>),
     Computed {
         revision: u64,
@@ -90,11 +88,9 @@ pub(super) struct TimeUi {
     collection: String,
     pub person: Option<i64>,
     pub(super) loaded_person: Option<i64>,
+    /// Zuletzt lokal gespeicherte Personenliste; nur bis die gemeinsame Liste
+    /// (`face_page.people`, siehe `people_list`) gelesen ist.
     people: Vec<Person>,
-    /// Personenliste frisch aus der Sammlung (sonst aus dem lokalen Cache oder leer).
-    people_fresh: bool,
-    pub(super) need_people: bool,
-    people_revision: u64,
     raw: Option<Arc<Vec<TimeFace>>>,
     birth: Option<Birth>,
     decisions: Decisions,
@@ -133,9 +129,6 @@ impl Default for TimeUi {
             person: None,
             loaded_person: None,
             people: Vec::new(),
-            people_fresh: false,
-            need_people: true,
-            people_revision: 0,
             raw: None,
             birth: None,
             decisions: Decisions::default(),
@@ -200,8 +193,8 @@ impl TimeUi {
         self.error = error;
     }
     /// Ein gelesener Datenstand der Sammlung. Ist er neuer als der bekannte, gelten gemerkte
-    /// Personen und die Personenliste nicht mehr; die gezeigte Person wird neu gelesen (sie
-    /// bleibt bis dahin sichtbar). Ältere oder gleiche Stände ändern nichts.
+    /// Personen nicht mehr; die gezeigte Person wird neu gelesen (sie bleibt bis dahin
+    /// sichtbar). Ältere oder gleiche Stände ändern nichts.
     pub(super) fn observe(&mut self, revisions: &Revisions) {
         self.observe_key(revisions.key(DOMAINS));
     }
@@ -211,13 +204,9 @@ impl TimeUi {
         {
             return;
         }
-        let first = self.known.is_none();
         self.known = Some(key);
         let known = self.known.clone();
         self.cache.retain(|(_, data)| data.key == known);
-        if !first {
-            self.need_people = true;
-        }
         if self.loaded_person.is_some() && self.shown_key != known {
             self.need_load = true;
         }
@@ -264,10 +253,10 @@ impl TimeUi {
         self.decisions = Decisions::default();
         self.computed = None;
     }
-    /// Personen der Auswahl: frisch gelesen, sonst die der Personenansichten, sonst die
-    /// zuletzt lokal gespeicherte Liste.
+    /// Personen der Auswahl: die gemeinsame Liste aller Personenansichten, bis zu ihrem ersten
+    /// Lesen die zuletzt lokal gespeicherte.
     fn choices<'a>(&'a self, shared: &'a [Person]) -> &'a [Person] {
-        if self.people_fresh || shared.is_empty() {
+        if shared.is_empty() {
             &self.people
         } else {
             shared
@@ -342,7 +331,9 @@ impl PhotoApp {
                 ..TimeUi::default()
             };
         }
-        self.sync_time_people();
+        // Die Personenauswahl braucht die gemeinsame Liste, auch vor dem ersten Lesen der
+        // Gesichterseite (beim Start).
+        self.need_people_list();
         let min_px = self.settings.timeline_min_px;
         if self.time_ui.need_load {
             self.time_ui.need_load = false;
@@ -366,32 +357,6 @@ impl PhotoApp {
         if self.time_ui.need_compute && !self.tasks.iter().any(|t| t.kind == JobKind::Timeline) {
             self.launch_time_compute(min_px);
         }
-    }
-
-    /// Liest die Personenliste (kleine Tabellen, kalt auf der USB-Platte rund 0,15 s) und legt
-    /// sie für den nächsten Start im lokalen Cache ab.
-    fn sync_time_people(&mut self) {
-        if !self.time_ui.need_people || self.tasks.iter().any(|t| t.kind == JobKind::TimelinePeople)
-        {
-            return;
-        }
-        self.time_ui.need_people = false;
-        self.time_ui.people_revision += 1;
-        let revision = self.time_ui.people_revision;
-        let root = PathBuf::from(&self.settings.collection);
-        let (cache, collection) = (self.cache_dir.clone(), self.settings.collection.clone());
-        self.launch(
-            "Personen für die Zeitreise lesen",
-            false,
-            JobKind::TimelinePeople,
-            move |control| {
-                let c = Collection::open(&root, false)?;
-                c.cancel_with(&control);
-                let people = faces::people(&c)?;
-                timeline::store_people(&cache, &collection, &people);
-                Ok(Outcome::Time(TimeOutcome::People(revision, people)))
-            },
-        );
     }
 
     /// Liest die Gesichter nur dieser Person; ersetzt einen laufenden Ladeauftrag.
@@ -468,12 +433,6 @@ impl PhotoApp {
     pub(super) fn accept_time(&mut self, outcome: TimeOutcome) {
         let ui = &mut self.time_ui;
         match outcome {
-            TimeOutcome::People(revision, people) => {
-                if revision == ui.people_revision {
-                    ui.people = people;
-                    ui.people_fresh = true;
-                }
-            }
             TimeOutcome::Loaded(loaded) => {
                 let loaded = *loaded;
                 let pending = ui.need_load;
@@ -1419,12 +1378,13 @@ mod tests {
         settle(&mut app, &ctx);
         // Ohne gewählte Person steht die Personenliste bereit, Gesichter werden nicht gelesen.
         assert_eq!(app.time_ui.person, None);
-        assert_eq!(app.time_ui.people.len(), 1);
-        assert!(app.time_ui.people_fresh);
+        // Die gemeinsame Personenliste wird einmal gelesen, auch ohne Gesichterseite.
+        assert_eq!(app.time_ui.choices(&app.face_page.people).len(), 1);
+        assert_eq!(app.face_page.people.len(), 1);
         assert!(app.time_ui.raw.is_none() && app.time_ui.computed.is_none());
         // Die Liste liegt für den nächsten Start im lokalen Cache.
         let cached = timeline::cached_people(&app.cache_dir, &app.settings.collection);
-        assert_eq!(cached.as_deref(), Some(app.time_ui.people.as_slice()));
+        assert_eq!(cached.as_deref(), Some(app.face_page.people.as_slice()));
         app.show_time_for(1);
         settle(&mut app, &ctx);
         assert_eq!(app.time_ui.loaded_person, Some(1));

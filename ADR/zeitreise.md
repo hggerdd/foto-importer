@@ -10,18 +10,19 @@ Konzept und offene Ideen: [docs/konzept-zeitreise.md](../docs/konzept-zeitreise.
   bleibt zum Wechseln und wählt die Person für alle Personenansichten. Ohne gewählte Person
   wird nichts vorgewählt und kein Gesicht gelesen.
 - **Personenauswahl sofort, Gesichter nur der gewählten Person:** Die Auswahl zeigt die
-  Personen aus dem eigenen kleinen Auftrag „Personen für die Zeitreise lesen“ (`faces::people`,
-  nur Personen-, Namens- und Zähltabellen über `ix_faces_user_counts`), bis dahin die schon
-  geladenen Personen der Personenansichten oder die zuletzt gelesene Liste aus dem lokalen
-  Cache (`personen-<Hash>.json`, `core::local_cache`). Erst nach der Wahl liest „Zeitreise
+  gemeinsame Personenliste aller Personenansichten (siehe [Personen](personen.md), „Eine
+  Personenliste für alle Auswahlfelder“); fehlt sie beim Start noch, liest die Zeitreise sie
+  einmal über deren kleinen Auftrag (`faces::people_if_changed`, nur Personen-, Namens- und
+  Zähltabellen über `ix_faces_user_counts`) und zeigt bis dahin die zuletzt gelesene Liste
+  aus dem lokalen Cache (`personen-<Hash>.json`, `core::local_cache`). Erst nach der Wahl liest „Zeitreise
   lesen“ (`timeline::load_person`) Gesichter, Geburt und Entscheidungen nur dieser Person.
   Eine neue Wahl ersetzt den laufenden Auftrag (Abbruch, Revision). Gelesene Personen bleiben
   im Speicher (`config::TIMELINE_CACHED_PEOPLE`, 12); der Wechsel zurück rechnet nur neu.
   Jede gemerkte Person trägt ihren Datenstand (`core::revision`, Bereiche `faces` und
   `people`, in derselben Lesetransaktion gelesen). Die Zeitreise sieht neue Stände über
   jede neu gelesene Gesichterseite, eigene Ladeaufträge und gespeicherte Entscheidungen
-  (`TimeUi::observe`); ein neuerer Stand verwirft Gemerktes zu älteren Ständen, liest die
-  Personenliste und die gezeigte Person neu (sie bleibt bis dahin sichtbar). Ältere
+  (`TimeUi::observe`); ein neuerer Stand verwirft Gemerktes zu älteren Ständen und liest
+  die gezeigte Person neu (sie bleibt bis dahin sichtbar). Ältere
   Antworten kommen nicht mehr hinein. Geänderte Metadaten allein (Bereich `files`) lesen nicht
   neu, damit ein Hintergrundlauf die gezeigte Person nicht laufend neu lädt. Messung 2026-11-21 an `E:\Bilder` (USB-Festplatte): Personenliste kalt 0,15 s,
   Gesichter einer Person kalt 3,3 s (408 Gesichter) bis 10,9 s (3 595), warm 9 bis 54 ms.

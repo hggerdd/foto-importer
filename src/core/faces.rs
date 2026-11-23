@@ -208,6 +208,38 @@ pub fn people(collection: &Collection) -> Result<Vec<Person>> {
     Ok(collection.db.prepare("SELECT p.id,coalesce(a.value,'Unbenannt'),coalesce(b.value,''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='gender'),''),coalesce((SELECT value FROM person_attrs WHERE person_id=p.id AND key='note'),'') FROM persons p LEFT JOIN person_attrs a ON a.person_id=p.id AND a.key='name' LEFT JOIN person_attrs b ON b.person_id=p.id AND b.key='birth_year' WHERE p.merged_into IS NULL ORDER BY a.value,p.id")?
         .query_map([],|r|{let id:i64=r.get(0)?;Ok(Person{id,name:r.get(1)?,birth:r.get(2)?,count:counts.get(&id).copied().unwrap_or(0),gender:r.get(3)?,note:r.get(4)?})})?.collect::<rusqlite::Result<_>>()?)
 }
+
+/// Bereiche der Datenrevision, von denen die Personenliste abhängt: Personen und ihre Angaben
+/// (`people`) sowie die Zahl bestätigter Gesichter je Person (`faces`).
+pub const PEOPLE_DOMAINS: &[super::revision::Domain] = &[
+    super::revision::Domain::Faces,
+    super::revision::Domain::People,
+];
+
+/// Datenstand und Personenliste in einer Lesetransaktion. Gleicht der Stand (`PEOPLE_DOMAINS`)
+/// dem bekannten `known`, bleibt die Liste ungelesen (`None`); ohne Revision (Schema 6) wird
+/// immer gelesen. Klein und schnell: eine Revisionsabfrage, bei Änderung zwei Abfragen über
+/// Personen und bestätigte Gesichter.
+pub fn people_if_changed(
+    collection: &Collection,
+    known: Option<&super::revision::Key>,
+) -> Result<(Option<super::revision::Revisions>, Option<Vec<Person>>)> {
+    collection.db.execute_batch("BEGIN")?;
+    let result = (|| {
+        let revisions = super::revision::read(&collection.db)?;
+        let unchanged = revisions
+            .as_ref()
+            .is_some_and(|r| known == Some(&r.key(PEOPLE_DOMAINS)));
+        let people = if unchanged {
+            None
+        } else {
+            Some(people(collection)?)
+        };
+        Ok((revisions, people))
+    })();
+    collection.db.execute_batch("ROLLBACK")?;
+    result
+}
 pub fn configure_automatic(
     collection: &mut Collection,
     auto_import: bool,
