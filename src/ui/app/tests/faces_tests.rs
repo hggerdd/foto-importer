@@ -195,6 +195,128 @@ fn hovering_a_face_shows_exactly_that_photo_and_leaving_hides_it() {
     assert!(app.hover_face.is_none());
 }
 
+/// Die Mausvorschau rahmt genau das Gesicht unter dem Zeiger ein: ein Rahmen, kein zweiter
+/// für das andere Gesicht desselben Fotos, und erst, wenn das Foto gezeichnet ist.
+#[test]
+fn hover_preview_frames_exactly_the_face_under_the_pointer() {
+    let temp = tempfile::tempdir().expect("temp");
+    image::RgbImage::from_pixel(400, 300, image::Rgb([90, 90, 90]))
+        .save(temp.path().join("1.jpg"))
+        .expect("jpeg");
+    let ctx = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.view = View::Faces;
+    app.settings.collection = temp.path().to_string_lossy().into_owned();
+    let face = |id, bbox| Face {
+        id,
+        photo: 1,
+        source: "1.jpg".into(),
+        bbox,
+        person: None,
+        assignment: None,
+        ignored: false,
+        score: 0.0,
+    };
+    app.face_page.groups = vec![vec![
+        face(1, [0.1, 0.2, 0.3, 0.5]),
+        face(2, [0.6, 0.2, 0.8, 0.5]),
+    ]];
+    let draw = |app: &mut PhotoApp, pointer: Option<egui::Pos2>| {
+        let events = pointer
+            .map(|pos| vec![egui::Event::PointerMoved(pos)])
+            .unwrap_or_else(|| vec![egui::Event::PointerGone]);
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()),
+        )
+    };
+    let frames = |output: &egui::FullOutput| -> Vec<egui::Rect> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect)
+                    if rect.stroke.color == super::super::faces_view::HOVER_FRAME_SHADE =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    draw(&mut app, None);
+    let mut at = None;
+    'search: for y in (60..780).step_by(16) {
+        for x in (10..1270).step_by(16) {
+            let pos = Some(egui::pos2(x as f32, y as f32));
+            draw(&mut app, pos);
+            draw(&mut app, pos);
+            if app.hover_face.is_some() {
+                at = pos;
+                break 'search;
+            }
+        }
+    }
+    let at = at.expect("ein Gesicht ist erreichbar");
+    let hovered = app.hover_face.clone().expect("hover");
+    // Größtes gezeichnetes Bild der Ausgabe: das ganze Foto der Vorschau.
+    let photo = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                    Some(mesh.calc_bounds())
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+    };
+    let output = std::cell::RefCell::new(None);
+    settle_until(
+        &mut app,
+        "Vorschau mit Rahmen gezeichnet",
+        |app| *output.borrow_mut() = Some(draw(app, Some(at))),
+        |_| {
+            output
+                .borrow()
+                .as_ref()
+                .is_some_and(|o| !frames(o).is_empty())
+        },
+    );
+    let output = output.into_inner().expect("Ausgabe");
+    let shown = frames(&output);
+    assert_eq!(shown.len(), 1, "genau ein Rahmen: {shown:?}");
+    let image = photo(&output).expect("Foto gezeichnet");
+    assert!(
+        image.width() > 300.0,
+        "ganzes Foto, keine Kachel: {image:?}"
+    );
+    // Der Rahmen gehört zum Gesicht unter der Maus, nicht zum anderen Gesicht des Fotos.
+    let expected = super::super::faces_view::face_frame(
+        hovered.bbox,
+        image,
+        super::super::faces_view::HOVER_FRAME_MARGIN,
+    )
+    .expect("Rahmen");
+    assert!(
+        (shown[0].center() - expected.center()).length() < 1.0
+            && (shown[0].size() - expected.size()).length() < 1.0,
+        "{:?} statt {expected:?}",
+        shown[0]
+    );
+    // Ohne Maus über einem Gesicht kein Rahmen.
+    assert!(frames(&draw(&mut app, None)).is_empty());
+}
+
 fn page_ids(app: &PhotoApp) -> Vec<Vec<i64>> {
     app.face_page
         .groups
