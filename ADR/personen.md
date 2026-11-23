@@ -157,6 +157,20 @@
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
   Die Liste zeigt immer alle Treffer ohne Obergrenze (auch ohne Suchtext alle Personen);
   gezeichnet werden nur die sichtbaren Zeilen, der Bildlauf folgt den Pfeiltasten.
+- **Eine Personenliste für alle Auswahlfelder** (`face_page.people`, `ui::app::people_list`):
+  Gruppenkarten, „Einzeln benennen“, Personen → Gesichter, Übersicht, Stammbaum, Zeitreise
+  und Filter lesen dieselbe Liste. Sie hängt am Datenstand `faces::PEOPLE_DOMAINS` (Zähler
+  `people` und `faces` der Datenrevision; Trigger auf `persons` und `person_attrs`). Nach
+  **jedem** Schreibauftrag der offenen Sammlung prüft ein kleiner Leseauftrag
+  (`faces::people_if_changed`, Art `people-list`) den Stand und liest die Liste nur bei
+  Abweichung neu; eine währenddessen fällige Prüfung folgt danach. So wirken Anlegen
+  (Namensentwurf, „Einzeln benennen“, Kachel, „Person anlegen“), Umbenennen, Zusammenführen,
+  Rücknahme und Übernahme aus dem zentralen Bestand ohne eigene Aufrufe, und eine neue Person
+  ist wählbar, ohne auf das Lesen der Gesichterseite zu warten (das weitere Entscheidungen
+  abbrechen oder aufschieben). Auch die Gesichterseite bringt die Liste mit; ist ihr Stand
+  älter als der gezeigte, bleibt die neuere Liste. Die frisch gelesene Liste liegt im lokalen
+  Cache und dient der Zeitreise beim Start, bis die gemeinsame gelesen ist. Ein neuer
+  Auswahlort nimmt `face_page.people`, keine eigene Kopie.
 - **Stammbaum:** Fokus-Person mit Partnern, Vorfahren (bis sechs Generationen), Geschwistern
   und Nachkommen, höchstens 300 Personen. Das Layout ist eine reine, deterministische
   Funktion (`tree_layout`). Textalternative „Als Liste anzeigen“; Verwandtschaftsprüfung für
@@ -210,4 +224,6 @@ Alternative.
 Katalog-IDs nie umdeuten. Tiefe und Kappung der Berechnung nur gemeinsam mit
 `tests/kinship.rs` ändern. Neue Rückfragemuster brauchen Prüfung, Begrenzung und
 Wiederholungsschutz. Neue Tabellenspalten brauchen Breite, Priorität, Sortierwert und Test in
-`core::people_table`. Schwere Zählungen gehören auf den Worker (`faces::page`).
+`core::people_table`. Schwere Zählungen gehören auf den Worker (`faces::page`). Eine neue
+Tabelle, die Personenlisten speist, braucht Revisions-Trigger (`core::revision::TABLES`),
+sonst folgen die Auswahlfelder ihr nicht.

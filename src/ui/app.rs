@@ -9,6 +9,7 @@ mod import_view;
 mod job_kind;
 mod missing_view;
 mod optimistic;
+mod people_list;
 mod people_table;
 mod people_view;
 mod person_faces_view;
@@ -213,6 +214,12 @@ enum Outcome {
     Synced(Box<Outcome>, crate::core::central::SyncNote),
     Pick(Pick, Option<PathBuf>),
     Time(time_view::TimeOutcome),
+    /// Personenliste (Nummer der Prüfung, Datenstand, Liste; `None`: Stand unverändert).
+    People(
+        u64,
+        Option<crate::core::revision::Revisions>,
+        Option<Vec<faces::Person>>,
+    ),
 }
 /// Hinweis samt Ansicht, in der er entstand, und Zeitpunkt für das Ablaufen.
 struct Notice {
@@ -395,6 +402,8 @@ pub struct PhotoApp {
     /// Zeilen daran neu. Datenstände der Sammlung stehen in `face_page.revisions`; nur ohne
     /// Revision dient der Zähler als Ersatz (`people_table::PageKey`).
     face_page_serial: u64,
+    /// Stand der gemeinsamen Personenliste `face_page.people` (`people_list`).
+    people_list: people_list::PeopleList,
     relationship_graph: relationship_view::RelationshipView,
     person_stats: stats_view::StatsView,
     report: Option<String>,
@@ -543,6 +552,7 @@ impl PhotoApp {
             people_ui: Default::default(),
             time_ui: time_view::TimeUi::from_env(),
             face_page_serial: 0,
+            people_list: Default::default(),
             relationship_graph: Default::default(),
             person_stats: Default::default(),
             report: None,
@@ -1220,6 +1230,7 @@ impl PhotoApp {
         self.naming = None;
         self.face_page = FacePage::default();
         self.face_page_serial += 1;
+        self.people_list.reset();
         self.face_index = 0;
         self.review_person = None;
         self.face_advance = None;
@@ -1540,10 +1551,12 @@ impl PhotoApp {
             }
             // Antworten der Zeitreise prüfen ihre Revisionen selbst; die Sammlung muss stimmen.
             Outcome::Time(
-                time_view::TimeOutcome::People(..)
-                | time_view::TimeOutcome::Loaded(_)
-                | time_view::TimeOutcome::Computed { .. },
+                time_view::TimeOutcome::Loaded(_) | time_view::TimeOutcome::Computed { .. },
             ) => running.collection != self.settings.collection,
+            Outcome::People(revision, ..) => {
+                !self.people_list.current(*revision)
+                    || running.collection != self.settings.collection
+            }
             Outcome::PersonInsights(..) | Outcome::Duplicates(..) | Outcome::Named(_) => {
                 running.collection != self.settings.collection
             }

@@ -812,6 +812,124 @@ fn right_click_on_a_faces_tile_names_just_that_face_without_the_collection_view(
     Ok(())
 }
 
+fn people_names(app: &PhotoApp) -> Vec<String> {
+    app.face_page
+        .people
+        .iter()
+        .map(|p| p.name.clone())
+        .collect()
+}
+
+/// Fehler: Ein beim Benennen neu angelegter Name fehlte danach in den Auswahlfeldern, solange
+/// die Gesichterseite nicht neu gelesen war (weitere Entscheidungen brechen dieses Lesen ab
+/// oder schieben es auf). Die gemeinsame Personenliste folgt jedem Schreibauftrag selbst.
+#[test]
+fn a_new_name_from_naming_is_selectable_at_once_without_a_face_page_read() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (context, mut app) = single_naming_app(root.path())?;
+    draw_people(&context, &mut app, egui::vec2(1280.0, 800.0));
+    let group = app.face_page.groups[0].clone();
+    app.drafts.get_mut("1,2,3").expect("Karte").name = "Quirin".into();
+    app.drafts.get_mut("1,2,3").expect("Karte").excluded = BTreeSet::from([3]);
+    assert!(app.decide_group(&group, faces_view::Decision::Confirm));
+    // Jedes Lesen der Gesichterseite wird sofort abgelöst wie durch die nächste Entscheidung
+    // (abgebrochen, seine Antwort veraltet).
+    let stop_page_reads = |app: &mut PhotoApp| {
+        for task in app.tasks.iter().filter(|t| t.kind == JobKind::Faces) {
+            task.task.control.stop();
+        }
+        app.face_revision += 1;
+    };
+    settle_until(
+        &mut app,
+        "neue Person in der Personenliste",
+        |app| {
+            stop_page_reads(app);
+            app.poll(&context);
+        },
+        |app| people_names(app) == ["Quirin"],
+    );
+    // Gesicht 3 ist noch offen: „Einzeln benennen“ bietet die neue Person an.
+    app.naming = Some(3);
+    app.name_input = "qui".into();
+    // Ein neues Fenster erscheint erst im zweiten Bild.
+    drawn_texts(&context, &mut app, Vec::new());
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Quirin"), "Einzeln benennen: {texts}");
+    app.naming = None;
+    // Personen → Gesichter: die Personenauswahl enthält sie.
+    app.view = View::People;
+    app.person_mode = PersonMode::Faces;
+    click_labelled(
+        &context,
+        &mut app,
+        "Person wählen …",
+        egui::PointerButton::Primary,
+    );
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Quirin"), "Personen → Gesichter: {texts}");
+    Ok(())
+}
+
+/// Umbenennen über irgendeinen Schreibauftrag (hier einer ohne eigenes Neulesen): die
+/// Liste und ihr lokaler Cache folgen dem neuen Stand; ein älteres Ergebnis der
+/// Gesichterseite überschreibt die neuere Liste nicht.
+#[test]
+fn renaming_reaches_the_people_list_and_its_cache_and_older_pages_do_not_win() -> anyhow::Result<()>
+{
+    let root = tempfile::tempdir()?;
+    {
+        let c = Collection::open(root.path(), true)?;
+        c.db.execute_batch(
+            "INSERT INTO persons(id) VALUES(1);
+             INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+        )?;
+    }
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.settings.collection = root.path().to_string_lossy().into_owned();
+    app.view = View::Collection;
+    app.refresh_faces();
+    settle_tasks(&mut app, &context);
+    assert_eq!(people_names(&app), ["Anna"]);
+    let older_page = {
+        let c = Collection::open(root.path(), false)?;
+        let mut page = faces::page(&c, "tree", 0)?;
+        page.revisions = crate::core::revision::read(&c.db)?;
+        page
+    };
+    app.launch_write("Umbenennen", JobKind::Mutation, |c, _| {
+        let attrs = BTreeMap::from([("name".to_string(), "Anna Neu".to_string())]);
+        crate::core::maintenance::set_person(&c, 1, &attrs)?;
+        Ok(Outcome::Report("umbenannt".into()))
+    });
+    settle_tasks(&mut app, &context);
+    assert_eq!(people_names(&app), ["Anna Neu"]);
+    let cached = crate::core::timeline::cached_people(&app.cache_dir, &app.settings.collection);
+    assert_eq!(
+        cached.map(|p| p.into_iter().map(|p| p.name).collect::<Vec<_>>()),
+        Some(vec!["Anna Neu".to_string()]),
+        "lokaler Cache folgt"
+    );
+    // Eine vor dem Umbenennen gelesene Seite kommt spät an: die Liste bleibt neu.
+    app.face_revision += 1;
+    let revision = app.face_revision;
+    app.launch("Späte Seite", false, JobKind::Faces, move |_| {
+        Ok(Outcome::Faces(revision, 0, older_page))
+    });
+    settle_tasks(&mut app, &context);
+    assert_eq!(people_names(&app), ["Anna Neu"]);
+    // Ohne Änderung liest die Prüfung die Liste nicht erneut.
+    app.launch_write("Nichts", JobKind::Mutation, |_, _| {
+        Ok(Outcome::Report("nichts".into()))
+    });
+    let kinds = settle_kinds(&context, &mut app);
+    assert!(kinds.contains("people-list"), "{kinds:?}");
+    assert_eq!(people_names(&app), ["Anna Neu"]);
+    Ok(())
+}
+
 /// Reiter „Ungeeignet“: Kacheln beginnen abgewählt; nur ausgewählte Gesichter werden benannt
 /// oder als „Kein Gesicht“ gespeichert, die übrigen bleiben unberührt sichtbar.
 #[test]
