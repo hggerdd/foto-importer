@@ -53,11 +53,11 @@ type ReviewParts = (Vec<Vec<i64>>, BTreeMap<i64, usize>);
 /// die Zahl offener Vorschläge je Person.
 ///
 /// Je Person werden die Vorschläge nach Ähnlichkeit absteigend in Teile zu höchstens
-/// `GROUP_MAX` geschnitten; die Teile aller Personen sind nach ihrer **mittleren
+/// `size` (Anzeigegröße) geschnitten; die Teile aller Personen sind nach ihrer **mittleren
 /// Ähnlichkeit** absteigend geordnet (bei Gleichstand Person, dann Teil). Das Mittel statt
 /// des besten Werts verhindert, dass ein einzelner hoher Treffer eine schwache Gruppe nach
 /// vorn zieht. Eine Abfrage über den Teilindex `ix_faces_review`, keine Fensterfunktion.
-fn review_parts(collection: &Collection, only: Option<i64>) -> Result<ReviewParts> {
+fn review_parts(collection: &Collection, only: Option<i64>, size: usize) -> Result<ReviewParts> {
     let mut by_person: BTreeMap<Option<i64>, Vec<(f32, i64)>> = BTreeMap::new();
     let mut statement = collection.db.prepare_cached(REVIEW_ROWS)?;
     let mut rows = statement.query([])?;
@@ -77,7 +77,7 @@ fn review_parts(collection: &Collection, only: Option<i64>) -> Result<ReviewPart
             continue;
         }
         faces.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-        for (part, chunk) in faces.chunks(crate::config::GROUP_MAX).enumerate() {
+        for (part, chunk) in faces.chunks(size).enumerate() {
             let mean = chunk.iter().map(|face| face.0).sum::<f32>() / chunk.len() as f32;
             parts.push((mean, person, part, chunk.iter().map(|f| f.1).collect()));
         }
@@ -101,19 +101,20 @@ fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
     Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
 }
 /// Seite des Reiters „unsuitable“: offene Gesichter ohne Gruppe ([`UNSUITABLE`]), neueste
-/// Fotos zuerst und Gesichter eines Fotos nebeneinander, in Gruppen zu `GROUP_MAX`.
+/// Fotos zuerst und Gesichter eines Fotos nebeneinander, in Gruppen zu `size`.
 /// Ergebnis: Gruppen der Seite und Zahl aller solcher Gesichter.
 fn unsuitable_page(
     collection: &Collection,
     embedder: &str,
     page: usize,
+    size: usize,
 ) -> Result<(Vec<Vec<Face>>, usize)> {
     let total: usize = collection.db.query_row(
         &format!("SELECT count(*) FROM faces f WHERE {UNSUITABLE}"),
         [embedder],
         |r| r.get(0),
     )?;
-    let per_page = (crate::config::GROUP_MAX * crate::config::FACE_GROUPS_PER_PAGE) as i64;
+    let per_page = (size * crate::config::face_groups_per_page(size)) as i64;
     let rows: Vec<Face> = collection
         .db
         .prepare_cached(&format!(
@@ -121,11 +122,58 @@ fn unsuitable_page(
         ))?
         .query_map(params![embedder, per_page, page as i64 * per_page], face_row)?
         .collect::<rusqlite::Result<_>>()?;
-    let groups = rows
-        .chunks(crate::config::GROUP_MAX)
-        .map(<[Face]>::to_vec)
-        .collect();
+    let groups = rows.chunks(size).map(<[Face]>::to_vec).collect();
     Ok((groups, total))
+}
+/// Seite des Reiters „unknown“ („Benennen“): die gespeicherten Ähnlichkeitsgruppen des
+/// Embedders (höchstens `CLUSTER_MAX` Mitglieder), größte zuerst. Eine Gruppe über der
+/// Anzeigegröße `size` erscheint in aufeinanderfolgenden Teilen zu `size` (nach Gesichts-ID);
+/// Gruppen werden nie zusammengelegt, weil zwei Gruppen einander nicht ähnlich genug sein
+/// müssen. Ergebnis: Gruppen der Seite und Zahl aller Teile.
+fn unknown_page(
+    collection: &Collection,
+    embedder: &str,
+    page: usize,
+    size: usize,
+) -> Result<(Vec<Vec<Face>>, usize)> {
+    let total: i64 = collection.db.query_row(
+        "SELECT coalesce(sum((members+?2-1)/?2),0) FROM face_group_catalog WHERE embedder_id=?1 AND members>0",
+        params![embedder, size as i64],
+        |r| r.get(0),
+    )?;
+    let per_page = crate::config::face_groups_per_page(size);
+    let skip = page * per_page;
+    let over = crate::config::CLUSTER_MAX + 1;
+    let mut groups = Vec::new();
+    // Teile vor dieser Gruppe; der Katalog zählt die offenen Mitglieder (Trigger).
+    let mut before = 0;
+    let mut clusters = collection.db.prepare_cached(
+        "SELECT group_id,members FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id",
+    )?;
+    let mut rows = clusters.query([embedder])?;
+    while groups.len() < per_page
+        && let Some(row) = rows.next()?
+    {
+        let (id, members) = (row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as usize);
+        let parts = members.div_ceil(size);
+        if before + parts <= skip {
+            before += parts;
+            continue;
+        }
+        let cluster=collection.db.prepare_cached(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN face_group_members g ON g.face_id=f.id WHERE g.group_id=? AND f.retained=0 AND f.ignored=0 AND f.person_id IS NULL ORDER BY f.id LIMIT {over}"))?.query_map([id],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        if cluster.len() <= crate::config::CLUSTER_MAX {
+            let rest = per_page - groups.len();
+            groups.extend(
+                cluster
+                    .chunks(size)
+                    .skip(skip.saturating_sub(before))
+                    .take(rest)
+                    .map(<[Face]>::to_vec),
+            );
+        }
+        before += parts;
+    }
+    Ok((groups, total as usize))
 }
 /// Seite des Reiters „probable“ (Gruppen der Seite und alles, was die Seite dazu zeigt).
 #[derive(Default)]
@@ -139,7 +187,7 @@ struct ProbablePage {
 /// Seite des Reiters „probable“: unbestätigte Gesichter, die wahrscheinlich `person` zeigen
 /// (`recognition::person_candidates`). Zuerst die Gesichter, deren beste Person `person` ist,
 /// dann („Eher jemand anderes“) die, bei denen eine andere Person vorn liegt; jeder Abschnitt
-/// nach Personenscore absteigend für sich in Gruppen zu `GROUP_MAX` geschnitten, sodass keine
+/// nach Personenscore absteigend für sich in Gruppen zu `size` geschnitten, sodass keine
 /// Gruppe beide Abschnitte mischt. Jedes Gesicht trägt für die Seite `person` als Vorschlag
 /// und seinen Personenscore als `score`, damit die Karte wie in „Vorschläge prüfen“ bestätigt
 /// und ablehnt.
@@ -148,6 +196,7 @@ fn probable_page(
     embedder: &str,
     person: Option<i64>,
     page: usize,
+    size: usize,
     control: &Control,
 ) -> Result<ProbablePage> {
     let Some(person) = person.filter(|_| !embedder.is_empty()) else {
@@ -162,21 +211,16 @@ fn probable_page(
     )?;
     let split = candidates.partition_point(|c| c.better.is_none());
     let (first, second) = candidates.split_at(split);
-    let parts: Vec<&[crate::core::recognition::PersonCandidate]> = first
-        .chunks(crate::config::GROUP_MAX)
-        .chain(second.chunks(crate::config::GROUP_MAX))
-        .collect();
+    let parts: Vec<&[crate::core::recognition::PersonCandidate]> =
+        first.chunks(size).chain(second.chunks(size)).collect();
     let mut result = ProbablePage {
         total_groups: parts.len(),
         faces_total: candidates.len(),
         others: second.len(),
         ..ProbablePage::default()
     };
-    for part in parts
-        .iter()
-        .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
-        .take(crate::config::FACE_GROUPS_PER_PAGE)
-    {
+    let per_page = crate::config::face_groups_per_page(size);
+    for part in parts.iter().skip(page * per_page).take(per_page) {
         let ids: Vec<i64> = part.iter().map(|c| c.face).collect();
         let scores: BTreeMap<i64, f32> = part.iter().map(|c| (c.face, c.score)).collect();
         result
@@ -193,6 +237,7 @@ fn probable_page(
     }
     Ok(result)
 }
+/// Seite `page` des Reiters `mode` mit der voreingestellten Gruppengröße.
 pub fn page(collection: &Collection, mode: &str, page: usize) -> Result<FacePage> {
     page_filtered(collection, mode, page, None)
 }
@@ -205,19 +250,30 @@ pub fn page_filtered(
     page: usize,
     person: Option<i64>,
 ) -> Result<FacePage> {
-    page_with(collection, mode, page, person, &Control::default())
+    page_with(
+        collection,
+        mode,
+        page,
+        person,
+        crate::config::GROUP_SIZE_DEFAULT,
+        &Control::default(),
+    )
 }
-/// Wie [`page_filtered`]; `control` bricht das Rechnen der Personenwerte in „probable“ ab.
+/// Wie [`page_filtered`] mit der Anzeigegröße `group_size` (Gesichter je Gruppe, begrenzt
+/// durch `config::group_size`; die Gruppen je Seite folgen `config::face_groups_per_page`).
+/// Alle Reiter mit Gesichtsgruppen schneiden mit dieser einen Größe. `control` bricht das
+/// Rechnen der Personenwerte in „probable“ ab.
 pub fn page_with(
     collection: &Collection,
     mode: &str,
     page: usize,
     person: Option<i64>,
+    group_size: usize,
     control: &Control,
 ) -> Result<FacePage> {
-    let max = crate::config::GROUP_MAX as i64;
-    let over = max + 1;
-    let per_page = crate::config::FACE_GROUPS_PER_PAGE as i64;
+    let size = crate::config::group_size(group_size);
+    let max = size as i64;
+    let per_page = crate::config::face_groups_per_page(size);
     let status = status(collection)?;
     let mut groups = Vec::new();
     let total_groups: usize;
@@ -247,6 +303,7 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            group_size: size,
             revisions: None,
         });
     }
@@ -268,41 +325,27 @@ pub fn page_with(
             faces_total: 0,
             probable_others: 0,
             better: BTreeMap::new(),
+            group_size: size,
             revisions: None,
         });
     }
     if mode == "unsuitable" {
-        (groups, faces_total) = unsuitable_page(collection, &status.embedder, page)?;
-        total_groups = faces_total.div_ceil(crate::config::GROUP_MAX);
+        (groups, faces_total) = unsuitable_page(collection, &status.embedder, page, size)?;
+        total_groups = faces_total.div_ceil(size);
     } else if mode == "probable" {
-        let probable = probable_page(collection, &status.embedder, person, page, control)?;
+        let probable = probable_page(collection, &status.embedder, person, page, size, control)?;
         (groups, total_groups, faces_total) =
             (probable.groups, probable.total_groups, probable.faces_total);
         (probable_others, better) = (probable.others, probable.better);
     } else if mode == "person-confirmed" && person.is_none() {
         total_groups = 0;
     } else if mode == "unknown" && !status.embedder.is_empty() {
-        total_groups = collection.db.query_row(
-            "SELECT count(*) FROM face_group_catalog WHERE embedder_id=? AND members>0",
-            [&status.embedder],
-            |r| r.get::<_, i64>(0),
-        )? as usize;
-        let ids=collection.db.prepare("SELECT group_id FROM face_group_catalog WHERE embedder_id=? AND members>0 ORDER BY members DESC,group_id LIMIT ? OFFSET ?")?.query_map(params![status.embedder,per_page,(page as i64)*per_page],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        for id in ids {
-            let group=collection.db.prepare(&format!("SELECT {FACE_COLUMNS} FROM faces f JOIN face_group_members g ON g.face_id=f.id WHERE g.group_id=? AND f.retained=0 AND f.ignored=0 AND f.person_id IS NULL ORDER BY f.id LIMIT {over}"))?.query_map([id],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-            if !group.is_empty() && group.len() <= crate::config::GROUP_MAX {
-                groups.push(group);
-            }
-        }
+        (groups, total_groups) = unknown_page(collection, &status.embedder, page, size)?;
     } else if mode == "review" {
-        let (parts, people) = review_parts(collection, person)?;
+        let (parts, people) = review_parts(collection, person, size)?;
         review_people = people;
         total_groups = parts.len();
-        for ids in parts
-            .iter()
-            .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
-            .take(crate::config::FACE_GROUPS_PER_PAGE)
-        {
+        for ids in parts.iter().skip(page * per_page).take(per_page) {
             let rows = faces_in_order(collection, ids)?;
             if !rows.is_empty() {
                 groups.push(rows);
@@ -338,11 +381,7 @@ pub fn page_with(
         // SQLite ordnet NULL vor Zahlen; `Option` verhält sich ebenso.
         parts.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
         total_groups = parts.len();
-        for (_, person, part) in parts
-            .into_iter()
-            .skip(page * crate::config::FACE_GROUPS_PER_PAGE)
-            .take(crate::config::FACE_GROUPS_PER_PAGE)
-        {
+        for (_, person, part) in parts.into_iter().skip(page * per_page).take(per_page) {
             let rows=collection.db.prepare_cached(&format!("SELECT {FACE_COLUMNS} FROM faces f WHERE f.person_id IS ? AND f.retained=0 AND {predicate} ORDER BY f.id LIMIT {max} OFFSET ?"))?.query_map(params![person,part*max],face_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !rows.is_empty() {
                 groups.push(rows);
@@ -398,6 +437,7 @@ pub fn page_with(
         faces_total,
         probable_others,
         better,
+        group_size: size,
         revisions: None,
     })
 }

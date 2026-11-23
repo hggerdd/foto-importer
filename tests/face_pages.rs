@@ -92,6 +92,70 @@ fn unsuitable_faces_are_cut_into_groups_of_28_and_pages_of_8() -> anyhow::Result
     assert_eq!((first.faces_total, first.total_groups), (count as usize, 9));
     let second = faces::page(&c, "unsuitable", 1)?;
     assert_eq!(ids(&second), vec![vec![3, 2, 1]]);
+    // Gewählte Gruppengröße: 100er-Gruppen, zwei je Seite; 5er-Gruppen, acht je Seite.
+    let sized = |page: usize, size: usize| {
+        faces::page_with(&c, "unsuitable", page, None, size, &Control::default())
+    };
+    let large = sized(0, 100)?;
+    assert_eq!(
+        large.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![100, 100]
+    );
+    assert_eq!((large.total_groups, large.group_size), (3, 100));
+    assert_eq!(sized(1, 100)?.groups.concat().len(), count as usize - 200);
+    let small = sized(0, 5)?;
+    assert_eq!(small.groups.len(), 8);
+    assert!(small.groups.iter().all(|g| g.len() == 5));
+    assert_eq!(small.total_groups, (count as usize).div_ceil(5));
+    // Außerhalb der Grenzen wird geklemmt.
+    assert_eq!(sized(0, 1000)?.group_size, 100);
+    assert_eq!(sized(0, 0)?.group_size, 5);
+    Ok(())
+}
+
+#[test]
+fn naming_splits_large_clusters_for_small_sizes_and_never_combines_them() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut c = open(&temp)?;
+    for id in 1..=40 {
+        face(&c, id, id, 1.0, Some([1.0, 0.0]));
+    }
+    group_all(&mut c)?;
+    let cluster = foto_importer::config::CLUSTER_MAX;
+    let sized = |page: usize, size: usize| {
+        faces::page_with(&c, "unknown", page, None, size, &Control::default())
+    };
+    // Größe 100: die gespeicherten Gruppen (28 und 12) bleiben getrennt.
+    let large = sized(0, 100)?;
+    let lens: Vec<usize> = large.groups.iter().map(Vec::len).collect();
+    assert_eq!(lens, vec![cluster, 40 - cluster]);
+    assert_eq!(large.total_groups, 2);
+    // Größe 5: jede Gruppe in Teilen zu 5, ohne Mitglieder zweier Gruppen zu mischen.
+    let first = sized(0, 5)?;
+    let second = sized(1, 5)?;
+    let expected_total = cluster.div_ceil(5) + (40 - cluster).div_ceil(5);
+    assert_eq!(first.total_groups, expected_total);
+    assert_eq!(first.groups.len(), 8);
+    let all: Vec<Vec<i64>> = [ids(&first), ids(&second)].concat();
+    assert_eq!(all.len(), expected_total);
+    assert!(all.iter().all(|g| g.len() <= 5));
+    let members: BTreeSet<i64> = large.groups[0].iter().map(|f| f.id).collect();
+    for group in &all {
+        let inside = group.iter().filter(|id| members.contains(id)).count();
+        assert!(
+            inside == 0 || inside == group.len(),
+            "Teil mischt zwei Gruppen"
+        );
+    }
+    let mut seen: Vec<i64> = all.concat();
+    seen.sort();
+    assert_eq!(seen, (1..=40).collect::<Vec<_>>());
+    // Die gespeicherten Gruppen hängen nicht von der Anzeigegröße ab.
+    let largest: i64 =
+        c.db.query_row("SELECT max(members) FROM face_group_catalog", [], |r| {
+            r.get(0)
+        })?;
+    assert_eq!(largest as usize, cluster);
     Ok(())
 }
 
@@ -376,5 +440,20 @@ fn faces_that_look_more_like_someone_else_come_in_a_second_section() -> anyhow::
     );
     assert_eq!(page.better.get(&200).map(|b| b.0), Some(2));
     assert!(!page.better.contains_key(&300) && !page.better.contains_key(&301));
+    // Mit der größten Gruppengröße bleibt jeder Abschnitt eine Gruppe, mit der kleinsten
+    // werden beide für sich geschnitten.
+    let sized =
+        |size: usize| faces::page_with(&c, "probable", 0, Some(1), size, &Control::default());
+    let large = sized(100)?;
+    assert_eq!(
+        large.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![32, 33]
+    );
+    let small = sized(5)?;
+    assert_eq!(
+        small.groups.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![5, 5, 5, 5, 5, 5, 2, 5]
+    );
+    assert_eq!(small.total_groups, 7 + 7);
     Ok(())
 }

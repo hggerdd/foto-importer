@@ -48,8 +48,23 @@ pub const THUMBNAIL_STALE_FRAMES: u64 = 2;
 /// Kantenlänge des Fotos unter der Maus; dieselbe wie im Bildinspektor, damit der lokale
 /// Vorschau-Cache (`THUMB_CACHE_EDGES`) greift.
 pub const HOVER_PREVIEW_EDGE: u32 = 960;
-/// Höchstzahl Gesichter einer Gruppe; breite Fenster zeigen sie in zwei Reihen.
-pub const GROUP_MAX: usize = 28;
+/// Höchstzahl Mitglieder einer gespeicherten Ähnlichkeitsgruppe unbenannter Gesichter
+/// (`faces::prepare_groups`, `grouping`). Das ist Gruppenbildung, keine Anzeigegröße: Eine
+/// Änderung gruppiert bestehende Sammlungen erst beim nächsten Neuaufbau anders.
+pub const CLUSTER_MAX: usize = 28;
+/// Anzeigegröße der Gesichtergruppen (Regler „Gruppengröße“, `Settings::face_group_size`):
+/// kleinster, größter und voreingestellter Wert. Die Grenzen sind nicht gemessen; die
+/// Obergrenze ist zugleich die Höchstzahl Gesichter einer Gruppenentscheidung
+/// (`faces::name_group`).
+pub const GROUP_SIZE_MIN: usize = 5;
+pub const GROUP_SIZE_MAX: usize = 100;
+pub const GROUP_SIZE_DEFAULT: usize = 28;
+// Eine gespeicherte Gruppe passt immer in eine Entscheidung (`faces::name_group`).
+const _: () = assert!(CLUSTER_MAX <= GROUP_SIZE_MAX);
+/// Anzeigegröße innerhalb der Grenzen (fehlerhafte oder alte Einstellungen).
+pub fn group_size(requested: usize) -> usize {
+    requested.clamp(GROUP_SIZE_MIN, GROUP_SIZE_MAX)
+}
 /// Gruppenbildung (`faces::prepare_groups`): Ein Gesicht tritt einer Gruppe nur bei, wenn es
 /// mit allen Mitgliedern mindestens diesen Kosinuswert erreicht (Complete-Link).
 pub const GROUP_JOIN_MIN: f32 = 0.6;
@@ -134,8 +149,17 @@ pub const MATCH_THREADS: usize = 4;
 pub const SETUP_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// Anzeigedauer eines normalen Hinweises; Fehler bleiben bis zum Schließen.
 pub const NOTICE_SECONDS: std::time::Duration = std::time::Duration::from_secs(15);
-/// Gruppen je Seite in den Gesichtsreitern.
+/// Höchstens so viele Gruppen je Seite in den Gesichtsreitern.
 pub const FACE_GROUPS_PER_PAGE: usize = 8;
+/// Höchstens so viele Gesichter je Seite (Kacheln, Ablehnungen, Ladezeit): acht Gruppen der
+/// voreingestellten Größe. Große Gruppen füllen eine Seite daher mit weniger Gruppen.
+pub const FACE_PAGE_FACES: usize = FACE_GROUPS_PER_PAGE * GROUP_SIZE_DEFAULT;
+/// Gruppen je Seite bei der Anzeigegröße `group_size`: so viele, wie in
+/// [`FACE_PAGE_FACES`] passen, mindestens eine, höchstens [`FACE_GROUPS_PER_PAGE`]
+/// (5 → 8, 28 → 8, 50 → 4, 100 → 2).
+pub fn face_groups_per_page(group_size: usize) -> usize {
+    (FACE_PAGE_FACES / self::group_size(group_size)).clamp(1, FACE_GROUPS_PER_PAGE)
+}
 /// Zeitreise (ADR 0069): kürzere Gesichtsseite im Quellbild in Pixeln (kleinster, Standard,
 /// größter Wert des Reglers).
 pub const TIMELINE_MIN_PX: (u32, u32, u32) = (96, 160, 320);
@@ -290,6 +314,9 @@ pub struct Settings {
     pub tile_icons: bool,
     /// Reglerstellung für die Kachelgröße der Gesichtsgruppen (0 bis 1, Mitte = Standard).
     pub face_tile_scale: f32,
+    /// Anzeigegröße der Gesichtergruppen (Regler „Gruppengröße“), begrenzt durch
+    /// [`group_size`]; fehlt der Eintrag, gilt [`GROUP_SIZE_DEFAULT`].
+    pub face_group_size: usize,
     /// Fotos je Analyse- oder Metadatenlauf, neueste zuerst; 0 bedeutet alle (ADR 0059).
     pub work_portion: usize,
     /// Läufe nur für den in der Sammlung gewählten Ordner ausführen.
@@ -338,6 +365,7 @@ impl Default for Settings {
             hover_preview: true,
             tile_icons: true,
             face_tile_scale: 0.5,
+            face_group_size: GROUP_SIZE_DEFAULT,
             work_portion: 500,
             work_in_folder: false,
             folder_tree_open: true,
@@ -487,5 +515,36 @@ mod tests {
         }
         // 12 SQL-Stellen und die Doku der Konstante.
         assert!(found >= 13, "nur {found} Stellen gefunden");
+    }
+    #[test]
+    fn group_size_is_clamped_and_pages_hold_fewer_large_groups() {
+        use super::*;
+        assert_eq!(group_size(0), GROUP_SIZE_MIN);
+        assert_eq!(group_size(GROUP_SIZE_MAX + 1), GROUP_SIZE_MAX);
+        assert_eq!(group_size(GROUP_SIZE_DEFAULT), GROUP_SIZE_DEFAULT);
+        assert_eq!(face_groups_per_page(GROUP_SIZE_MIN), FACE_GROUPS_PER_PAGE);
+        assert_eq!(
+            face_groups_per_page(GROUP_SIZE_DEFAULT),
+            FACE_GROUPS_PER_PAGE
+        );
+        assert_eq!(face_groups_per_page(GROUP_SIZE_MAX), 2);
+        for size in GROUP_SIZE_MIN..=GROUP_SIZE_MAX {
+            let groups = face_groups_per_page(size);
+            assert!(groups >= 1 && groups * size <= FACE_PAGE_FACES.max(size));
+        }
+    }
+    #[test]
+    fn group_size_setting_defaults_to_28_and_round_trips() {
+        use super::*;
+        assert_eq!(Settings::default().face_group_size, GROUP_SIZE_DEFAULT);
+        // Ältere Einstellungsdateien ohne Eintrag erhalten die Voreinstellung.
+        let old: Settings = serde_json::from_str(r#"{"tile_icons":false}"#).expect("alt");
+        assert_eq!(old.face_group_size, GROUP_SIZE_DEFAULT);
+        let settings = Settings {
+            face_group_size: GROUP_SIZE_MAX,
+            ..Settings::default()
+        };
+        settings.save().expect("speichern");
+        assert_eq!(Settings::load().face_group_size, GROUP_SIZE_MAX);
     }
 }

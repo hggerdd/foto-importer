@@ -125,6 +125,9 @@ pub struct FacePage {
     /// Reiter „probable“: beste andere Person (ID, Personenscore) je Gesicht der Seite aus dem
     /// zweiten Abschnitt. Gruppen mischen die Abschnitte nie.
     pub better: BTreeMap<i64, (i64, f32)>,
+    /// Anzeigegröße, mit der die Seite geschnitten wurde (`config::group_size`); bestimmt mit
+    /// `config::face_groups_per_page` die Seitenzahl. 0 nur vor dem ersten Lesen.
+    pub group_size: usize,
     /// Datenstand, zu dem die Seite gelesen wurde (`core::revision`; `None` ohne Revision).
     /// Caches der Oberfläche, die aus denselben Daten entstehen, prüfen sich daran.
     pub revisions: Option<super::revision::Revisions>,

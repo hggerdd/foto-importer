@@ -10,9 +10,31 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   „Bestätigt | Ignoriert“; „Erledigt“ öffnet die zuletzt gewählte der beiden Seiten; dazu
   „Ungeeignet“ (siehe unten). Die Reiter nennen ihre Anzahl. Personen, Stammbaum, Graph,
   Zeitreise und die Gesichter einer Person liegen unter „Personen“ (siehe
-  [Personen](personen.md)). Acht
-  Gruppen je Seite, höchstens 28 Gesichter je Gruppe; alle Mitglieder sind sichtbar, es gibt
-  keine versteckten ausgewählten Gesichter.
+  [Personen](personen.md)). Alle Mitglieder einer Gruppe sind sichtbar, es gibt keine
+  versteckten ausgewählten Gesichter.
+- **Gruppengröße:** Der Regler „Gruppengröße“ in der Werkzeugzeile über den Gruppen neben
+  der Kachelgröße (`face_toolbar`, auch auf der Gesichterseite einer Person) wählt 5 bis 100
+  Gesichter je Gruppe (`config::GROUP_SIZE_MIN`, `GROUP_SIZE_MAX`, Standard
+  `GROUP_SIZE_DEFAULT` = 28; Grenzen nicht gemessen). Gespeichert als
+  `Settings::face_group_size`, ein fehlender Eintrag heißt 28, Werte außerhalb werden geklemmt
+  (`config::group_size`). Ein Parameter von `faces::page_with` schneidet damit alle Reiter mit
+  Gruppen: „Vorschläge prüfen“, „Benennen“, „Bestätigt“, „Ignoriert“, „Ungeeignet“ und beide
+  Seiten der Personengesichter. Eine Seite hält höchstens 224 Gesichter
+  (`config::FACE_PAGE_FACES` = acht Gruppen zu 28) und höchstens acht Gruppen
+  (`config::face_groups_per_page`: 5 und 28 → 8, 50 → 4, 100 → 2), damit große Gruppen
+  Ladezeit, Kacheln und Ablehnungsabfrage der Seite nicht vervielfachen. Erst beim Loslassen
+  des Reglers wird gespeichert und ab Seite 1 neu gelesen (einfach und robust; eine
+  umgerechnete Position wäre in „Vorschläge prüfen“ ungenau, weil die Ordnung vom
+  Gruppenmittel abhängt). Namensentwürfe und Abwahl hängen an genau ihren Gesichtern und
+  ihrer Person (`draft_key`) und gelten nur für eine Gruppe mit denselben Gesichtern weiter;
+  die Rücknahme hängt an Gesichts-IDs, nicht an Gruppen. Eine Entscheidung umfasst höchstens
+  `GROUP_SIZE_MAX` Gesichter (`name_group`).
+- **„Benennen“ und Gruppengröße:** Die gespeicherten Ähnlichkeitsgruppen (höchstens
+  `config::CLUSTER_MAX` = 28) bleiben die Einheit. Ist die Gruppengröße kleiner, erscheint eine
+  Gruppe in aufeinanderfolgenden Teilen (nach Gesichts-ID); ist sie größer, wird nichts
+  zusammengelegt, weil zwei gespeicherte Gruppen einander nicht ähnlich genug sein müssen
+  (Complete-Link) und eine gemischte Karte falsche Bestätigungen nahelegte. Große Gruppen
+  lohnen sich daher vor allem in „Vorschläge prüfen“ und „Wahrscheinlich X“.
 - **Gruppenkarte:** Namensfeld mit Enter, Personenauswahl mit Tippfilter, bis zu drei
   Vorschläge mit Porträt (ein Klick wählt und speichert), „Bestätigen“, „Nicht interessiert“.
   Der Vorschlag ist das Mittel über bis zu fünf Gesichter der Gruppe
@@ -21,7 +43,8 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   und durchgestrichen), ein zweiter wieder an. Die Gesichts-ID steht nur im Tooltip. Unter
   einer Kachel steht „nicht X“, wenn für das Gesicht Ablehnungen gespeichert sind (eine
   Abfrage je Seite). Kachelgröße ist per Regler einstellbar, die Spaltenzahl folgt der
-  Fensterbreite.
+  Fensterbreite (höchstens `GROUP_SIZE_MAX` Spalten); 100er-Gruppen stehen in mehreren Reihen
+  und werden gescrollt.
 - **Karte in „Vorschläge prüfen“:** statt Namensfeld und Personenauswahl das Referenzporträt
   der vorgeschlagenen Person (`faces::person_portrait`, je Seite einmal geladen), ihr Name,
   die Anzahl und der Wertebereich der Gruppe („Ähnlichkeit 0,62 bis 0,81“). Aktionen:
@@ -35,7 +58,7 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   ohne Gruppe des aktiven Modells (`faces::UNSUITABLE`), also die Zahl
   `Status::unsuitable` = offen minus gruppiert, die „Benennen“ als Hinweis nennt; der Hinweis
   hat den Knopf „Ungeeignete Gesichter ansehen“. Neueste Fotos zuerst, Gesichter eines Fotos
-  nebeneinander, Gruppen zu 28, acht je Seite; keine Namensvorschläge. Hier beginnen alle
+  nebeneinander, Gruppen der gewählten Größe; keine Namensvorschläge. Hier beginnen alle
   Kacheln abgewählt, ein Klick wählt aus (hervorgehoben, nicht durchgestrichen); „Alle
   auswählen“ und „Auswahl aufheben“ gelten für die Karte. „N benennen“ (Name oder Person)
   benennt nur die ausgewählten (`name_group` mit genau diesen IDs), die übrigen erhalten keine
@@ -120,7 +143,7 @@ Wie Vorschläge und Gruppen entstehen: siehe [Gesichtserkennung](gesichtserkennu
   alle Gesichter. Referenzen und Porträts werden je Seite einmal geladen und leben nur einen
   Lesestand lang.
 - **Reihenfolge in „Vorschläge prüfen“:** Je Person werden die Vorschläge nach Ähnlichkeit
-  absteigend in Gruppen zu höchstens 28 geschnitten; alle Gruppen sind nach ihrer mittleren
+  absteigend in Gruppen der gewählten Größe geschnitten; alle Gruppen sind nach ihrer mittleren
   Ähnlichkeit absteigend geordnet (Gleichstand: Person, dann Teil). Das Mittel statt des
   besten Werts, damit ein einzelner hoher Treffer keine schwache Gruppe nach vorn zieht.
   Dazu liest die Seite alle offenen Vorschläge mit einer Abfrage über `ix_faces_review`
@@ -156,7 +179,9 @@ Screenreader-Bedienung sind nicht langfristig geprüft.
 
 ## Beim Ändern beachten
 
-`GROUP_MAX`, Kachelspalten und Seitenabfragen gemeinsam ändern. Neue Zustände der
+Gruppengrenzen (`GROUP_SIZE_*`, `FACE_PAGE_FACES`), Kachelspalten und Seitenabfragen
+gemeinsam ändern; jede Seitenabfrage nimmt die Größe aus `page_with`, keine eigene Zahl.
+`CLUSTER_MAX` getrennt davon nur mit Neuaufbau der Gruppen ändern. Neue Zustände der
 Erkennung brauchen einen Zweig und einen Test in `status_line`; die Zeile behält höchstens
 eine Hauptaktion. Jede Stelle, die Gesichter
 entscheidet, nutzt `queue_hiding`. Namensentwürfe gelten für genau diese Gesichter und Person

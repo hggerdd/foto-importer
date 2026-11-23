@@ -116,7 +116,7 @@ pub fn merge_small_groups(
             .iter()
             .filter(|(id, g)| {
                 **id != source_id
-                    && g.members.len() + source.members.len() <= crate::config::GROUP_MAX
+                    && g.members.len() + source.members.len() <= crate::config::CLUSTER_MAX
             })
             .filter_map(|(id, g)| Some((inference::cosine(&source.centroid, &g.centroid)?, *id)))
             .collect();

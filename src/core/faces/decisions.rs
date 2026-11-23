@@ -65,8 +65,8 @@ pub fn name_group(
     ignore: bool,
 ) -> Result<Undo> {
     collection.writable()?;
-    // Dieselbe Obergrenze wie bei der Gruppenbildung und der Anzeige (ADR 0056).
-    let max = crate::config::GROUP_MAX;
+    // Dieselbe Obergrenze wie die größte Anzeigegruppe (Regler „Gruppengröße“).
+    let max = crate::config::GROUP_SIZE_MAX;
     if ids.is_empty() || ids.len() > max {
         bail!("Gruppe muss 1 bis {max} sichtbare Gesichter enthalten");
     }
