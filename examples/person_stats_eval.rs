@@ -4,9 +4,7 @@
 //!
 //! Öffnet die Sammlung nur lesend und rechnet wie die Ansicht „Statistik“ (ohne
 //! Zwischenspeicher des Abgleichs). Namen erscheinen auf drei Buchstaben gekürzt.
-use foto_importer::core::{
-    collection::Collection, jobs::Control, person_stats, progress::decimal,
-};
+use foto_importer::core::{collection::Collection, jobs::Control, person_stats, progress::decimal};
 use std::path::Path;
 use std::time::Instant;
 
@@ -20,8 +18,7 @@ fn main() -> anyhow::Result<()> {
     let stats = person_stats::compute(&collection, &Control::default())?;
     let elapsed = started.elapsed();
     let median = |d: &person_stats::Distribution| {
-        d.summary
-            .map_or("–".to_string(), |s| decimal(s.median, 2))
+        d.summary.map_or("–".to_string(), |s| decimal(s.median, 2))
     };
     println!(
         "Schwellen: Vorschlag {} / sicher {}; Rechenzeit {:.1} s",
@@ -29,7 +26,9 @@ fn main() -> anyhow::Result<()> {
         decimal(stats.sure, 2),
         elapsed.as_secs_f64()
     );
-    println!("| Person | bestätigt | abgelehnt | offen bewertet | Median bestätigt | Median abgelehnt | Median offen | t | über t: bestätigt | über t: offen |");
+    println!(
+        "| Person | bestätigt | abgelehnt | offen bewertet | Median bestätigt | Median abgelehnt | Median offen | t | über t: bestätigt | über t: offen |"
+    );
     println!("|---|---|---|---|---|---|---|---|---|---|");
     for index in stats.order(person_stats::Mode::Confirmed) {
         let p = &stats.people[index];

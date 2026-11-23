@@ -685,3 +685,12 @@ alle 50 Personen genau `training_set` (auch nach der Beschleunigung von
 Grenze: [Gesichtserkennung](../ADR/gesichtserkennung.md). Die Größe der Auswahl ist danach
 nicht mehr quadratisch teuer: alle 50 Personen in 0,9 s (Release).
 
+## Personenstatistik (2026-11-23)
+
+`cargo run --release --example person_stats_eval -- E:\Bilder` (nur lesend, SFace, ohne
+Zwischenspeicher des Abgleichs, Rechnung wie die Ansicht „Statistik“): 60 Personen mit Werten,
+28.785 bestätigte Gesichter (Same-Day-Ausschluss), 1.692 Ablehnungen, 12.376 offene Gesichter
+mit bester Person ab 0,40; 3,4 s (Release, 4 Threads). Von 44 Personen mit Ablehnungen liegt t
+(höchster abgelehnter Wert) bei 28 unter 0,60 und bei 8 ab 0,70; bei fünf Personen liegt t über 0,80
+(höchstens 0,90). Eine globale Übernahmeschwelle
+ist damit nicht belegt; die Werte sind Information, keine Entscheidungsgrundlage.
