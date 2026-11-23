@@ -68,8 +68,8 @@
 **Oberfläche**
 
 - **Ansicht „Personen“:** Die Übersicht mit der Personentabelle ist der Hauptinhalt. Der
-  Umschalter „Übersicht | Stammbaum | Graph | Zeitreise | Gesichter“ gilt der in der Tabelle
-  gewählten Person: Stammbaum, Graph, [Zeitreise](zeitreise.md) und Gesichter öffnen sich für
+  Umschalter „Übersicht | Stammbaum | Graph | Zeitreise | Gesichter | Statistik“ gilt der in
+  der Tabelle gewählten Person (die Statistik zeigt immer alle Personen): Stammbaum, Graph, [Zeitreise](zeitreise.md) und Gesichter öffnen sich für
   sie (`set_person_mode`); neben dem Umschalter steht ihr Name. Wer in einer dieser Ansichten
   eine andere Person wählt, wählt sie für alle. Ohne gewählte Person nennen die drei
   Ansichten den Weg zur Auswahl und arbeiten wie zuvor mit ihrer eigenen Vorgabe
@@ -123,6 +123,36 @@
     „Keines ist X“ gilt für die ganze Karte.
   - Wechsel von Person, Seite oder Ansicht verwirft die angezeigten Karten bis zum neuen
     Lesen, damit keine Karte einer anderen Seite entschieden wird.
+- **Statistik** (`person_stats`, `stats_view`, nur Anzeige): je Person eine Violine der
+  Personenscores des Modells (Mittel der bis zu drei besten Kosinuswerte gegen ihre
+  Referenzen), um zu sehen, ob es je Person eine Schwelle gäbe, ab der Gesichter ohne
+  Bestätigung übernommen werden könnten. Es wird nichts übernommen und keine Zuordnung
+  geändert. Umschalter:
+  - **Alle bewerteten Gesichter:** offene Gesichter (vom Abgleich verglichen, nicht vom Nutzer
+    benannt, auch Vorschläge), deren beste zulässige Person X ist (Ausschlüsse wie im
+    Abgleich: abgelehnt, im Foto bestätigt, vor dem Geburtsjahr), ab
+    `config::PERSON_CANDIDATE_MIN`; Wert = Score für X.
+  - **Nur bestätigte:** grün die bestätigten Gesichter von X, gerechnet gegen die Referenzen
+    von X ohne das Gesicht selbst und ohne Referenzen vom selben Aufnahmetag
+    (`captured_at[..10]`; sonst heben Serienbilder den Wert), rot als zweite Hälfte die
+    Gesichter mit Ablehnung „nicht X“ (ohne ignorierte) mit ihrem gewöhnlichen Score für X.
+    t = höchster abgelehnter Wert; der Hinweis nennt „über t: 0 Ablehnungen, k von n
+    bestätigten“ (in „alle bewerteten“ die offenen über t). Ohne Ablehnung kein t.
+  - Werteachse senkrecht (`config::PERSON_STATS_AXIS` 0,3 bis 1,0, Werte außerhalb am Rand),
+    waagrechte Linien für Vorschlag und „sicher“ der Sammlung (`recognition::Limits`), Median
+    als Strich, n je Hälfte unter der Spalte, Kennzahlen im Tooltip und als Tabelle („Als
+    Tabelle“). Personen nach Zahl der Gesichter der Sicht absteigend, waagrecht scrollbar;
+    unter `PERSON_STATS_MIN_VIOLIN` (5) Werten Punkte statt Violine. Kerndichte gaußsch mit
+    Silverman-Bandbreite auf `PERSON_STATS_GRID` Stützstellen, auf die Spanne der Werte
+    beschnitten, je Hälfte auf ihr Maximum normiert.
+  - Berechnung auf einem Worker (`recognition::person_scores`, offene Gesichter aus dem
+    Zwischenspeicher des Abgleichs, wenn er bereitliegt, sonst ein Durchgang über die
+    Vektoren; bestätigte über `References::scores_without`). Ergebnis mit Fingerabdruck
+    (`person_stats::signature`: Datenrevision Faces und People, Modell, höchste `rowid` der
+    Merkmale und höchste Gesichts-ID) im Speicher und im lokalen Cache
+    (`person-stats-<Hash>.json`) wie der Graph: sofort sichtbar, geprüft nach jedem neuen
+    Lesen der Gesichterseite, neu gerechnet nur bei Abweichung; „Aktualisieren“ rechnet immer.
+    Der Moduswechsel rechnet nicht.
 - **Tippfilter-Auswahlfeld** (`select::FilterSelect`) für jede Personenauswahl: Suchfeld mit
   Fokus, Präfix vor Wortanfang vor Teiltreffer, Umlaute tolerant, Pfeiltasten und Enter.
   Die Liste zeigt immer alle Treffer ohne Obergrenze (auch ohne Suchtext alle Personen);

@@ -17,6 +17,7 @@ mod progress_view;
 mod recognition_view;
 mod relationship_view;
 mod settings_view;
+mod stats_view;
 #[cfg(test)]
 mod tests;
 mod time_view;
@@ -68,6 +69,9 @@ enum PersonMode {
     Time,
     /// Alle Gesichter der Person: bestätigte und wahrscheinliche (`person_faces_view`).
     Faces,
+    /// Verteilung der Personenscores je Person (`stats_view`), nicht an die gewählte Person
+    /// gebunden.
+    Stats,
 }
 /// Hauptpunkte der Navigation in ihrer Reihenfolge: Ansicht, Titel, Hinweistext.
 const NAV_MAIN: [(View, &str, &str); 4] = [
@@ -85,7 +89,7 @@ const NAV_MAIN: [(View, &str, &str); 4] = [
     (
         View::People,
         "Personen",
-        "Personen, Beziehungen, Stammbaum, Graph, Zeitreise und Gesichter einer Person",
+        "Personen, Beziehungen, Stammbaum, Graph, Zeitreise, Gesichter einer Person und Statistik",
     ),
 ];
 /// Punkte am unteren Rand der Navigation.
@@ -119,6 +123,7 @@ fn startup_place(
         (_, Some("persons")) => Some(PersonMode::Overview),
         (_, Some("tree")) => Some(PersonMode::Tree),
         (_, Some("graph")) => Some(PersonMode::Graph),
+        (_, Some("stats")) => Some(PersonMode::Stats),
         _ => None,
     };
     let view = match view {
@@ -191,6 +196,8 @@ enum Outcome {
     ),
     /// Zusätzliche Angaben der Personendetails (Revision der Personenseite).
     PersonInsights(u64, crate::core::person_insights::Insights),
+    /// Revision, Fingerabdruck und neu berechnete Personenstatistik (`None`: unverändert).
+    PersonStats(u64, String, Option<crate::core::person_stats::Stats>),
     /// Rückfragen „Möglicherweise dieselbe Person“ (Revision der Personenseite).
     Duplicates(u64, Vec<crate::core::duplicates::Candidate>),
     PersonAdded(i64),
@@ -389,6 +396,7 @@ pub struct PhotoApp {
     /// Revision dient der Zähler als Ersatz (`people_table::PageKey`).
     face_page_serial: u64,
     relationship_graph: relationship_view::RelationshipView,
+    person_stats: stats_view::StatsView,
     report: Option<String>,
     delete_phrase: String,
     move_old: String,
@@ -536,6 +544,7 @@ impl PhotoApp {
             time_ui: time_view::TimeUi::from_env(),
             face_page_serial: 0,
             relationship_graph: Default::default(),
+            person_stats: Default::default(),
             report: None,
             delete_phrase: String::new(),
             move_old: String::new(),
@@ -1025,7 +1034,8 @@ impl PhotoApp {
         }
         match self.person_mode {
             PersonMode::Overview => "persons",
-            PersonMode::Graph => "graph",
+            // Graph und Statistik brauchen nur die Personenliste.
+            PersonMode::Graph | PersonMode::Stats => "graph",
             // Stammbaum und Zeitreise brauchen Personen und Familie, aber keine Tabellenzeilen.
             PersonMode::Tree | PersonMode::Time => "tree",
             PersonMode::Faces => self.person_face_mode,
@@ -1111,6 +1121,7 @@ impl PhotoApp {
                 PersonMode::Graph => self.relationship_graph.show_person(person),
                 PersonMode::Time => self.show_time_for(person),
                 PersonMode::Faces => self.clear_face_groups(),
+                PersonMode::Stats => {}
             }
         }
         self.refresh_faces();
@@ -1221,6 +1232,7 @@ impl PhotoApp {
         self.central_ui = Default::default();
         self.time_ui = Default::default();
         self.relationship_graph.clear();
+        self.person_stats.clear();
         self.recognition_tools_open = false;
         self.delete_phrase.clear();
         self.maintenance_paused = false;
@@ -1520,6 +1532,10 @@ impl PhotoApp {
             }
             Outcome::RelationshipGraph(revision, ..) => {
                 *revision != self.relationship_graph.revision
+                    || running.collection != self.settings.collection
+            }
+            Outcome::PersonStats(revision, ..) => {
+                *revision != self.person_stats.revision
                     || running.collection != self.settings.collection
             }
             // Antworten der Zeitreise prüfen ihre Revisionen selbst; die Sammlung muss stimmen.

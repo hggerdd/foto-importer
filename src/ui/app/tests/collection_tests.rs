@@ -353,7 +353,14 @@ fn navigation_lists_four_main_items_and_two_at_the_bottom_without_zeitreise() {
         .collect();
     assert_eq!(
         modes,
-        ["Übersicht", "Stammbaum", "Graph", "Zeitreise", "Gesichter"]
+        [
+            "Übersicht",
+            "Stammbaum",
+            "Graph",
+            "Zeitreise",
+            "Gesichter",
+            "Statistik"
+        ]
     );
 }
 
@@ -380,6 +387,10 @@ fn old_start_values_open_the_new_places() {
     assert_eq!(
         startup_place(None, Some("graph")),
         (None, None, Some(Graph))
+    );
+    assert_eq!(
+        startup_place(Some("persons"), Some("stats")),
+        (Some(View::People), None, Some(Stats))
     );
     assert_eq!(
         startup_place(Some("time"), None),

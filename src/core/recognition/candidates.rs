@@ -128,7 +128,7 @@ fn open_for_person(state: &MatchState, person: i64, birth: Option<i32>) -> Vec<i
 
 /// Ausschlüsse des Abgleichs je Gesicht (wie `photo_writes`): abgelehnte Personen, im Foto
 /// bestätigte Personen (auch historischer Gesichter), vor dem Geburtsjahr aufgenommen.
-struct Exclusions {
+pub(super) struct Exclusions {
     rejections: BTreeMap<i64, BTreeSet<i64>>,
     births: BTreeMap<i64, i32>,
     /// Bestätigte Personen je Foto.
@@ -138,7 +138,7 @@ struct Exclusions {
 }
 impl Exclusions {
     /// Übernimmt die Ablehnungen aus `state` (`sync` braucht sie nicht).
-    fn new(state: &mut MatchState, births: BTreeMap<i64, i32>, ids: &[i64]) -> Self {
+    pub(super) fn new(state: &mut MatchState, births: BTreeMap<i64, i32>, ids: &[i64]) -> Self {
         let wanted: std::collections::HashSet<i64> = ids.iter().copied().collect();
         let mut occupied: std::collections::HashMap<i64, Vec<i64>> = Default::default();
         let mut faces = std::collections::HashMap::with_capacity(ids.len());
@@ -159,7 +159,7 @@ impl Exclusions {
             faces,
         }
     }
-    fn excluded(&self, face: i64, person: i64) -> bool {
+    pub(super) fn excluded(&self, face: i64, person: i64) -> bool {
         let Some(&(photo, year)) = self.faces.get(&face) else {
             return false;
         };

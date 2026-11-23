@@ -7,6 +7,30 @@ pub const MUTED: Color32 = Color32::from_rgb(156, 168, 182);
 pub const MIN_TEXT: f32 = 12.0;
 /// Höhe von Auswahlfeldern und Haupt-Bedienelementen.
 pub const CONTROL_HEIGHT: f32 = 36.0;
+/// Zustimmung (bestätigt) in Diagrammen, auf hellem und dunklem Grund lesbar.
+pub fn positive(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(110, 205, 125)
+    } else {
+        Color32::from_rgb(28, 128, 58)
+    }
+}
+/// Ablehnung in Diagrammen, auf hellem und dunklem Grund lesbar.
+pub fn negative(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(240, 110, 105)
+    } else {
+        Color32::from_rgb(186, 40, 40)
+    }
+}
+/// Akzentfarbe für Linien und Flächen in Diagrammen (dunkel `ACCENT`, hell abgedunkelt).
+pub fn accent(dark: bool) -> Color32 {
+    if dark {
+        ACCENT
+    } else {
+        Color32::from_rgb(24, 105, 93)
+    }
+}
 pub fn apply(ctx: &egui::Context, dark: bool) {
     let mut style = egui::Style {
         visuals: if dark {

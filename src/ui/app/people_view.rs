@@ -3,12 +3,13 @@
 use super::*;
 
 /// Umschalter der Ansicht in seiner Reihenfolge.
-pub(super) const PERSON_MODES: [(PersonMode, &str); 5] = [
+pub(super) const PERSON_MODES: [(PersonMode, &str); 6] = [
     (PersonMode::Overview, "Übersicht"),
     (PersonMode::Tree, "Stammbaum"),
     (PersonMode::Graph, "Graph"),
     (PersonMode::Time, "Zeitreise"),
     (PersonMode::Faces, "Gesichter"),
+    (PersonMode::Stats, "Statistik"),
 ];
 
 impl PhotoApp {
@@ -54,8 +55,10 @@ impl PhotoApp {
             }
         });
         ui.separator();
-        if !matches!(self.person_mode, PersonMode::Overview | PersonMode::Faces)
-            && selected.is_none()
+        if !matches!(
+            self.person_mode,
+            PersonMode::Overview | PersonMode::Faces | PersonMode::Stats
+        ) && selected.is_none()
         {
             ui.label(
                 RichText::new(
@@ -70,6 +73,7 @@ impl PhotoApp {
             PersonMode::Graph => self.relationship_graph_tab(ui),
             PersonMode::Time => self.time_view(ui),
             PersonMode::Faces => self.person_faces_view(ui),
+            PersonMode::Stats => self.person_stats_tab(ui),
         }
     }
 }

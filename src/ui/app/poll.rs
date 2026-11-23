@@ -411,6 +411,12 @@ impl PhotoApp {
             {
                 self.relationship_graph.refreshed(signature, graph);
             }
+            Outcome::PersonStats(revision, signature, stats)
+                if running.collection == self.settings.collection
+                    && revision == self.person_stats.revision =>
+            {
+                self.person_stats.refreshed(signature, stats);
+            }
             Outcome::Suggestions(revision, id, suggestions)
                 if revision == self.naming_revision && self.naming == Some(id) =>
             {

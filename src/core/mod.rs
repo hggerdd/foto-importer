@@ -27,6 +27,7 @@ pub mod missing;
 pub mod onnx_runtime;
 pub mod people_table;
 pub mod person_insights;
+pub mod person_stats;
 pub mod previews;
 pub mod progress;
 pub mod recognition;
