@@ -141,6 +141,14 @@ pub const MATCH_CACHE_MAX_BYTES: usize = 768 * 1024 * 1024;
 /// gemessen. Zum Vergleich (Messung 2026-11-15, ADR Gesichtserkennung): 0,363 erreichen 99,7 %
 /// der richtigen Personen, 0,50 noch 98,1 %.
 pub const PERSON_CANDIDATE_MIN: f32 = 0.40;
+/// Personenstatistik (`core::person_stats`, nur Anzeige): Wertebereich der Achse. Werte
+/// außerhalb zählen in Anzahl und Kennzahlen mit, gezeichnet werden sie am Rand.
+pub const PERSON_STATS_AXIS: (f32, f32) = (0.3, 1.0);
+/// Stützstellen der Kerndichte über die Achse.
+pub const PERSON_STATS_GRID: usize = 141;
+/// Unter so vielen Werten zeigt die Statistik Punkte statt einer Violine (zu wenig für eine
+/// Dichte).
+pub const PERSON_STATS_MIN_VIOLIN: usize = 5;
 /// Höchstens so viele Threads rechnen im Abgleich Personenwerte (auf dem Wartungs-Worker).
 pub const MATCH_THREADS: usize = 4;
 /// So lange gilt die Prüfung „Laufzeit und Modellgewichte vorhanden“ der Ansicht „Gesichter“,

@@ -131,6 +131,11 @@ Bedienung der Reiter: siehe [Gesichter benennen und prüfen](gesichter-benennen.
   aufzubauen. Beide Wege sind bitgleich (`person_candidates_with` wählt ausdrücklich).
   Läuft auf dem Leser der Seite (`faces::page_with`, Modus `probable`). Messung in
   [Validierung](../docs/validierung.md).
+- **Personenstatistik** (`recognition::person_scores`, Ansicht siehe [Personen](personen.md)):
+  derselbe Personenscore, nur lesend. Für bestätigte Gesichter zählen Referenzen vom selben
+  Aufnahmetag nicht (`References::scores_without`, derselbe Rechenweg wie `scores`, das nur
+  das eigene Gesicht auslässt). Zwischenspeicher und Durchgang über die Vektoren sind
+  bitgleich (`cached_and_streamed_scores_are_identical`).
 - Die Referenzabfrage hängt nicht von `ANALYZE`-Statistik ab (nicht korrelierte
   Unterabfragen auf `training_set`, bestätigte Gesichter außen per `CROSS JOIN`).
 

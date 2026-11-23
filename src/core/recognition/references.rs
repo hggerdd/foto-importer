@@ -140,6 +140,12 @@ impl References {
     /// eigenen Referenzen ab; Ausschlüsse filtern erst danach (`order`). Darauf beruht der
     /// inkrementelle Abgleich ([`MatchCache`]).
     pub(super) fn scores(&self, query: &[f32], own: i64) -> Vec<f32> {
+        self.scores_without(query, |face| face == own)
+    }
+    /// Wie [`Self::scores`], ohne die Referenzen, für die `skip(Gesichts-ID)` gilt (etwa das
+    /// eigene Gesicht und Referenzen vom selben Aufnahmetag, Personenstatistik). Gleicher
+    /// Rechenweg, daher bitgleich, wenn `skip` nur das eigene Gesicht trifft.
+    pub(super) fn scores_without(&self, query: &[f32], skip: impl Fn(i64) -> bool) -> Vec<f32> {
         let mut top = vec![Top3::default(); self.people.len()];
         if self.dim > 0 && query.len() == self.dim {
             for (block, lanes) in self.blocks.chunks_exact(self.dim).enumerate() {
@@ -154,14 +160,14 @@ impl References {
                     let Some(slot) = self.slots.get(index) else {
                         break;
                     };
-                    if self.faces[index] != own && sum.is_finite() {
+                    if sum.is_finite() && !skip(self.faces[index]) {
                         top[*slot].push(sum.clamp(-1.0, 1.0));
                     }
                 }
             }
         }
         for (face, slot, vector) in &self.other {
-            if *face != own
+            if !skip(*face)
                 && let Some(score) = inference::cosine(query, vector)
             {
                 top[*slot].push(score);

@@ -24,7 +24,10 @@ mod cache;
 pub use cache::MatchCache;
 use cache::{MatchState, SCORE_ROUND, WRITE_CHUNK, cache_owner, match_cache, score_rows};
 mod candidates;
+use candidates::Exclusions;
 pub use candidates::{PersonCandidate, person_candidates, person_candidates_with};
+mod stats;
+pub use stats::{PersonScores, person_scores, person_scores_with};
 
 fn option(collection: &Collection, name: &str, default: f32) -> Result<f32> {
     let model = faces::setting(collection, faces::EMBEDDER_KEY)?.unwrap_or_default();

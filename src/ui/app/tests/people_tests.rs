@@ -576,3 +576,99 @@ fn different_hides_the_question_at_once_and_stores_the_answer() -> anyhow::Resul
     assert!(crate::core::duplicates::load(&c)?.is_empty());
     Ok(())
 }
+
+/// Ansicht „Statistik“: rechnet auf dem Worker und zeichnet beide Sichten; der Umschalter
+/// wechselt die Sicht ohne neue Berechnung.
+#[test]
+fn person_statistics_draw_both_modes_with_the_switch() -> anyhow::Result<()> {
+    use crate::core::person_stats::Mode;
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("sammlung");
+    std::fs::create_dir_all(&root)?;
+    {
+        let c = Collection::open(&root, true)?;
+        c.db.execute(
+            "INSERT OR REPLACE INTO face_settings VALUES('rust.embedder_key',?)",
+            [serde_json::to_string("test")?],
+        )?;
+        c.db.execute_batch(
+            "INSERT INTO persons(id) VALUES(1),(2);
+             INSERT INTO person_attrs VALUES(1,'name','Anna'),(2,'name','Ben');",
+        )?;
+        for id in 1..=14i64 {
+            let angle = match id {
+                1..=6 => 0.02 * id as f32,
+                7 | 8 => 2.0,
+                _ => 0.05 + 0.03 * id as f32,
+            };
+            c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+            c.db.execute(
+                "INSERT INTO faces(id,photo_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,captured_at) VALUES(?,?,'a.jpg','det',0,0,1,1,1.0,?)",
+                rusqlite::params![id, id, format!("2020-01-{id:02}")],
+            )?;
+            c.db.execute(
+                "INSERT INTO face_embeddings VALUES(?,'test',2,?)",
+                rusqlite::params![id, faces::encode(&[angle.cos(), angle.sin()])],
+            )?;
+        }
+        c.db.execute_batch(
+            "UPDATE faces SET person_id=1,assignment='user' WHERE id<=6;
+             UPDATE faces SET person_id=2,assignment='user' WHERE id IN (7,8);
+             INSERT INTO face_rejections VALUES(14,1);",
+        )?;
+    }
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = PhotoApp::with_settings(&creation, Settings::default());
+    app.cache_dir = temp.path().join("cache");
+    app.settings.collection = root.to_string_lossy().into_owned();
+    app.view = View::People;
+    app.person_mode = PersonMode::Stats;
+    drawn_texts(&context, &mut app, Vec::new());
+    settle_until(
+        &mut app,
+        "Statistik berechnet",
+        |app| app.poll(&context),
+        |app| {
+            app.person_stats.data.is_some()
+                && !app.tasks.iter().any(|t| t.kind == JobKind::PersonStats)
+        },
+    );
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    for expected in [
+        "Alle bewerteten Gesichter",
+        "Nur bestätigte",
+        "Anna",
+        "Vorschlag 0,60",
+        "sicher 0,70",
+    ] {
+        assert!(texts.contains(expected), "{expected} fehlt in {texts}");
+    }
+    assert!(
+        !texts.contains("\nBen\n"),
+        "Ben hat keine bewerteten Gesichter"
+    );
+    let revision = app.person_stats.revision;
+    click_labelled(
+        &context,
+        &mut app,
+        "Nur bestätigte",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.person_stats.mode, Mode::Confirmed);
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(
+        texts.contains("Ben"),
+        "bestätigte Gesichter von Ben: {texts}"
+    );
+    assert!(texts.contains("\nt\n"), "Schwelle t von Anna: {texts}");
+    assert_eq!(
+        app.person_stats.revision, revision,
+        "Umschalten rechnet nicht neu"
+    );
+    // Textalternative.
+    app.person_stats.table = true;
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("über t"), "{texts}");
+    Ok(())
+}
