@@ -138,18 +138,23 @@ pub const SFACE_SCALE: ModelScale = ModelScale {
 };
 /// ArcFace (buffalo_l, `STRONG_EMBEDDER`). Gemessen am 2026-11-23 mit
 /// `examples/strong_model_eval.rs` (siehe ADR Gesichtserkennung und docs/validierung.md).
+/// Personenscores (Top-3-Mittel) liegen bei ArcFace etwa 0,05 unter SFace: Bei 0,55 / 0,05
+/// werden unbekannte Personen so oft zugeordnet wie bei SFace mit 0,60, bei 0,65 so oft wie
+/// bei SFace mit 0,70 (sicher). Einzelpaare trennt ArcFace deutlich schärfer: Die
+/// Paargrenzen (Gruppen, Anhängen) sind auf denselben Anteil verschiedener Personen wie bei
+/// SFace gelegt, die Duplikatgrenze auf dieselbe Verteilung von Paaren desselben Tages.
 pub const ARCFACE_SCALE: ModelScale = ModelScale {
-    review: 0.40,
+    review: 0.55,
     margin: 0.05,
-    sure: 0.50,
-    review_range: (0.30, 0.60),
+    sure: 0.65,
+    review_range: (0.45, 0.70),
     group_join: 0.40,
-    group_merge_mean: 0.30,
-    group_merge_min_pair: 0.10,
-    duplicate: 0.85,
-    candidate_min: 0.20,
-    stats_axis: (0.0, 1.0),
-    duplicate_person: 0.35,
+    group_merge_mean: 0.28,
+    group_merge_min_pair: 0.12,
+    duplicate: 0.91,
+    candidate_min: 0.35,
+    stats_axis: (0.2, 1.0),
+    duplicate_person: 0.50,
 };
 /// Grenzen des Modells mit dem Schlüssel `key` (`Manifest::key`); unbekannte Modelle wie SFace.
 pub fn model_scale(key: &str) -> &'static ModelScale {
@@ -171,7 +176,9 @@ pub const STRONG_LOAD_THREADS: usize = 3;
 pub const STRONG_THREADS: usize = 4;
 /// Geschätzte Laufzeit je Foto für die Anzeige der Restdauer vor dem Start (gemessen, siehe
 /// ADR Gesichtserkennung); während des Laufs schätzt die Fußleiste aus dem Fortschritt.
-pub const STRONG_SECONDS_PER_PHOTO: f32 = 0.25;
+/// Gemessen 2026-11-23 (`strong_model_eval`, E:\Bilder auf USB): JPEG 0,23 s, RAW/DNG über
+/// ExifTool 0,55 s je Foto; ein Fünftel RAW ergibt rund 0,3 s.
+pub const STRONG_SECONDS_PER_PHOTO: f32 = 0.3;
 /// Fotos je Schreibtransaktion des Laufs (höchstens alle fünf Sekunden geschrieben).
 pub const STRONG_WRITE_PHOTOS: usize = 32;
 /// Referenzauswahl (`recognition`, `matching::select_references`): Je Person werden

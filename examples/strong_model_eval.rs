@@ -126,12 +126,13 @@ fn main() -> anyhow::Result<()> {
         .map(|s| s.split(',').filter_map(|p| p.parse().ok()).collect())
         .unwrap_or_else(|| DEFAULT_PERSONS.iter().copied().collect());
     let compute_only = args.iter().any(|a| a == "--compute-only");
+    let exiftool = option("--exiftool").unwrap_or_else(|| "exiftool".into());
     let max_photos: usize = option("--max-photos")
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX);
     let arc_duplicate: f32 = option("--arc-duplicate")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0.92);
+        .unwrap_or(config::ARCFACE_SCALE.duplicate);
     let collection = Collection::open(root, false)?;
     let base = faces::setting(&collection, faces::EMBEDDER_KEY)?.expect("Kein Embedder");
     let manifest = strong::manifest(model_dir).expect("Genaueres Modell fehlt");
@@ -199,7 +200,7 @@ fn main() -> anyhow::Result<()> {
             let path = safe_path_in(&collection.root, &job.relpath)?;
             let image = foto_importer::core::previews::load(
                 &path,
-                "exiftool",
+                &exiftool,
                 job.orientation,
                 1600,
                 &control,
@@ -269,6 +270,7 @@ fn main() -> anyhow::Result<()> {
             let (sender, receiver) = std::sync::mpsc::sync_channel(config::STRONG_LOAD_THREADS * 2);
             for _ in 0..config::STRONG_LOAD_THREADS {
                 let sender = sender.clone();
+                let exiftool = exiftool.as_str();
                 let (next, jobs, control, load_total, root) =
                     (&next, &jobs, &control, &load_total, &collection.root);
                 scope.spawn(move || {
@@ -277,7 +279,7 @@ fn main() -> anyhow::Result<()> {
                         let Some(job) = jobs.get(i) else { break };
                         let t = Instant::now();
                         let loaded = safe_path_in(root, &job.relpath)
-                            .and_then(|p| strong::load_crops(&p, job, "exiftool", control));
+                            .and_then(|p| strong::load_crops(&p, job, exiftool, control));
                         if let Ok(mut total) = load_total.lock() {
                             *total += t.elapsed();
                         }
@@ -554,7 +556,7 @@ fn main() -> anyhow::Result<()> {
             _ => (
                 option("--arc-review")
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.40),
+                    .unwrap_or(config::ARCFACE_SCALE.review),
                 option("--arc-margin")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0.05),
