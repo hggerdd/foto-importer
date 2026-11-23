@@ -14,24 +14,24 @@ impl PhotoApp {
             );
             return;
         }
-        let status = &self.face_page.status;
-        let (confirmed, ignored) = (status.confirmed, status.ignored);
+        let counts = self.tab_counts();
+        let (confirmed, ignored) = (counts.confirmed, counts.ignored);
         let done = done_tab(&self.face_mode);
         let tabs = [
             (
                 Some("unknown"),
-                format!("Benennen · {}", status.nameable),
+                format!("Benennen · {}", counts.nameable),
                 self.face_mode == "unknown",
             ),
             (
                 Some("review"),
-                format!("Vorschläge prüfen · {}", status.review),
+                format!("Vorschläge prüfen · {}", counts.review),
                 self.face_mode == "review",
             ),
             (None, format!("Erledigt · {}", confirmed + ignored), done),
             (
                 Some("unsuitable"),
-                format!("Ungeeignet · {}", status.unsuitable()),
+                format!("Ungeeignet · {}", counts.unsuitable()),
                 self.face_mode == "unsuitable",
             ),
         ];
@@ -68,7 +68,7 @@ impl PhotoApp {
             self.review_filter(ui);
         }
         if self.face_mode == "unknown"
-            && let Some(hint) = unnamed_hint(self.face_page.status.unsuitable())
+            && let Some(hint) = unnamed_hint(counts.unsuitable())
         {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(hint).small().weak());
@@ -90,6 +90,15 @@ impl PhotoApp {
     }
     /// Leerer Reiter der Ansicht „Gesichter“: sagt, warum nichts da ist und was zu tun ist.
     fn empty_face_tab(&self, ui: &mut egui::Ui) {
+        if let Some(folder) = &self.face_folder {
+            self.empty(
+                ui,
+                &format!("Im Ordner „{folder}“ sind in diesem Reiter keine Gesichter."),
+                "Wähle einen anderen Reiter, einen anderen Ordner oder „Alle Ordner“ (✕ neben \
+                 dem Ordner).",
+            );
+            return;
+        }
         let (title, text) = if self.face_mode == "unsuitable" {
             (
                 "Keine ungeeigneten Gesichter.",
@@ -160,6 +169,7 @@ impl PhotoApp {
     /// Seitenwahl, Rücknahme, Neulesen und Kachelgröße über den Gesichtsgruppen; hier gelten
     /// auch die Tasten der obersten Gruppe und Strg+Z.
     pub(super) fn face_toolbar(&mut self, ui: &mut egui::Ui) {
+        self.face_folder_bar(ui);
         ui.horizontal(|ui| {
             let loading = self.tasks.iter().any(|task| task.kind == JobKind::Faces);
             let pages = self
@@ -192,6 +202,115 @@ impl PhotoApp {
             ui.add_space(12.0);
             self.group_size_slider(ui);
         });
+    }
+    /// Zahlen der Reiter: mit Ordnerfilter die des Ordners, sonst die der Sammlung.
+    pub(super) fn tab_counts(&self) -> faces::FolderCounts {
+        if let Some(folder) = &self.face_page.folder {
+            return folder.clone();
+        }
+        let status = &self.face_page.status;
+        faces::FolderCounts {
+            nameable: status.nameable,
+            unknown: status.unknown,
+            review: status.review,
+            confirmed: status.confirmed,
+            ignored: status.ignored,
+            ..Default::default()
+        }
+    }
+    /// Ordnerfilter aller Gesichterseiten: Auswahlfeld mit Tippfilter über die Ordner des
+    /// Ordnerbaums („Alle Ordner“ ohne Filter). Ist gefiltert, steht der Ordner hervorgehoben
+    /// mit ✕ da, und noch nicht analysierte Fotos des Ordners lassen sich hier analysieren.
+    /// Der Filter gilt nur für die Sitzung.
+    pub(super) fn face_folder_bar(&mut self, ui: &mut egui::Ui) {
+        // Der Baum liest seine Übersicht einmal auf einem Worker; danach ist das hier billig.
+        self.sync_folder_tree();
+        let mut items: Vec<select::Choice<String>> = self
+            .folder_tree
+            .folders()
+            .into_iter()
+            .map(|(path, photos)| {
+                let detail = match photos {
+                    1 => "1 Foto".to_string(),
+                    n => format!("{n} Fotos"),
+                };
+                select::Choice::new(path.clone(), path, detail)
+            })
+            .collect();
+        if let Some(current) = &self.face_folder
+            && !items.iter().any(|item| &item.value == current)
+        {
+            items.insert(0, select::Choice::new(current.clone(), current.clone(), ""));
+        }
+        let mut chosen = self.face_folder.clone();
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            if chosen.is_some() {
+                ui.label(RichText::new("Nur Ordner:").strong().color(theme::ACCENT))
+                    .on_hover_text(
+                        "Alle Gesichterseiten zeigen nur Gesichter aus Fotos dieses Ordners \
+                         und seiner Unterordner. Vorschläge und Reihenfolge bleiben die der \
+                         ganzen Sammlung.",
+                    );
+            } else {
+                ui.label("Ordner");
+            }
+            changed = select::FilterSelect::new("face-folder", &items)
+                .placeholder("Alle Ordner")
+                .width(340.0)
+                .show(ui, &mut chosen);
+            if chosen.is_some()
+                && ui
+                    .button("✕")
+                    .on_hover_text("Ordnerfilter aufheben: Gesichter aller Ordner zeigen")
+                    .clicked()
+            {
+                chosen = None;
+                changed = true;
+            }
+        });
+        if changed && chosen != self.face_folder {
+            self.set_face_folder(chosen);
+            return;
+        }
+        let counts = self
+            .face_page
+            .folder
+            .clone()
+            .filter(|counts| Some(&counts.folder) == self.face_folder.as_ref());
+        if let Some(counts) = counts
+            && counts.unanalysed > 0
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(unanalysed_hint(counts.unanalysed)).small());
+                let busy = self.busy();
+                if ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new("Diesen Ordner analysieren").small(),
+                    )
+                    .on_hover_text(if busy {
+                        "Es läuft gerade ein anderer Auftrag."
+                    } else {
+                        "Startet die Fotoanalyse nur für diesen Ordner und seine Unterordner."
+                    })
+                    .clicked()
+                {
+                    self.analyze_folder(counts.folder.clone());
+                }
+            });
+        }
+    }
+    /// Setzt den Ordnerfilter aller Gesichterseiten (`None` = alle Ordner) und liest ab
+    /// Seite 1 neu; die angezeigten Gruppen verschwinden bis dahin.
+    pub(super) fn set_face_folder(&mut self, folder: Option<String>) {
+        self.face_folder = folder
+            .as_deref()
+            .and_then(faces::FaceFolder::new)
+            .map(|folder| folder.path().to_string());
+        self.clear_face_groups();
+        self.face_page.folder = None;
+        self.refresh_faces();
     }
     /// Regler „Gruppengröße“: Gesichter je Gruppe auf allen Seiten mit Gesichtsgruppen. Erst
     /// beim Loslassen wird gespeichert und ab Seite 1 neu gelesen; Entwürfe hängen an genau
@@ -1794,6 +1913,13 @@ fn unnamed_hint(unsuitable: usize) -> Option<String> {
     (unsuitable > 0).then(|| {
         format!("{unsuitable} weitere Gesichter sind zu klein oder unscharf für Namensvorschläge.")
     })
+}
+/// Hinweis des Ordnerfilters auf noch nicht analysierte Fotos des Ordners.
+fn unanalysed_hint(photos: usize) -> String {
+    match photos {
+        1 => "1 Foto dieses Ordners noch nicht analysiert".to_string(),
+        n => format!("{n} Fotos dieses Ordners noch nicht analysiert"),
+    }
 }
 #[cfg(test)]
 mod tile_note_tests {

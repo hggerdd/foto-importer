@@ -94,7 +94,15 @@ fn unsuitable_faces_are_cut_into_groups_of_28_and_pages_of_8() -> anyhow::Result
     assert_eq!(ids(&second), vec![vec![3, 2, 1]]);
     // Gewählte Gruppengröße: 100er-Gruppen, zwei je Seite; 5er-Gruppen, acht je Seite.
     let sized = |page: usize, size: usize| {
-        faces::page_with(&c, "unsuitable", page, None, size, &Control::default())
+        faces::page_with(
+            &c,
+            "unsuitable",
+            page,
+            None,
+            size,
+            None,
+            &Control::default(),
+        )
     };
     let large = sized(0, 100)?;
     assert_eq!(
@@ -123,7 +131,7 @@ fn naming_splits_large_clusters_for_small_sizes_and_never_combines_them() -> any
     group_all(&mut c)?;
     let cluster = foto_importer::config::CLUSTER_MAX;
     let sized = |page: usize, size: usize| {
-        faces::page_with(&c, "unknown", page, None, size, &Control::default())
+        faces::page_with(&c, "unknown", page, None, size, None, &Control::default())
     };
     // Größe 100: die gespeicherten Gruppen (28 und 12) bleiben getrennt.
     let large = sized(0, 100)?;
@@ -443,7 +451,7 @@ fn faces_that_look_more_like_someone_else_come_in_a_second_section() -> anyhow::
     // Mit der größten Gruppengröße bleibt jeder Abschnitt eine Gruppe, mit der kleinsten
     // werden beide für sich geschnitten.
     let sized =
-        |size: usize| faces::page_with(&c, "probable", 0, Some(1), size, &Control::default());
+        |size: usize| faces::page_with(&c, "probable", 0, Some(1), size, None, &Control::default());
     let large = sized(100)?;
     assert_eq!(
         large.groups.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -547,7 +555,15 @@ fn rejected_page_lists_rejections_of_the_person_most_similar_first() -> anyhow::
         vec![vec![406]]
     );
     // Gruppengröße wie überall.
-    let small = faces::page_with(&c, "person-rejected", 0, Some(1), 5, &Control::default())?;
+    let small = faces::page_with(
+        &c,
+        "person-rejected",
+        0,
+        Some(1),
+        5,
+        None,
+        &Control::default(),
+    )?;
     assert_eq!(ids(&small), vec![vec![401, 402, 400, 403]]);
     Ok(())
 }
@@ -608,5 +624,220 @@ fn lifting_and_confirming_rejections_undo_exactly() -> anyhow::Result<()> {
     let undo = faces::lift_rejection(&mut c, &[406], 1)?;
     assert_eq!(undo.summary().lifted, 0);
     assert_eq!(face_state(&c, 406)?, (None, None, vec![2]));
+    Ok(())
+}
+
+/// Ein Gesicht im Foto `id` unter `rel`, mit Datei, Analysequelle und erledigter Analyse.
+fn placed(c: &Collection, id: i64, rel: &str, vector: Option<[f32; 2]>) {
+    let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+    c.db.execute(
+        "INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(?1,?2,?2,?3,'x.jpg','x','jpg',1,1,?1,'present')",
+        params![id, rel, dir],
+    )
+    .expect("Datei");
+    c.db.execute("INSERT OR REPLACE INTO face_sources VALUES(?1,?1)", [id])
+        .expect("Quelle");
+    face(c, id, id, if vector.is_some() { 1.0 } else { 0.3 }, vector);
+    c.db.execute(
+        "UPDATE faces SET source_relpath=?,source_file_id=? WHERE id=?",
+        params![rel, id, id],
+    )
+    .expect("Pfad");
+}
+
+/// Anna (1) mit Referenzen in „Andere“; in „Party“ (samt „Party/jpg“) und „Party2“ je
+/// offene Gesichter zweier Ähnlichkeitsgruppen, ein Vorschlag, ein bestätigtes, ein
+/// ignoriertes, ein ungeeignetes und ein für Anna abgelehntes Gesicht; dazu ein noch nicht
+/// analysiertes Foto in „Party/jpg“.
+fn folder_collection(temp: &tempfile::TempDir) -> anyhow::Result<Collection> {
+    let mut c = open(temp)?;
+    c.db.execute(
+        "INSERT OR REPLACE INTO face_settings VALUES('rust.detector_key',?)",
+        [serde_json::to_string("det")?],
+    )?;
+    let detector = faces::active_detector_key(&c)?.expect("Detektor");
+    for id in 1..=3 {
+        placed(&c, id, &format!("Andere/a{id}.jpg"), at(0.0));
+    }
+    for (base, folder) in [(10, "Party"), (20, "Party2")] {
+        placed(&c, base, &format!("{folder}/f{base}.jpg"), at(0.05));
+        placed(
+            &c,
+            base + 1,
+            &format!("{folder}/jpg/f{}.jpg", base + 1),
+            at(0.06),
+        );
+        placed(
+            &c,
+            base + 2,
+            &format!("{folder}/f{}.jpg", base + 2),
+            at(0.07),
+        );
+        placed(
+            &c,
+            base + 3,
+            &format!("{folder}/jpg/f{}.jpg", base + 3),
+            at(0.0),
+        );
+        placed(
+            &c,
+            base + 4,
+            &format!("{folder}/f{}.jpg", base + 4),
+            at(0.08),
+        );
+        placed(&c, base + 5, &format!("{folder}/f{}.jpg", base + 5), None);
+        placed(
+            &c,
+            base + 6,
+            &format!("{folder}/f{}.jpg", base + 6),
+            at(0.1),
+        );
+        placed(
+            &c,
+            base + 7,
+            &format!("{folder}/f{}.jpg", base + 7),
+            at(1.5),
+        );
+        placed(
+            &c,
+            base + 8,
+            &format!("{folder}/jpg/f{}.jpg", base + 8),
+            at(1.5),
+        );
+        c.db.execute_batch(&format!(
+            "UPDATE faces SET person_id=1,assignment='suggested',confidence=0.7 WHERE id={};
+             UPDATE faces SET person_id=1,assignment='user',confidence=1 WHERE id={};
+             UPDATE faces SET ignored=1 WHERE id={};
+             INSERT INTO face_rejections VALUES({},1);",
+            base + 2,
+            base + 3,
+            base + 4,
+            base + 6
+        ))?;
+    }
+    c.db.execute_batch(
+        "INSERT INTO persons(id) VALUES(1);
+         INSERT INTO person_attrs VALUES(1,'name','Anna');
+         UPDATE faces SET person_id=1,assignment='user',confidence=1 WHERE id IN (1,2,3);",
+    )?;
+    // Alle Fotos mit Gesicht sind analysiert; Foto 40 nicht.
+    c.db.execute(
+        "INSERT INTO face_jobs(photo_id,stage,model_id,status) SELECT photo_id,'detect',?,'done' FROM face_sources",
+        [&detector],
+    )?;
+    c.db.execute_batch(
+        "INSERT INTO photos(id,status) VALUES(40,'present');
+         INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(40,'Party/jpg/x40.jpg','party/jpg/x40.jpg','Party/jpg','x40.jpg','x40','jpg',1,1,40,'present');
+         INSERT OR REPLACE INTO face_sources VALUES(40,40);",
+    )?;
+    group_all(&mut c)?;
+    Ok(c)
+}
+
+/// Ordnerfilter: jede Gesichterseite zeigt nur Gesichter aus Fotos des Ordners samt
+/// Unterordnern („Party/jpg“), nie aus „Party2“; die Zahlen sind die des Ordners; „Benennen“
+/// zeigt die gespeicherten Gruppen nur mit ihren Gesichtern im Ordner, ohne sie zu mischen.
+#[test]
+fn folder_filter_limits_every_face_page_to_the_folder_and_its_subfolders() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let c = folder_collection(&temp)?;
+    let control = Control::default();
+    let read = |mode: &str, person: Option<i64>, folder: Option<&str>| {
+        faces::page_with(&c, mode, 0, person, 28, folder, &control)
+    };
+    let shown = |page: &faces::FacePage| -> BTreeSet<i64> {
+        page.groups.iter().flatten().map(|f| f.id).collect()
+    };
+    let party: BTreeSet<i64> = (10..=18).collect();
+    // Benennen: zwei gespeicherte Gruppen, je nur mit den Party-Gesichtern, nie gemischt.
+    let all = read("unknown", None, None)?;
+    let unknown = read("unknown", None, Some("Party"))?;
+    assert_eq!(
+        ids(&unknown),
+        vec![vec![10, 11, 16], vec![17, 18]],
+        "größte zuerst, nach ID"
+    );
+    assert_eq!(unknown.total_groups, 2);
+    for group in ids(&all) {
+        let inside: Vec<i64> = group
+            .iter()
+            .copied()
+            .filter(|id| party.contains(id))
+            .collect();
+        if !inside.is_empty() {
+            assert!(
+                ids(&unknown).contains(&inside),
+                "Gruppe {group:?} nicht gemischt"
+            );
+        }
+    }
+    // Zahlen des Ordners statt der Sammlung; der Status bleibt sammlungsweit.
+    let counts = unknown.folder.clone().expect("Ordnerzahlen");
+    assert_eq!(counts.folder, "Party");
+    assert_eq!(
+        (counts.nameable, counts.unknown, counts.unsuitable()),
+        (5, 6, 1)
+    );
+    assert_eq!((counts.review, counts.confirmed, counts.ignored), (1, 1, 1));
+    assert_eq!((counts.photos, counts.unanalysed), (10, 1));
+    assert_eq!(unknown.status.nameable, all.status.nameable);
+    assert!(all.folder.is_none());
+    // Übrige Seiten der Ansicht „Gesichter“.
+    assert_eq!(shown(&read("review", None, Some("Party"))?), [12].into());
+    let review = read("review", None, Some("Party"))?;
+    assert_eq!(
+        review.review_people.get(&1),
+        Some(&1),
+        "Personenfilter zählt im Ordner"
+    );
+    assert_eq!(shown(&read("confirmed", None, Some("Party"))?), [13].into());
+    assert_eq!(shown(&read("ignored", None, Some("Party"))?), [14].into());
+    let unsuitable = read("unsuitable", None, Some("Party"))?;
+    assert_eq!(
+        (shown(&unsuitable), unsuitable.faces_total),
+        ([15].into(), 1)
+    );
+    // Personenseiten: Wahrscheinlich (Werte sammlungsweit, nur Party), Bestätigt, Nicht X.
+    let probable = read("probable", Some(1), Some("Party"))?;
+    let everywhere = read("probable", Some(1), None)?;
+    assert!(shown(&everywhere).contains(&20));
+    let expected: BTreeSet<i64> = shown(&everywhere).intersection(&party).copied().collect();
+    assert!(!expected.is_empty());
+    assert_eq!(shown(&probable), expected);
+    assert_eq!(probable.faces_total, expected.len());
+    for face in probable.groups.iter().flatten() {
+        let same = everywhere.groups.iter().flatten().find(|f| f.id == face.id);
+        assert_eq!(same.map(|f| f.score.to_bits()), Some(face.score.to_bits()));
+    }
+    assert_eq!(probable.rejected_total, 1);
+    let confirmed = read("person-confirmed", Some(1), Some("Party"))?;
+    assert_eq!((shown(&confirmed), confirmed.faces_total), ([13].into(), 1));
+    assert_eq!(confirmed.folder.expect("Ordnerzahlen").person_confirmed, 1);
+    let rejected = read("person-rejected", Some(1), Some("Party"))?;
+    assert_eq!(shown(&rejected), [16].into());
+    assert_eq!((rejected.rejected_total, rejected.faces_total), (1, 1));
+    assert_eq!(read("person-rejected", Some(1), None)?.rejected_total, 2);
+    // Unterordner allein; Präfixgrenze: „Party“ trifft nie „Party2“, und umgekehrt.
+    let sub = read("unknown", None, Some("Party/jpg/"))?;
+    assert_eq!(ids(&sub), vec![vec![11], vec![18]]);
+    assert_eq!(sub.folder.expect("Ordnerzahlen").unanalysed, 1);
+    let other = read("unknown", None, Some("Party2"))?;
+    assert!(shown(&other).iter().all(|id| (20..=28).contains(id)));
+    assert_eq!(other.folder.expect("Ordnerzahlen").unanalysed, 0);
+    assert!(read("unknown", None, Some("Part"))?.groups.is_empty());
+    // „Benennen“ im Ordner liest nur dessen Gesichter (Index der Pfade, dann der Fotos).
+    let plan = faces::unknown_plan(&c, &faces::FaceFolder::new("Party").expect("Ordner"))?;
+    assert!(
+        plan.iter().any(|row| row.contains("ix_faces_photo")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .any(|row| row.contains("relpath>? AND relpath<?")),
+        "{plan:?}"
+    );
+    assert!(plan.iter().all(|row| !row.starts_with("SCAN")), "{plan:?}");
+    // Leerer Ordner heißt „alle Ordner“.
+    assert!(read("unknown", None, Some(""))?.folder.is_none());
     Ok(())
 }

@@ -221,7 +221,7 @@ fn pages_totals_and_status_equal_the_window_queries() -> anyhow::Result<()> {
         foto_importer::config::GROUP_SIZE_MAX,
     ];
     let read = |mode: &str, page: usize, size: usize| {
-        faces::page_with(&c, mode, page, None, size, &Default::default())
+        faces::page_with(&c, mode, page, None, size, None, &Default::default())
     };
     for size in sizes {
         let mut expected = Vec::new();

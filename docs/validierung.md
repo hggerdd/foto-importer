@@ -694,3 +694,18 @@ mit bester Person ab 0,40; 3,4 s (Release, 4 Threads). Von 44 Personen mit Ableh
 (höchster abgelehnter Wert) bei 28 unter 0,60 und bei 8 ab 0,70; bei fünf Personen liegt t über 0,80
 (höchstens 0,90). Eine globale Übernahmeschwelle
 ist damit nicht belegt; die Werte sind Information, keine Entscheidungsgrundlage.
+
+## Ordnerfilter der Gesichterseiten (2026-11-23)
+
+`E:\Bilder` nur lesend (SQLite `mode=ro`, Python-sqlite3 3.45 mit denselben Abfragen wie
+`faces::FaceFolder`, nicht die App): 66.462 Gesichter, 74.696 Fotos, USB-Festplatte.
+
+| Ordner | Gesichter | Ordnerzahlen | Gruppen „Benennen“ |
+|---|---|---|---|
+| `_export` | 6.284 | kalt 1,17 s | ohne feste Join-Reihenfolge kalt 3,44 s (liest alle 11.511 Gruppenmitglieder); mit `CROSS JOIN` 0,03 s warm über `ix_faces_photo` |
+| `260822_Geburtstag_Martin` | 237 | kalt 0,06 s | kalt 0,27 s (alte Reihenfolge) |
+| `121002_Island` (nicht analysiert) | 0 | kalt 0,13 s, 5.132 Fotos nicht analysiert in 0,04 s | 0,05 s |
+
+Die übrigen gefilterten Seitenabfragen (Bestätigt, Ignoriert, Nicht X, Seiten einer Person)
+liefen über `ix_faces_photo` oder den Personenindex in unter 0,06 s (warm). Kalt nach Neustart
+der Platte in der App nicht gemessen.

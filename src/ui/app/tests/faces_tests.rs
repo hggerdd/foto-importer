@@ -1524,3 +1524,113 @@ fn rejected_view_lifts_or_confirms_and_undo_restores_the_rejection() -> anyhow::
     assert_eq!(rejections(root.path())?, vec![(3, 1)]);
     Ok(())
 }
+
+/// Ordnerfilter der Gesichterseiten: Auswahl über das Feld in der Werkzeugleiste (Tippfilter),
+/// gefilterte Zahlen im Reiter, deutlich sichtbarer Filter mit ✕, Hinweis auf nicht analysierte
+/// Fotos; ✕ zeigt wieder alle Ordner. Das Kontextmenü des Ordnerbaums öffnet „Gesichter“ mit
+/// dem Filter.
+#[test]
+fn folder_filter_in_the_toolbar_limits_the_faces_and_is_cleared_with_the_cross()
+-> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    {
+        let c = Collection::open(root.path(), true)?;
+        c.db.execute_batch(
+            "INSERT INTO persons(id) VALUES(1);
+             INSERT INTO person_attrs(person_id,key,value) VALUES(1,'name','Anna');",
+        )?;
+        for (id, rel) in [
+            (1_i64, "Party/jpg/1.jpg"),
+            (2, "Party2/2.jpg"),
+            (3, "Party/3.jpg"),
+        ] {
+            let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+            c.db.execute("INSERT INTO photos(id,status) VALUES(?,'present')", [id])?;
+            c.db.execute("INSERT INTO files(id,relpath,relpath_fold,dir,name,stem,ext,size,mtime_ns,photo_id,status) VALUES(?1,?2,?2,?3,'x.jpg','x','jpg',1,1,?1,'present')", rusqlite::params![id, rel, dir])?;
+        }
+        // Foto 3 hat kein Gesicht und ist nicht analysiert.
+        c.db.execute(
+            "INSERT INTO face_settings VALUES('rust.detector_key',?)",
+            [serde_json::to_string("det")?],
+        )?;
+        let detector = faces::active_detector_key(&c)?.expect("Detektor");
+        c.db.execute(
+            "INSERT INTO face_jobs(photo_id,stage,model_id,status) VALUES(1,'detect',?1,'done'),(2,'detect',?1,'done')",
+            [&detector],
+        )?;
+        for (id, rel) in [(1_i64, "Party/jpg/1.jpg"), (2, "Party2/2.jpg")] {
+            c.db.execute(
+                "INSERT INTO faces(id,photo_id,source_file_id,source_relpath,detector_id,bbox_x1,bbox_y1,bbox_x2,bbox_y2,quality,person_id,assignment,confidence) VALUES(?1,?1,?1,?2,'det',0,0,1,1,1,1,'suggested',0.7)",
+                rusqlite::params![id, rel],
+            )?;
+        }
+    }
+    let (context, mut app) = review_app(root.path());
+    app.status.files = 3;
+    app.status.photos = 3;
+    app.refresh_faces();
+    settle_until(
+        &mut app,
+        "Seite und Ordnerbaum gelesen",
+        |app| {
+            app.sync_folder_tree();
+            app.poll(&context);
+        },
+        |app| app.tasks.is_empty() && !app.folder_tree.needs_load(),
+    );
+    assert_eq!(page_ids(&app), vec![vec![1, 2]]);
+    // Feld öffnen, „Party“ tippen und den Treffer wählen.
+    click_labelled(
+        &context,
+        &mut app,
+        "Alle Ordner",
+        egui::PointerButton::Primary,
+    );
+    let typed = vec![egui::Event::Text("Party".into())];
+    frame_with(&context, &mut app, typed);
+    click_labelled(
+        &context,
+        &mut app,
+        "Party 2 Fotos",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.face_folder.as_deref(), Some("Party"));
+    settle_tasks(&mut app, &context);
+    assert_eq!(page_ids(&app), vec![vec![1]], "nur Party samt Unterordner");
+    let texts = drawn_texts(&context, &mut app, Vec::new());
+    assert!(texts.contains("Vorschläge prüfen · 1"), "gefilterte Zahl");
+    assert!(texts.contains("Nur Ordner:"), "Filter deutlich sichtbar");
+    assert!(texts.contains("1 Foto dieses Ordners noch nicht analysiert"));
+    let widgets = frame_with(&context, &mut app, Vec::new());
+    assert!(
+        widgets
+            .iter()
+            .any(|(text, _)| text == "Diesen Ordner analysieren")
+    );
+    // ✕ hebt den Filter auf.
+    click_labelled(&context, &mut app, "✕", egui::PointerButton::Primary);
+    assert_eq!(app.face_folder, None);
+    settle_tasks(&mut app, &context);
+    assert_eq!(page_ids(&app), vec![vec![1, 2]]);
+    assert!(drawn_texts(&context, &mut app, Vec::new()).contains("Vorschläge prüfen · 2"));
+    // Kontextmenü des Ordnerbaums: Gesichter dieses Ordners zuordnen.
+    app.view = View::Collection;
+    app.settings.folder_tree_open = true;
+    click_labelled(
+        &context,
+        &mut app,
+        "Party2, 1 Fotos",
+        egui::PointerButton::Secondary,
+    );
+    click_labelled(
+        &context,
+        &mut app,
+        "Gesichter dieses Ordners zuordnen",
+        egui::PointerButton::Primary,
+    );
+    assert_eq!(app.view, View::Faces);
+    assert_eq!(app.face_folder.as_deref(), Some("Party2"));
+    settle_tasks(&mut app, &context);
+    assert_eq!(page_ids(&app), vec![vec![2]]);
+    Ok(())
+}

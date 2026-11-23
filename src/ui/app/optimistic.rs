@@ -82,6 +82,18 @@ impl PhotoApp {
             "unsuitable" => page.status.unknown = page.status.unknown.saturating_sub(removed),
             _ => {}
         }
+        // Mit Ordnerfilter zeigen die Reiter die Zahlen des Ordners; dieselben Abzüge.
+        if let Some(folder) = &mut page.folder {
+            match mode.as_str() {
+                "unknown" => {
+                    folder.nameable = folder.nameable.saturating_sub(removed);
+                    folder.unknown = folder.unknown.saturating_sub(removed);
+                }
+                "review" => folder.review = folder.review.saturating_sub(removed),
+                "unsuitable" => folder.unknown = folder.unknown.saturating_sub(removed),
+                _ => {}
+            }
+        }
     }
 }
 

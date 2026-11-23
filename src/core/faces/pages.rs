@@ -1,6 +1,8 @@
 //! Lesende Abfragen für die Gesichterseiten (Gruppen, Vorschläge, Prüfen, ungeeignet)
 //! und die Gesichter eines Fotos.
+use super::folder::FaceFolder;
 use super::*;
+use std::collections::HashSet;
 
 pub fn photo_faces(collection: &Collection, photo: i64) -> Result<Vec<Face>> {
     Ok(collection
@@ -57,15 +59,27 @@ type ReviewParts = (Vec<Vec<i64>>, BTreeMap<i64, usize>);
 /// Ähnlichkeit** absteigend geordnet (bei Gleichstand Person, dann Teil). Das Mittel statt
 /// des besten Werts verhindert, dass ein einzelner hoher Treffer eine schwache Gruppe nach
 /// vorn zieht. Eine Abfrage über den Teilindex `ix_faces_review`, keine Fensterfunktion.
-fn review_parts(collection: &Collection, only: Option<i64>, size: usize) -> Result<ReviewParts> {
+///
+/// `within` (Ordnerfilter) behält nur diese Gesichter; Schnitt, Ordnung und Zählung je Person
+/// gelten dann für die Gesichter im Ordner.
+fn review_parts(
+    collection: &Collection,
+    only: Option<i64>,
+    size: usize,
+    within: Option<&HashSet<i64>>,
+) -> Result<ReviewParts> {
     let mut by_person: BTreeMap<Option<i64>, Vec<(f32, i64)>> = BTreeMap::new();
     let mut statement = collection.db.prepare_cached(REVIEW_ROWS)?;
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
-        by_person.entry(row.get(0)?).or_default().push((
-            row.get::<_, Option<f32>>(1)?.unwrap_or_default(),
-            row.get(2)?,
-        ));
+        let id: i64 = row.get(2)?;
+        if within.is_some_and(|within| !within.contains(&id)) {
+            continue;
+        }
+        by_person
+            .entry(row.get(0)?)
+            .or_default()
+            .push((row.get::<_, Option<f32>>(1)?.unwrap_or_default(), id));
     }
     let people = by_person
         .iter()
@@ -88,7 +102,7 @@ fn review_parts(collection: &Collection, only: Option<i64>, size: usize) -> Resu
 /// Alle offenen Vorschläge mit Person und Ähnlichkeit (Reiter „Vorschläge prüfen“).
 pub const REVIEW_ROWS: &str = "SELECT f.person_id,f.confidence,f.id FROM faces f WHERE f.retained=0 AND f.assignment IN ('suggested','auto') AND f.ignored=0 ORDER BY f.person_id,f.id";
 /// Gesichter in genau der Reihenfolge von `ids`; inzwischen entfallene fehlen.
-fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
+pub(super) fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
     let marks = vec!["?"; ids.len()].join(",");
     let mut found: BTreeMap<i64, Face> = collection
         .db
@@ -102,15 +116,17 @@ fn faces_in_order(collection: &Collection, ids: &[i64]) -> Result<Vec<Face>> {
 }
 /// Seite des Reiters „unsuitable“: offene Gesichter ohne Gruppe ([`UNSUITABLE`]), neueste
 /// Fotos zuerst und Gesichter eines Fotos nebeneinander, in Gruppen zu `size`.
-/// Ergebnis: Gruppen der Seite und Zahl aller solcher Gesichter.
+/// Ergebnis: Gruppen der Seite und Zahl aller solcher Gesichter. `extra` ist die
+/// Zusatzbedingung des Ordnerfilters (leer oder „ AND …“).
 fn unsuitable_page(
     collection: &Collection,
     embedder: &str,
     page: usize,
     size: usize,
+    extra: &str,
 ) -> Result<(Vec<Vec<Face>>, usize)> {
     let total: usize = collection.db.query_row(
-        &format!("SELECT count(*) FROM faces f WHERE {UNSUITABLE}"),
+        &format!("SELECT count(*) FROM faces f WHERE {UNSUITABLE}{extra}"),
         [embedder],
         |r| r.get(0),
     )?;
@@ -118,7 +134,7 @@ fn unsuitable_page(
     let rows: Vec<Face> = collection
         .db
         .prepare_cached(&format!(
-            "SELECT {FACE_COLUMNS} FROM faces f WHERE {UNSUITABLE} ORDER BY f.photo_id DESC,f.id LIMIT ?2 OFFSET ?3"
+            "SELECT {FACE_COLUMNS} FROM faces f WHERE {UNSUITABLE}{extra} ORDER BY f.photo_id DESC,f.id LIMIT ?2 OFFSET ?3"
         ))?
         .query_map(params![embedder, per_page, page as i64 * per_page], face_row)?
         .collect::<rusqlite::Result<_>>()?;
@@ -198,17 +214,22 @@ fn probable_page(
     page: usize,
     size: usize,
     control: &Control,
+    within: Option<&HashSet<i64>>,
 ) -> Result<ProbablePage> {
     let Some(person) = person.filter(|_| !embedder.is_empty()) else {
         return Ok(ProbablePage::default());
     };
-    let candidates = crate::core::recognition::person_candidates(
+    let mut candidates = crate::core::recognition::person_candidates(
         collection,
         embedder,
         person,
         crate::config::PERSON_CANDIDATE_MIN,
         control,
     )?;
+    // Ordnerfilter: Werte und Abschnitte bleiben sammlungsweit, gezeigt wird nur der Ordner.
+    if let Some(within) = within {
+        candidates.retain(|c| within.contains(&c.face));
+    }
     let split = candidates.partition_point(|c| c.better.is_none());
     let (first, second) = candidates.split_at(split);
     let parts: Vec<&[crate::core::recognition::PersonCandidate]> =
@@ -240,11 +261,12 @@ fn probable_page(
 /// Gesichter mit Ablehnung „nicht `person`“, die die Seite „person-rejected“ zeigt: aktiv
 /// (nicht ignoriert, nicht „Kein Gesicht“, nicht historisch). Ignorierte sind schon entschieden
 /// und zählen auch in der Statistik nicht als Gegenbeispiel.
-const REJECTED_ROWS: &str = "SELECT r.face_id FROM face_rejections r JOIN faces f ON f.id=r.face_id WHERE r.person_id=? AND f.retained=0 AND f.ignored=0 ORDER BY r.face_id";
-/// Zahl der Gesichter der Seite „person-rejected“ für `person` (Umschalter „Nicht X“).
-fn rejected_count(collection: &Collection, person: i64) -> Result<usize> {
+const REJECTED_ROWS: &str = "FROM face_rejections r JOIN faces f ON f.id=r.face_id WHERE r.person_id=? AND f.retained=0 AND f.ignored=0";
+/// Zahl der Gesichter der Seite „person-rejected“ für `person` (Umschalter „Nicht X“);
+/// `extra` ist die Bedingung des Ordnerfilters.
+fn rejected_count(collection: &Collection, person: i64, extra: &str) -> Result<usize> {
     Ok(collection.db.query_row(
-        "SELECT count(*) FROM face_rejections r JOIN faces f ON f.id=r.face_id WHERE r.person_id=? AND f.retained=0 AND f.ignored=0",
+        &format!("SELECT count(*) {REJECTED_ROWS}{extra}"),
         [person],
         |r| r.get(0),
     )?)
@@ -269,10 +291,13 @@ fn rejected_page(
     person: i64,
     page: usize,
     size: usize,
+    extra: &str,
 ) -> Result<RejectedPage> {
     let ids: Vec<i64> = collection
         .db
-        .prepare_cached(REJECTED_ROWS)?
+        .prepare_cached(&format!(
+            "SELECT r.face_id {REJECTED_ROWS}{extra} ORDER BY r.face_id"
+        ))?
         .query_map([person], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     let scores = if embedder.is_empty() {
@@ -337,12 +362,16 @@ pub fn page_filtered(
         page,
         person,
         crate::config::GROUP_SIZE_DEFAULT,
+        None,
         &Control::default(),
     )
 }
 /// Wie [`page_filtered`] mit der Anzeigegröße `group_size` (Gesichter je Gruppe, begrenzt
 /// durch `config::group_size`; die Gruppen je Seite folgen `config::face_groups_per_page`).
-/// Alle Reiter mit Gesichtsgruppen schneiden mit dieser einen Größe. `control` bricht das
+/// Alle Reiter mit Gesichtsgruppen schneiden mit dieser einen Größe. `folder` (relativer
+/// Ordner der Sammlung, samt Unterordnern) beschränkt alle Reiter mit Gesichtsgruppen auf
+/// Gesichter, deren Foto dort liegt ([`FaceFolder`]); Vorschläge, Werte und Ordnung bleiben
+/// sammlungsweit, die Zahlen des Ordners stehen in [`FacePage::folder`]. `control` bricht das
 /// Rechnen der Personenwerte in „probable“ ab.
 pub fn page_with(
     collection: &Collection,
@@ -350,12 +379,36 @@ pub fn page_with(
     page: usize,
     person: Option<i64>,
     group_size: usize,
+    folder: Option<&str>,
     control: &Control,
 ) -> Result<FacePage> {
     let size = crate::config::group_size(group_size);
     let max = size as i64;
     let per_page = crate::config::face_groups_per_page(size);
     let status = status(collection)?;
+    let folder = folder
+        .and_then(FaceFolder::new)
+        .filter(|_| !matches!(mode, "persons" | "tree" | "graph"));
+    let extra = folder
+        .as_ref()
+        .map_or(String::new(), |f| format!(" AND {}", f.predicate()));
+    let folder_counts = match &folder {
+        Some(f) => Some(super::folder::counts(
+            collection,
+            f,
+            &status.embedder,
+            &status.detector,
+            person,
+        )?),
+        None => None,
+    };
+    // Sammlungsweit berechnete Listen („review“, „probable“) werden auf diese IDs beschränkt.
+    let within = match &folder {
+        Some(f) if matches!(mode, "review" | "probable") => {
+            Some(super::folder::face_ids(collection, f)?)
+        }
+        _ => None,
+    };
     let mut groups = Vec::new();
     let total_groups: usize;
     let mut faces_total = 0;
@@ -388,6 +441,7 @@ pub fn page_with(
             rejected_total: 0,
             confirmed_as: BTreeMap::new(),
             group_size: size,
+            folder: None,
             revisions: None,
         });
     }
@@ -412,14 +466,23 @@ pub fn page_with(
             rejected_total: 0,
             confirmed_as: BTreeMap::new(),
             group_size: size,
+            folder: folder_counts,
             revisions: None,
         });
     }
     if mode == "unsuitable" {
-        (groups, faces_total) = unsuitable_page(collection, &status.embedder, page, size)?;
+        (groups, faces_total) = unsuitable_page(collection, &status.embedder, page, size, &extra)?;
         total_groups = faces_total.div_ceil(size);
     } else if mode == "probable" {
-        let probable = probable_page(collection, &status.embedder, person, page, size, control)?;
+        let probable = probable_page(
+            collection,
+            &status.embedder,
+            person,
+            page,
+            size,
+            control,
+            within.as_ref(),
+        )?;
         (groups, total_groups, faces_total) =
             (probable.groups, probable.total_groups, probable.faces_total);
         (probable_others, better) = (probable.others, probable.better);
@@ -428,14 +491,17 @@ pub fn page_with(
     } else if mode == "person-rejected"
         && let Some(person) = person
     {
-        let rejected = rejected_page(collection, &status.embedder, person, page, size)?;
+        let rejected = rejected_page(collection, &status.embedder, person, page, size, &extra)?;
         (groups, total_groups, faces_total) =
             (rejected.groups, rejected.total_groups, rejected.faces_total);
         confirmed_as = rejected.confirmed_as;
     } else if mode == "unknown" && !status.embedder.is_empty() {
-        (groups, total_groups) = unknown_page(collection, &status.embedder, page, size)?;
+        (groups, total_groups) = match &folder {
+            Some(f) => super::folder::unknown_page(collection, f, &status.embedder, page, size)?,
+            None => unknown_page(collection, &status.embedder, page, size)?,
+        };
     } else if mode == "review" {
-        let (parts, people) = review_parts(collection, person, size)?;
+        let (parts, people) = review_parts(collection, person, size, within.as_ref())?;
         review_people = people;
         total_groups = parts.len();
         for ids in parts.iter().skip(page * per_page).take(per_page) {
@@ -459,6 +525,7 @@ pub fn page_with(
             }
             _ => predicate.to_string(),
         };
+        let predicate = format!("{predicate}{extra}");
         let counts: Vec<(Option<i64>, i64)> = collection
             .db
             .prepare(&format!("SELECT f.person_id,count(*) FROM faces f WHERE f.retained=0 AND {predicate} GROUP BY f.person_id ORDER BY f.person_id"))?
@@ -507,7 +574,7 @@ pub fn page_with(
     // Der Umschalter der Personenseite nennt die Zahl „Nicht X“ auf jeder ihrer Seiten.
     let rejected_total = match person {
         Some(person) if matches!(mode, "probable" | "person-confirmed" | "person-rejected") => {
-            rejected_count(collection, person)?
+            rejected_count(collection, person, &extra)?
         }
         _ => 0,
     };
@@ -544,6 +611,7 @@ pub fn page_with(
         rejected_total,
         confirmed_as,
         group_size: size,
+        folder: folder_counts,
         revisions: None,
     })
 }

@@ -106,7 +106,10 @@
   für alle Ansichten), darunter „Wahrscheinlich X · N | Bestätigt · N | Nicht X · N“. Alle
   Seiten nutzen die Gruppenkarten, die gewählte Gruppengröße samt Seitengröße (siehe
   [Gesichter benennen](gesichter-benennen.md)), Rücknahme, sofortiges Ausblenden und den Leser
-  der Ansicht „Gesichter“ (`faces::page_with`, Revision `face_revision`).
+  der Ansicht „Gesichter“ (`faces::page_with`, Revision `face_revision`). Auch der
+  Ordnerfilter der Gesichterseiten gilt hier (siehe dort): alle drei Seiten zeigen nur
+  Gesichter aus Fotos des Ordners, die Zahlen im Umschalter sind die des Ordners, Werte und
+  Abschnitte von „Wahrscheinlich X“ bleiben sammlungsweit.
   - **Wahrscheinlich X** (Modus `probable`, `recognition::person_candidates`, siehe
     Gesichtserkennung): zwei Abschnitte, jeder nach Personenscore für X absteigend und für
     sich in Gruppen der gewählten Größe geschnitten (keine Gruppe mischt sie). Zuerst die Gesichter, deren
